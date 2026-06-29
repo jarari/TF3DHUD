@@ -10,6 +10,7 @@ namespace TF3DHud
 	namespace
 	{
 		Config g_config;
+		constexpr float kMaxVanillaInterfaceSpecular = 4096.0F;
 
 		[[nodiscard]] std::filesystem::path ConfigPath()
 		{
@@ -19,14 +20,18 @@ namespace TF3DHud
 		void WriteDefaults(CSimpleIniA& a_ini)
 		{
 			a_ini.SetBoolValue("General", "Enabled", g_config.enabled);
-			a_ini.SetDoubleValue("General", "UpdateHz", g_config.updateHz);
 			a_ini.SetDoubleValue("View", "FOV", g_config.fov);
 			a_ini.SetDoubleValue("View", "PlacementX", g_config.placementX);
 			a_ini.SetDoubleValue("View", "PlacementY", g_config.placementY);
 			a_ini.SetDoubleValue("View", "CameraDistance", g_config.cameraDistance);
 			a_ini.SetDoubleValue("View", "ModelScale", g_config.modelScale);
 			a_ini.SetDoubleValue("View", "YawDegrees", g_config.yawDegrees);
+			a_ini.SetLongValue("View", "Anchor", g_config.anchor);
 			a_ini.SetLongValue("View", "LightingType", std::to_underlying(g_config.lighting));
+			a_ini.SetDoubleValue("ClipRect", "Left", g_config.clipRect.left);
+			a_ini.SetDoubleValue("ClipRect", "Top", g_config.clipRect.top);
+			a_ini.SetDoubleValue("ClipRect", "Right", g_config.clipRect.right);
+			a_ini.SetDoubleValue("ClipRect", "Bottom", g_config.clipRect.bottom);
 			a_ini.SetBoolValue("Render", "HideInPowerArmor", g_config.hideInPowerArmor);
 			a_ini.SetDoubleValue("Lighting", "PositionX", g_config.light.positionX);
 			a_ini.SetDoubleValue("Lighting", "PositionY", g_config.light.positionY);
@@ -67,9 +72,9 @@ namespace TF3DHud
 			a_settings.diffuseR = std::clamp(a_settings.diffuseR, 0.0F, 4.0F);
 			a_settings.diffuseG = std::clamp(a_settings.diffuseG, 0.0F, 4.0F);
 			a_settings.diffuseB = std::clamp(a_settings.diffuseB, 0.0F, 4.0F);
-			a_settings.specularR = std::clamp(a_settings.specularR, 0.0F, 4.0F);
-			a_settings.specularG = std::clamp(a_settings.specularG, 0.0F, 4.0F);
-			a_settings.specularB = std::clamp(a_settings.specularB, 0.0F, 4.0F);
+			a_settings.specularR = std::clamp(a_settings.specularR, 0.0F, kMaxVanillaInterfaceSpecular);
+			a_settings.specularG = std::clamp(a_settings.specularG, 0.0F, kMaxVanillaInterfaceSpecular);
+			a_settings.specularB = std::clamp(a_settings.specularB, 0.0F, kMaxVanillaInterfaceSpecular);
 			a_settings.intensity = std::clamp(a_settings.intensity, 0.0F, 10.0F);
 		}
 	}
@@ -99,26 +104,30 @@ namespace TF3DHud
 		}
 
 		g_config.enabled = ini.GetBoolValue("General", "Enabled", g_config.enabled);
-		g_config.updateHz = static_cast<float>(ini.GetDoubleValue("General", "UpdateHz", g_config.updateHz));
 		g_config.fov = static_cast<float>(ini.GetDoubleValue("View", "FOV", g_config.fov));
 		g_config.placementX = static_cast<float>(ini.GetDoubleValue("View", "PlacementX", g_config.placementX));
 		g_config.placementY = static_cast<float>(ini.GetDoubleValue("View", "PlacementY", g_config.placementY));
 		g_config.cameraDistance = static_cast<float>(ini.GetDoubleValue("View", "CameraDistance", g_config.cameraDistance));
 		g_config.modelScale = static_cast<float>(ini.GetDoubleValue("View", "ModelScale", g_config.modelScale));
 		g_config.yawDegrees = static_cast<float>(ini.GetDoubleValue("View", "YawDegrees", g_config.yawDegrees));
+		g_config.anchor = static_cast<std::int32_t>(ini.GetLongValue("View", "Anchor", g_config.anchor));
 		g_config.lighting = static_cast<LightingType>(std::clamp<long>(
 			ini.GetLongValue("View", "LightingType", std::to_underlying(g_config.lighting)),
 			std::to_underlying(LightingType::kWorldDirectional),
 			std::to_underlying(LightingType::kFakePointAdaptiveTime)));
+		g_config.clipRect.left = static_cast<float>(ini.GetDoubleValue("ClipRect", "Left", g_config.clipRect.left));
+		g_config.clipRect.top = static_cast<float>(ini.GetDoubleValue("ClipRect", "Top", g_config.clipRect.top));
+		g_config.clipRect.right = static_cast<float>(ini.GetDoubleValue("ClipRect", "Right", g_config.clipRect.right));
+		g_config.clipRect.bottom = static_cast<float>(ini.GetDoubleValue("ClipRect", "Bottom", g_config.clipRect.bottom));
 		g_config.hideInPowerArmor = ini.GetBoolValue("Render", "HideInPowerArmor", g_config.hideInPowerArmor);
 		ReadLightSettings(ini, "Lighting", g_config.light);
 		ReadLightSettings(ini, "NightLighting", g_config.nightLight);
-		g_config.updateHz = std::clamp(g_config.updateHz, 1.0F, 60.0F);
 		g_config.fov = std::clamp(g_config.fov, 10.0F, 120.0F);
 		g_config.modelScale = std::clamp(g_config.modelScale, 0.01F, 10.0F);
+		g_config.anchor = std::clamp(g_config.anchor, 1, 9);
 
 		REX::INFO(
-			"Loaded TF3DHud config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, lighting={}, hideInPowerArmor={}, updateHz={}, lightPos=({}, {}, {}), lightColor=({}, {}, {}), lightSpec=({}, {}, {}), lightIntensity={}, nightLightPos=({}, {}, {}), nightLightColor=({}, {}, {}), nightLightSpec=({}, {}, {}), nightLightIntensity={}",
+			"Loaded TF3DHud config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, lighting={}, clipRect=({}, {}, {}, {}), hideInPowerArmor={}, lightPos=({}, {}, {}), lightColor=({}, {}, {}), lightSpec=({}, {}, {}), lightIntensity={}, nightLightPos=({}, {}, {}), nightLightColor=({}, {}, {}), nightLightSpec=({}, {}, {}), nightLightIntensity={}",
 			g_config.enabled,
 			g_config.fov,
 			g_config.placementX,
@@ -126,9 +135,13 @@ namespace TF3DHud
 			g_config.cameraDistance,
 			g_config.modelScale,
 			g_config.yawDegrees,
+			g_config.anchor,
 			std::to_underlying(g_config.lighting),
+			g_config.clipRect.left,
+			g_config.clipRect.top,
+			g_config.clipRect.right,
+			g_config.clipRect.bottom,
 			g_config.hideInPowerArmor,
-			g_config.updateHz,
 			g_config.light.positionX,
 			g_config.light.positionY,
 			g_config.light.positionZ,

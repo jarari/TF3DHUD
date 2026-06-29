@@ -18,7 +18,7 @@ namespace TF3DHud::Renderer
 	void Hide();
 	bool Enable();
 	void Reset();
-	void ClearPreviewRoot();
+	void ClearPreviewRoot(bool a_disableRenderer = true);
 	void AttachPreviewRoot(RE::NiAVObject& a_previewRoot);
 	void ApplyOffscreenFraming(RE::NiAVObject& a_object, bool a_log);
 	void UpdatePostAAForDynamicResolution(const char* a_stage);

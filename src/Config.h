@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace TF3DHud
 {
 	enum class LightingType
@@ -11,16 +13,24 @@ namespace TF3DHud
 
 	struct LightSettings
 	{
-		float positionX{ -40.0F };
-		float positionY{ -80.0F };
-		float positionZ{ 110.0F };
-		float diffuseR{ 0.75F };
-		float diffuseG{ 0.72F };
-		float diffuseB{ 0.66F };
-		float specularR{ 0.15F };
-		float specularG{ 0.15F };
-		float specularB{ 0.15F };
-		float intensity{ 0.65F };
+		float positionX{ -300.0F };
+		float positionY{ 600.0F };
+		float positionZ{ 460.0F };
+		float diffuseR{ 0.641F };
+		float diffuseG{ 0.758F };
+		float diffuseB{ 0.785F };
+		float specularR{ 2400.0F };
+		float specularG{ 0.0F };
+		float specularB{ 0.0F };
+		float intensity{ 7.0F };
+	};
+
+	struct ClipRectSettings
+	{
+		float left{ 0.0F };
+		float top{ 0.0F };
+		float right{ 0.0F };
+		float bottom{ 0.0F };
 	};
 
 	struct Config
@@ -32,21 +42,22 @@ namespace TF3DHud
 		float cameraDistance{ 400.0F };
 		float modelScale{ 0.11F };
 		float yawDegrees{ 180.0F };
+		std::int32_t anchor{ 5 };
 		LightingType lighting{ LightingType::kWorldDirectional };
+		ClipRectSettings clipRect;
 		bool hideInPowerArmor{ true };
-		float updateHz{ 30.0F };
 		LightSettings light;
 		LightSettings nightLight{
-			.positionX = -20.0F,
-			.positionY = -70.0F,
-			.positionZ = 95.0F,
-			.diffuseR = 0.36F,
-			.diffuseG = 0.44F,
-			.diffuseB = 0.62F,
-			.specularR = 0.08F,
-			.specularG = 0.10F,
-			.specularB = 0.14F,
-			.intensity = 0.42F
+			.positionX = 500.0F,
+			.positionY = -250.0F,
+			.positionZ = 400.0F,
+			.diffuseR = 1.0F,
+			.diffuseG = 1.0F,
+			.diffuseB = 1.0F,
+			.specularR = 2000.0F,
+			.specularG = 0.0F,
+			.specularB = 0.0F,
+			.intensity = 2.25F
 		};
 	};
 
