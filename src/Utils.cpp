@@ -1,7 +1,28 @@
 #include "Utils.h"
 
+#include "RE/B/BSAnimationGraphManager.h"
+#include "RE/B/BSFlattenedBoneTree.h"
+
 namespace TF3DHud
 {
+	namespace
+	{
+		struct GraphBoneRef
+		{
+			void* target;
+			std::int32_t boneIndex;
+			std::int32_t pad;
+		};
+		static_assert(sizeof(GraphBoneRef) == 0x10);
+
+		void AddGraphBoneName(const RE::BSFixedString& a_name, std::unordered_set<std::string>& a_names)
+		{
+			if (!a_name.empty()) {
+				a_names.emplace(a_name.c_str());
+			}
+		}
+	}
+
 	std::int32_t MakeRel32Displacement(const std::uintptr_t a_sourceNext, const std::uintptr_t a_destination)
 	{
 		const auto displacement =
@@ -70,6 +91,104 @@ namespace TF3DHud
 			}
 		}
 		return nullptr;
+	}
+
+	void CollectFlattenedBoneNodes(
+		RE::BSFlattenedBoneTree* a_tree,
+		std::unordered_map<std::string, RE::NiAVObject*>& a_nodes)
+	{
+		if (!a_tree || !a_tree->bone || a_tree->boneCount <= 0 || a_tree->boneCount > 1024) {
+			return;
+		}
+
+		for (std::int32_t i = 0; i < a_tree->boneCount; ++i) {
+			const auto& bone = a_tree->bone[i];
+			if (bone.name.empty() || !bone.node) {
+				continue;
+			}
+
+			const auto key = std::string(bone.name);
+			a_nodes.insert_or_assign(key, bone.node.get());
+		}
+	}
+
+	RE::BSFlattenedBoneTree* FindFlattenedBoneTree(RE::NiAVObject* a_root)
+	{
+		if (!a_root) {
+			return nullptr;
+		}
+		if (auto* flattened = netimmerse_cast<RE::BSFlattenedBoneTree*>(a_root)) {
+			return flattened;
+		}
+
+		auto* node = a_root->IsNode();
+		if (!node) {
+			return nullptr;
+		}
+
+		for (auto& child : node->children) {
+			if (auto* flattened = FindFlattenedBoneTree(child.get())) {
+				return flattened;
+			}
+		}
+		return nullptr;
+	}
+
+	void CollectGraphWrittenBoneNames(
+		const RE::IAnimationGraphManagerHolder& a_holder,
+		std::unordered_set<std::string>& a_names)
+	{
+		RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager;
+		if (!a_holder.GetAnimationGraphManagerImpl(manager) || !manager || manager->graph.empty()) {
+			return;
+		}
+
+		const auto activeGraph = manager->activeGraph;
+		if (activeGraph >= manager->graph.size()) {
+			return;
+		}
+
+		auto* graph = manager->graph[activeGraph].get();
+		if (!graph) {
+			return;
+		}
+
+		// IDA: BShkbAnimationGraph::GenerateImpl passes graph+0x2A0 and graph+0x2B0
+		// to BShkbUtils::SyncSceneGraphs. SyncFromTargetImpl shows each entry as
+		// { target, boneIndex }; boneIndex < 0 means target is a direct NiAVObject,
+		// otherwise target is a BSFlattenedBoneTree and boneIndex selects a flattened bone.
+		const auto graphBase = reinterpret_cast<const std::byte*>(graph);
+		const auto* refs = *reinterpret_cast<GraphBoneRef* const*>(graphBase + 0x2A0);
+		const auto count = *reinterpret_cast<const std::uint32_t*>(graphBase + 0x2B0);
+		constexpr std::uint32_t kMaxExpectedGraphBones = 1024;
+		if (!refs || count > kMaxExpectedGraphBones) {
+			return;
+		}
+
+		for (std::uint32_t i = 0; i < count; ++i) {
+			const auto& ref = refs[i];
+			if (!ref.target) {
+				continue;
+			}
+
+			if (ref.boneIndex < 0) {
+				const auto* object = reinterpret_cast<const RE::NiAVObject*>(ref.target);
+				AddGraphBoneName(object->GetName(), a_names);
+				continue;
+			}
+
+			const auto* tree = reinterpret_cast<const RE::BSFlattenedBoneTree*>(ref.target);
+			const auto boneIndex = static_cast<std::int32_t>(ref.boneIndex);
+			if (boneIndex >= tree->boneCount || !tree->bone) {
+				continue;
+			}
+
+			const auto& bone = tree->bone[boneIndex];
+			AddGraphBoneName(bone.name, a_names);
+			if (bone.name.empty() && bone.node) {
+				AddGraphBoneName(bone.node->GetName(), a_names);
+			}
+		}
 	}
 
 	void ForEachGeometry(RE::NiAVObject* a_object, const std::function<void(RE::BSGeometry&)>& a_visitor)

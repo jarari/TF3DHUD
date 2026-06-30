@@ -1,4 +1,5 @@
 #include "Previewer.h"
+#include "Morph.h"
 #include "Renderer.h"
 #include "Utils.h"
 
@@ -90,6 +91,7 @@ namespace TF3DHud
 		constexpr std::uint32_t kEquipmentAuditFrames = 300;
 		constexpr std::uint32_t kBipedSignatureStableFrames = 3;
 		std::atomic_uint32_t g_requestedEquipmentAuditFrames{ 0 };
+		std::atomic_bool g_equipmentAuditActive{ false };
 		std::uint32_t g_equipmentAuditFrames{ 0 };
 		std::uint64_t g_pendingBipedSignature{ 0 };
 		std::uint32_t g_pendingBipedSignatureFrames{ 0 };
@@ -1189,6 +1191,7 @@ namespace TF3DHud
 		void ClearPreviewRebuildState()
 		{
 			g_requestedEquipmentAuditFrames.store(0, std::memory_order_release);
+			g_equipmentAuditActive.store(false, std::memory_order_release);
 			g_equipmentAuditFrames = 0;
 			g_pendingBipedSignature = 0;
 			g_pendingBipedSignatureFrames = 0;
@@ -1205,6 +1208,7 @@ namespace TF3DHud
 			}
 
 			g_equipmentAuditFrames = std::max(g_equipmentAuditFrames, requestedFrames);
+			g_equipmentAuditActive.store(true, std::memory_order_release);
 			g_pendingBipedSignature = 0;
 			g_pendingBipedSignatureFrames = 0;
 		}
@@ -1222,10 +1226,14 @@ namespace TF3DHud
 		[[nodiscard]] bool TryResolveAuditedBipedSignature(const RE::BipedAnim& a_biped, std::uint64_t& a_signature)
 		{
 			if (g_equipmentAuditFrames == 0) {
+				g_equipmentAuditActive.store(false, std::memory_order_release);
 				return false;
 			}
 
 			--g_equipmentAuditFrames;
+			if (g_equipmentAuditFrames == 0) {
+				g_equipmentAuditActive.store(false, std::memory_order_release);
+			}
 
 			std::uint64_t currentSignature = 0;
 			if (!TryBuildBipedSignature(a_biped, currentSignature)) {
@@ -1252,6 +1260,7 @@ namespace TF3DHud
 			}
 
 			a_signature = currentSignature;
+			g_equipmentAuditActive.store(false, std::memory_order_release);
 			g_pendingBipedSignature = 0;
 			g_pendingBipedSignatureFrames = 0;
 			return true;
@@ -1578,6 +1587,7 @@ namespace TF3DHud
 			g_visualSignature = a_visualSignature;
 
 			Renderer::AttachPreviewRoot(*g_previewRoot);
+			Morph::MarkSecondaryDirty();
 
 			return true;
 		}
@@ -1643,6 +1653,20 @@ namespace TF3DHud
 				}
 			}
 
+			if (g_previewRoot) {
+				const auto morphResult = Morph::Update(*player, *g_previewRoot, g_previewFlattenedBoneTree);
+				if (Morph::HasResult(morphResult, Morph::UpdateResult::kGeometryRebuild)) {
+					if (!TryBuildBipedSignature(*biped, bipedSignature)) {
+						Renderer::Hide();
+						return;
+					}
+					if (!RebuildPreview(*player, *biped, bipedSignature, visualSignature)) {
+						Renderer::Hide();
+						return;
+					}
+				}
+			}
+
 			if (Renderer::Enable()) {
 				LogDiagnostic("renderer enabled");
 			}
@@ -1666,11 +1690,21 @@ namespace TF3DHud
 			g_previewRoot.reset();
 			g_previewFaceNode.reset();
 			ClearPreviewRebuildState();
+			Morph::Reset();
 		}
 
 		void MarkEquipmentDirty()
 		{
-			g_requestedEquipmentAuditFrames.store(kEquipmentAuditFrames, std::memory_order_release);
+			if (g_equipmentAuditActive.load(std::memory_order_acquire)) {
+				return;
+			}
+
+			std::uint32_t expected = 0;
+			g_requestedEquipmentAuditFrames.compare_exchange_strong(
+				expected,
+				kEquipmentAuditFrames,
+				std::memory_order_acq_rel,
+				std::memory_order_acquire);
 		}
 
 		void SuspendForLooksMenu()
@@ -1683,6 +1717,7 @@ namespace TF3DHud
 			Renderer::Hide();
 			ReleasePreview3DState();
 			ClearPreviewRebuildState();
+			Morph::Reset();
 		}
 
 		void ResumeAfterLooksMenu()

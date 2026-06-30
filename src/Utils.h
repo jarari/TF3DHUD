@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RE/B/BSGeometry.h"
+#include "RE/I/IAnimationGraphManagerHolder.h"
 #include "RE/N/NiNode.h"
 #include "REL/ASM.h"
 
@@ -11,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace TF3DHud
 {
@@ -26,9 +28,30 @@ namespace TF3DHud
 	{
 		const auto targetAddress = a_target.address();
 		auto& trampoline = REL::GetTrampoline();
-		auto* gateway = static_cast<std::byte*>(trampoline.allocate(a_prologueSize + sizeof(REL::ASM::JMP14)));
+		const auto* targetBytes = reinterpret_cast<const std::byte*>(targetAddress);
 
-		std::memcpy(gateway, reinterpret_cast<const void*>(targetAddress), a_prologueSize);
+		if (a_prologueSize >= sizeof(REL::ASM::JMP5) && targetBytes[0] == std::byte{ 0xE9 }) {
+			std::int32_t displacement = 0;
+			std::memcpy(std::addressof(displacement), targetBytes + 1, sizeof(displacement));
+			const auto previousTarget =
+				static_cast<std::uintptr_t>(static_cast<std::int64_t>(targetAddress + sizeof(REL::ASM::JMP5)) + displacement);
+
+			WriteBranch5(targetAddress, reinterpret_cast<std::uintptr_t>(a_hook));
+			REX::INFO(
+				"{} branch gateway chained at {:X}; previous target={:X}",
+				a_name,
+				targetAddress,
+				previousTarget);
+			return reinterpret_cast<T>(previousTarget);
+		}
+
+		if (a_prologueSize >= sizeof(REL::ASM::CALL5) && targetBytes[0] == std::byte{ 0xE8 }) {
+			REX::WARN("{} branch gateway not installed at {:X}; captured CALL rel32", a_name, targetAddress);
+			return nullptr;
+		}
+
+		auto* gateway = static_cast<std::byte*>(trampoline.allocate(a_prologueSize + sizeof(REL::ASM::JMP14)));
+		std::memcpy(gateway, targetBytes, a_prologueSize);
 
 		const REL::ASM::JMP14 jumpBack{ targetAddress + a_prologueSize };
 		std::memcpy(gateway + a_prologueSize, std::addressof(jumpBack), sizeof(jumpBack));
@@ -50,6 +73,13 @@ namespace TF3DHud
 	RE::NiAVObject* FindNodeByName(
 		const std::unordered_map<std::string, RE::NiAVObject*>& a_nodes,
 		std::string_view a_name);
+	void CollectFlattenedBoneNodes(
+		RE::BSFlattenedBoneTree* a_tree,
+		std::unordered_map<std::string, RE::NiAVObject*>& a_nodes);
+	RE::BSFlattenedBoneTree* FindFlattenedBoneTree(RE::NiAVObject* a_root);
+	void CollectGraphWrittenBoneNames(
+		const RE::IAnimationGraphManagerHolder& a_holder,
+		std::unordered_set<std::string>& a_names);
 	void ForEachGeometry(RE::NiAVObject* a_object, const std::function<void(RE::BSGeometry&)>& a_visitor);
 	void ForEachAVObject(RE::NiAVObject* a_object, const std::function<void(RE::NiAVObject&)>& a_visitor);
 }

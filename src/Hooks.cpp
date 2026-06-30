@@ -2,9 +2,13 @@
 
 #include "Config.h"
 #include "Events.h"
+#include "Morph.h"
 #include "Previewer.h"
 #include "Renderer.h"
+#include "Utils.h"
 
+#include "RE/A/AIProcess.h"
+#include "RE/A/Actor.h"
 #include "RE/B/BSTEvent.h"
 #include "RE/I/Interface3D.h"
 #include "RE/P/PlayerCharacter.h"
@@ -32,6 +36,9 @@ namespace TF3DHud
 	namespace
 	{
 		using RunActorUpdates_t = void(RE::ProcessLists*, float, bool);
+		using Update3DModel_t = void(RE::AIProcess*, RE::Actor*, bool);
+		using GetAll3DUpdateFlags_t = std::uint16_t(RE::AIProcess*);
+		using QUpdateEditorDeadActorModel_t = bool(RE::AIProcess*);
 		using RenderSceneDeferred_t = void(
 			RE::NiCamera*,
 			RE::BSShaderAccumulator*,
@@ -45,7 +52,15 @@ namespace TF3DHud
 		using QTiledLighting_t = bool();
 
 		REL::Relocation<std::uintptr_t> g_runActorUpdatesCall{ REL::ID(556439), 0x17 };
+		// BodyShapeManager hooks AIProcess::Update3dModel at this function entry and
+		// preserves the first 5-byte instruction (`mov [rsp+0x18], rbp`). Use the same
+		// post-original signal point so skeleton-adjustment/morph follow-up work has
+		// entered the engine's 3D update path before our 300-frame stable audit starts.
+		REL::Relocation<std::uintptr_t> g_update3DModelTarget{ REL::ID{ 986782, 2231882 } };
+		REL::Relocation<GetAll3DUpdateFlags_t*> g_getAll3DUpdateFlags{ REL::ID{ 582098, 2232393 } };
+		REL::Relocation<QUpdateEditorDeadActorModel_t*> g_qUpdateEditorDeadActorModel{ REL::ID{ 16281, 2231571 } };
 		RunActorUpdates_t* g_runActorUpdates{ nullptr };
+		Update3DModel_t* g_update3DModel{ nullptr };
 		// IDA: Interface3D::Renderer::DrawModel calls BSShaderUtil::RenderSceneDeferred
 		// at +0x51A. BSDFCompositeShader's pixel shader ID reads DrawWorld::QTiledLighting()
 		// and toggles bit 0x10000, selecting the tiled composite variant that samples t11/t12.
@@ -82,6 +97,7 @@ namespace TF3DHud
 				}
 
 				Previewer::MarkEquipmentDirty();
+				Morph::MarkPrimaryDirty();
 				return RE::BSEventNotifyControl::kContinue;
 			}
 		};
@@ -116,6 +132,20 @@ namespace TF3DHud
 			}
 
 			Previewer::Update(a_deltaTime);
+		}
+
+		void HookedUpdate3DModel(RE::AIProcess* a_process, RE::Actor* a_actor, bool a_queued)
+		{
+			const auto updateFlags = a_process ? g_getAll3DUpdateFlags(a_process) : 0;
+			const bool updateEditorDeadModel = a_process && g_qUpdateEditorDeadActorModel(a_process);
+
+			if (g_update3DModel) {
+				g_update3DModel(a_process, a_actor, a_queued);
+			}
+
+			if (a_actor && a_actor->IsPlayerRef() && (updateFlags != 0 || updateEditorDeadModel)) {
+				Morph::MarkSecondaryDirty();
+			}
 		}
 
 		void HookedRenderSceneDeferred(
@@ -203,6 +233,12 @@ namespace TF3DHud
 		g_runActorUpdates = reinterpret_cast<RunActorUpdates_t*>(
 			trampoline.write_call<5>(g_runActorUpdatesCall.address(), &HookedRunActorUpdates));
 		REX::INFO("Installed frame hook at {:X}", g_runActorUpdatesCall.address());
+
+		g_update3DModel = CreateBranchGateway5<Update3DModel_t*>(
+			"AIProcess::Update3dModel",
+			g_update3DModelTarget,
+			5,
+			reinterpret_cast<void*>(&HookedUpdate3DModel));
 
 		g_renderSceneDeferred = reinterpret_cast<RenderSceneDeferred_t*>(
 			trampoline.write_call<5>(g_interface3DDrawModelRenderSceneDeferredCall.address(), &HookedRenderSceneDeferred));
