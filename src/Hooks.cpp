@@ -5,9 +5,27 @@
 #include "Previewer.h"
 #include "Renderer.h"
 
+#include "RE/B/BSTEvent.h"
 #include "RE/I/Interface3D.h"
+#include "RE/P/PlayerCharacter.h"
+#include "RE/T/TESEquipEvent.h"
+#include "RE/T/TESForm.h"
 
 #include <cstdint>
+
+namespace RE
+{
+	class EquipEventSource :
+		public BSTEventSource<TESEquipEvent>
+	{
+	public:
+		[[nodiscard]] static EquipEventSource* GetSingleton()
+		{
+			REL::Relocation<EquipEventSource*> singleton{ REL::ID{ 485633, 2691240, 4798533 } };
+			return singleton.get();
+		}
+	};
+}
 
 namespace TF3DHud
 {
@@ -35,6 +53,55 @@ namespace TF3DHud
 		REL::Relocation<SetDoTiledLighting_t*> g_setDoTiledLighting{ REL::ID{ 716351, 2318370 } };
 		REL::Relocation<QTiledLighting_t*> g_qTiledLighting{ REL::ID{ 1154650, 2318371 } };
 		RenderSceneDeferred_t* g_renderSceneDeferred{ nullptr };
+		bool g_equipWatcherRegistered{ false };
+
+		class EquipWatcher :
+			public RE::BSTEventSink<RE::TESEquipEvent>
+		{
+		public:
+			static EquipWatcher* GetSingleton()
+			{
+				static EquipWatcher singleton;
+				return &singleton;
+			}
+
+			RE::BSEventNotifyControl ProcessEvent(
+				const RE::TESEquipEvent& a_event,
+				RE::BSTEventSource<RE::TESEquipEvent>* a_source) override
+			{
+				(void)a_source;
+
+				const auto* player = RE::PlayerCharacter::GetSingleton();
+				if (!player || a_event.actor.get() != player) {
+					return RE::BSEventNotifyControl::kContinue;
+				}
+
+				const auto* item = RE::TESForm::GetFormByID(a_event.baseObject);
+				if (!item || item->IsNot(RE::ENUM_FORM_ID::kARMO, RE::ENUM_FORM_ID::kWEAP)) {
+					return RE::BSEventNotifyControl::kContinue;
+				}
+
+				Previewer::MarkEquipmentDirty();
+				return RE::BSEventNotifyControl::kContinue;
+			}
+		};
+
+		void RegisterEquipWatcher()
+		{
+			if (g_equipWatcherRegistered) {
+				return;
+			}
+
+			auto* source = RE::EquipEventSource::GetSingleton();
+			if (!source) {
+				REX::WARN("could not acquire TESEquipEvent source");
+				return;
+			}
+
+			source->RegisterSink(EquipWatcher::GetSingleton());
+			g_equipWatcherRegistered = true;
+			REX::INFO("Registered TESEquipEvent watcher");
+		}
 
 		[[nodiscard]] bool IsTF3DHudOffscreenRender(RE::ShadowSceneNode* a_shadowSceneNode)
 		{
@@ -101,6 +168,7 @@ namespace TF3DHud
 			switch (a_message->type) {
 			case F4SE::MessagingInterface::kGameDataReady:
 				Events::Register();
+				RegisterEquipWatcher();
 				break;
 			case F4SE::MessagingInterface::kPreLoadGame:
 				Previewer::Reset();

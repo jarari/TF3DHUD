@@ -24,6 +24,7 @@
 #include "RE/T/TESRace.h"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -86,6 +87,12 @@ namespace TF3DHud
 		RE::NiPointer<RE::BSFaceGenNiNode> g_previewFaceNode;
 		std::vector<PreviewAttachment> g_previewAttachments;
 		std::vector<RE::NiPointer<RE::NiAVObject>> g_retiredPreviewObjects;
+		constexpr std::uint32_t kEquipmentAuditFrames = 300;
+		constexpr std::uint32_t kBipedSignatureStableFrames = 3;
+		std::atomic_uint32_t g_requestedEquipmentAuditFrames{ 0 };
+		std::uint32_t g_equipmentAuditFrames{ 0 };
+		std::uint64_t g_pendingBipedSignature{ 0 };
+		std::uint32_t g_pendingBipedSignatureFrames{ 0 };
 		std::uint64_t g_bipedSignature{ 0 };
 		std::uint64_t g_visualSignature{ 0 };
 		bool g_looksMenuSuspended{ false };
@@ -216,18 +223,6 @@ namespace TF3DHud
 				HashInteger(hash, unresolvedVisibleGeometry);
 			}
 			return hash;
-		}
-
-		[[nodiscard]] std::uint64_t BuildPreviewSignature(RE::PlayerCharacter& a_player, const RE::BipedAnim* a_biped)
-		{
-			const auto bipedSignature = BuildBipedSignature(a_biped);
-			if (bipedSignature == 0) {
-				return 0;
-			}
-
-			auto visualSignature = BuildVisualSignature(a_player);
-			HashInteger(visualSignature, bipedSignature);
-			return visualSignature;
 		}
 
 		[[nodiscard]] bool IsHudAvailable(std::string& a_reason)
@@ -1193,9 +1188,73 @@ namespace TF3DHud
 
 		void ClearPreviewRebuildState()
 		{
+			g_requestedEquipmentAuditFrames.store(0, std::memory_order_release);
+			g_equipmentAuditFrames = 0;
+			g_pendingBipedSignature = 0;
+			g_pendingBipedSignatureFrames = 0;
 			g_bipedSignature = 0;
 			g_visualSignature = 0;
 			g_lastDiagnostic.clear();
+		}
+
+		void BeginEquipmentAuditIfRequested()
+		{
+			const auto requestedFrames = g_requestedEquipmentAuditFrames.exchange(0, std::memory_order_acq_rel);
+			if (requestedFrames == 0) {
+				return;
+			}
+
+			g_equipmentAuditFrames = std::max(g_equipmentAuditFrames, requestedFrames);
+			g_pendingBipedSignature = 0;
+			g_pendingBipedSignatureFrames = 0;
+		}
+
+		[[nodiscard]] bool TryBuildBipedSignature(const RE::BipedAnim& a_biped, std::uint64_t& a_signature)
+		{
+			a_signature = BuildBipedSignature(std::addressof(a_biped));
+			if (a_signature == 0) {
+				LogDiagnostic("third-person biped has empty signature");
+				return false;
+			}
+			return true;
+		}
+
+		[[nodiscard]] bool TryResolveAuditedBipedSignature(const RE::BipedAnim& a_biped, std::uint64_t& a_signature)
+		{
+			if (g_equipmentAuditFrames == 0) {
+				return false;
+			}
+
+			--g_equipmentAuditFrames;
+
+			std::uint64_t currentSignature = 0;
+			if (!TryBuildBipedSignature(a_biped, currentSignature)) {
+				g_pendingBipedSignature = 0;
+				g_pendingBipedSignatureFrames = 0;
+				return false;
+			}
+
+			if (currentSignature == g_bipedSignature) {
+				g_pendingBipedSignature = 0;
+				g_pendingBipedSignatureFrames = 0;
+				return false;
+			}
+
+			if (currentSignature != g_pendingBipedSignature) {
+				g_pendingBipedSignature = currentSignature;
+				g_pendingBipedSignatureFrames = 1;
+				return false;
+			}
+
+			++g_pendingBipedSignatureFrames;
+			if (g_pendingBipedSignatureFrames < kBipedSignatureStableFrames) {
+				return false;
+			}
+
+			a_signature = currentSignature;
+			g_pendingBipedSignature = 0;
+			g_pendingBipedSignatureFrames = 0;
+			return true;
 		}
 
 		void RebindSkinInstance(
@@ -1469,7 +1528,7 @@ namespace TF3DHud
 		bool RebuildPreview(
 			RE::PlayerCharacter& a_player,
 			const RE::BipedAnim& a_biped,
-			std::uint64_t a_signature,
+			std::uint64_t a_bipedSignature,
 			std::uint64_t a_visualSignature)
 		{
 			// IDA: Inventory3DManager::AddLoadedModel swaps Offscreen_Set3D roots
@@ -1515,7 +1574,7 @@ namespace TF3DHud
 			PrepareForInterface3DOffscreen(*previewRoot);
 
 			g_previewRoot = previewRoot;
-			g_bipedSignature = a_signature;
+			g_bipedSignature = a_bipedSignature;
 			g_visualSignature = a_visualSignature;
 
 			Renderer::AttachPreviewRoot(*g_previewRoot);
@@ -1563,13 +1622,22 @@ namespace TF3DHud
 				return;
 			}
 
+			BeginEquipmentAuditIfRequested();
+
 			const auto visualSignature = BuildVisualSignature(*player);
-			const auto signature = BuildPreviewSignature(*player, biped.get());
-			if (!g_previewRoot || signature == 0 || signature != g_bipedSignature) {
-				if (signature == 0) {
-					LogDiagnostic("third-person biped has empty signature");
+			std::uint64_t bipedSignature = 0;
+			const bool forceRebuild = !g_previewRoot || visualSignature != g_visualSignature;
+			const bool auditRebuild = !forceRebuild && TryResolveAuditedBipedSignature(*biped, bipedSignature);
+
+			if (forceRebuild) {
+				if (!TryBuildBipedSignature(*biped, bipedSignature)) {
+					Renderer::Hide();
+					return;
 				}
-				if (!RebuildPreview(*player, *biped, signature, visualSignature)) {
+			}
+
+			if (forceRebuild || auditRebuild) {
+				if (!RebuildPreview(*player, *biped, bipedSignature, visualSignature)) {
 					Renderer::Hide();
 					return;
 				}
@@ -1598,6 +1666,11 @@ namespace TF3DHud
 			g_previewRoot.reset();
 			g_previewFaceNode.reset();
 			ClearPreviewRebuildState();
+		}
+
+		void MarkEquipmentDirty()
+		{
+			g_requestedEquipmentAuditFrames.store(kEquipmentAuditFrames, std::memory_order_release);
 		}
 
 		void SuspendForLooksMenu()
