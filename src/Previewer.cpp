@@ -27,7 +27,6 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -67,7 +66,6 @@ namespace TF3DHud
 		static_assert(offsetof(SkinComplexionContext, actorRef) == 0x10);
 		using DoAdjustSkinComplexion_t = std::uint64_t(SkinComplexionContext*, RE::NiAVObject*);
 
-		REL::Relocation<float*> g_engineTime{ REL::ID{ 599343, 2712485 } };
 		REL::Relocation<void (*)(RE::NiAVObject*)> g_createBoneMap{ REL::ID(1131947) };
 		REL::Relocation<CreateHeadForNPC_t*> g_createHeadForNPC{ REL::ID(1455012) };
 		REL::Relocation<CalculateBodyTintColor_t*> g_calculateBodyTintColor{ REL::ID(134537) };
@@ -90,11 +88,6 @@ namespace TF3DHud
 		std::vector<RE::NiPointer<RE::NiAVObject>> g_retiredPreviewObjects;
 		std::uint64_t g_bipedSignature{ 0 };
 		std::uint64_t g_visualSignature{ 0 };
-		std::uint64_t g_failedPreviewSignature{ 0 };
-		float g_diagnosticAccumulator{ 0.0F };
-		float g_lastEngineTime{ 0.0F };
-		std::uint32_t g_frameTicks{ 0 };
-		bool g_hasLastEngineTime{ false };
 		bool g_looksMenuSuspended{ false };
 		std::string g_lastDiagnostic;
 
@@ -275,14 +268,14 @@ namespace TF3DHud
 			return true;
 		}
 
-		void LogDiagnostic(std::string a_message, bool a_force = false)
+		void LogDiagnostic(std::string a_message)
 		{
-			if (!a_force && a_message == g_lastDiagnostic) {
+			if (a_message == g_lastDiagnostic) {
 				return;
 			}
 
 			g_lastDiagnostic = std::move(a_message);
-			REX::INFO("TF3DHud V1 state: {}", g_lastDiagnostic);
+			REX::INFO("state: {}", g_lastDiagnostic);
 		}
 
 		[[nodiscard]] bool ShouldShow(const RE::PlayerCharacter* a_player, std::string& a_reason)
@@ -398,8 +391,6 @@ namespace TF3DHud
 			ScopedSourceControllerDetach& operator=(const ScopedSourceControllerDetach&) = delete;
 			ScopedSourceControllerDetach& operator=(ScopedSourceControllerDetach&&) = delete;
 
-			[[nodiscard]] std::size_t Count() const noexcept { return detached_.size(); }
-
 		private:
 			struct DetachedController
 			{
@@ -410,17 +401,16 @@ namespace TF3DHud
 			std::vector<DetachedController> detached_;
 		};
 
-		[[nodiscard]] std::uint32_t SeedSkinCloneMappings(
+		void SeedSkinCloneMappings(
 			RE::NiCloningProcess& a_cloneProcess,
 			RE::NiAVObject& a_source,
 			RE::NiAVObject* a_previewRoot,
 			const std::unordered_map<std::string, RE::NiAVObject*>* a_previewNodes)
 		{
 			if (!a_previewRoot || !a_previewNodes || a_previewNodes->empty()) {
-				return 0;
+				return;
 			}
 
-			std::uint32_t seeded = 0;
 			ForEachGeometry(std::addressof(a_source), [&](RE::BSGeometry& a_geometry) {
 				auto* skin = a_geometry.skinInstance.get();
 				if (!skin || skin->bones.size() > RE::BSSkin::kMaxExpectedBones) {
@@ -428,9 +418,7 @@ namespace TF3DHud
 				}
 
 				if (skin->rootNode) {
-					if (a_cloneProcess.cloneMap.emplace(skin->rootNode, a_previewRoot).second) {
-						++seeded;
-					}
+					a_cloneProcess.cloneMap.emplace(skin->rootNode, a_previewRoot);
 				}
 
 				for (std::uint32_t index = 0; index < skin->bones.size(); ++index) {
@@ -444,41 +432,27 @@ namespace TF3DHud
 						continue;
 					}
 
-					if (a_cloneProcess.cloneMap.emplace(sourceBone, previewBone).second) {
-						++seeded;
-					}
+					a_cloneProcess.cloneMap.emplace(sourceBone, previewBone);
 				}
 			});
-
-			return seeded;
 		}
 
 		RE::NiPointer<RE::NiAVObject> ClonePreviewObject(
 			RE::NiAVObject& a_source,
 			RE::NiAVObject* a_previewRoot = nullptr,
-			const std::unordered_map<std::string, RE::NiAVObject*>* a_previewNodes = nullptr,
-			std::uint32_t* a_seededSkinMappings = nullptr)
+			const std::unordered_map<std::string, RE::NiAVObject*>* a_previewNodes = nullptr)
 		{
 			RE::NiCloningProcess cloneProcess;
 			cloneProcess.appendChar = '$';
 			cloneProcess.copyType = RE::NiCloningProcess::CopyType::kCopyExact;
 			cloneProcess.scale = { 1.0F, 1.0F, 1.0F };
 
-			const auto seeded = SeedSkinCloneMappings(cloneProcess, a_source, a_previewRoot, a_previewNodes);
-			if (a_seededSkinMappings) {
-				*a_seededSkinMappings = seeded;
-			}
+			SeedSkinCloneMappings(cloneProcess, a_source, a_previewRoot, a_previewNodes);
 
 			ScopedSourceControllerDetach detachControllers(a_source);
 			auto* clone = a_source.CreateClone(cloneProcess);
 			a_source.ProcessClone(cloneProcess);
 			auto* clonedObject = clone ? static_cast<RE::NiAVObject*>(clone) : nullptr;
-			if (detachControllers.Count() > 0) {
-				REX::INFO(
-					"TF3DHud V1 cloned preview object with source controllers detached during clone: object='{}', detachedControllers={}",
-					a_source.GetName(),
-					detachControllers.Count());
-			}
 			return clonedObject;
 		}
 
@@ -521,7 +495,6 @@ namespace TF3DHud
 
 		[[nodiscard]] bool ConvertPreviewSkeletonToFlattenedTree(RE::PlayerCharacter& a_player, RE::NiAVObject& a_skeletonRoot)
 		{
-			const auto* beforeFlattened = FindFlattenedBoneTree(std::addressof(a_skeletonRoot));
 			constexpr std::uint32_t kFlattenedSkeletonBodyPart = 0x12;
 			auto* convertTarget = g_getActorBodyPart3D(
 				std::addressof(a_player),
@@ -531,7 +504,7 @@ namespace TF3DHud
 				false);
 			if (!convertTarget) {
 				REX::WARN(
-					"TF3DHud V1 preview race skeleton flatten failed: body-part lookup returned null; root={:X}, rootName='{}', bodyPart={}",
+					"preview race skeleton flatten failed: body-part lookup returned null; root={:X}, rootName='{}', bodyPart={}",
 					reinterpret_cast<std::uintptr_t>(std::addressof(a_skeletonRoot)),
 					a_skeletonRoot.GetName(),
 					kFlattenedSkeletonBodyPart);
@@ -539,20 +512,7 @@ namespace TF3DHud
 			}
 
 			if (convertTarget != std::addressof(a_skeletonRoot)) {
-				auto* converted = g_convertNodeTree(convertTarget, std::addressof(a_skeletonRoot));
-				REX::INFO(
-					"TF3DHud V1 called BSFlattenedBoneTree::ConvertNodeTree for preview skeleton: target={:X}, root={:X}, converted={:X}, targetName='{}', rootName='{}'",
-					reinterpret_cast<std::uintptr_t>(convertTarget),
-					reinterpret_cast<std::uintptr_t>(std::addressof(a_skeletonRoot)),
-					reinterpret_cast<std::uintptr_t>(converted),
-					convertTarget->GetName(),
-					a_skeletonRoot.GetName());
-			} else {
-				REX::INFO(
-					"TF3DHud V1 skipped preview skeleton flatten call because body-part target is root: root={:X}, rootName='{}', bodyPart={}",
-					reinterpret_cast<std::uintptr_t>(std::addressof(a_skeletonRoot)),
-					a_skeletonRoot.GetName(),
-					kFlattenedSkeletonBodyPart);
+				g_convertNodeTree(convertTarget, std::addressof(a_skeletonRoot));
 			}
 
 			g_createBoneMap(std::addressof(a_skeletonRoot));
@@ -560,7 +520,7 @@ namespace TF3DHud
 			auto* afterFlattened = FindFlattenedBoneTree(std::addressof(a_skeletonRoot));
 			if (!afterFlattened) {
 				REX::WARN(
-					"TF3DHud V1 preview race skeleton flatten did not produce BSFlattenedBoneTree: target={:X}, root={:X}, targetName='{}', rootName='{}'",
+					"preview race skeleton flatten did not produce BSFlattenedBoneTree: target={:X}, root={:X}, targetName='{}', rootName='{}'",
 					reinterpret_cast<std::uintptr_t>(convertTarget),
 					reinterpret_cast<std::uintptr_t>(std::addressof(a_skeletonRoot)),
 					convertTarget->GetName(),
@@ -570,15 +530,6 @@ namespace TF3DHud
 
 			g_createBoneMap(afterFlattened);
 			g_previewFlattenedBoneTree = afterFlattened;
-			REX::INFO(
-				"TF3DHud V1 converted preview race skeleton to BSFlattenedBoneTree: target={:X}, root={:X}, beforeFlattened={:X}, afterFlattened={:X}, targetName='{}', rootName='{}', boneCount={}",
-				reinterpret_cast<std::uintptr_t>(convertTarget),
-				reinterpret_cast<std::uintptr_t>(std::addressof(a_skeletonRoot)),
-				reinterpret_cast<std::uintptr_t>(beforeFlattened),
-				reinterpret_cast<std::uintptr_t>(afterFlattened),
-				convertTarget->GetName(),
-				a_skeletonRoot.GetName(),
-				afterFlattened->boneCount);
 
 			return true;
 		}
@@ -601,7 +552,7 @@ namespace TF3DHud
 			return nullptr;
 		}
 
-		bool ApplyHeadCenteredFraming(RE::NiAVObject& a_previewRoot, const bool a_log)
+		bool ApplyHeadCenteredFraming(RE::NiAVObject& a_previewRoot)
 		{
 			auto* flattened = g_previewFlattenedBoneTree;
 			if (!flattened) {
@@ -610,23 +561,19 @@ namespace TF3DHud
 			}
 
 			if (!flattened) {
-				Renderer::ApplyOffscreenFraming(a_previewRoot, a_log);
-				if (a_log) {
-					REX::WARN("TF3DHud V1 head-centered framing fell back to bounds: no cached BSFlattenedBoneTree");
-				}
+				Renderer::ApplyOffscreenFraming(a_previewRoot);
+				REX::WARN("head-centered framing fell back to bounds: no cached BSFlattenedBoneTree");
 				return false;
 			}
 
 			auto* headObject = flattened->GetObjectByName(RE::BSFixedString("HEAD"));
 			auto* head = headObject ? nullptr : FindFlattenedBoneByName(*flattened, "HEAD");
 			if (!headObject && !head) {
-				Renderer::ApplyOffscreenFraming(a_previewRoot, a_log);
-				if (a_log) {
-					REX::WARN(
-						"TF3DHud V1 head-centered framing fell back to bounds: HEAD bone not found in flattenedTree='{}', bones={}",
-						flattened->GetName(),
-						flattened->boneCount);
-				}
+				Renderer::ApplyOffscreenFraming(a_previewRoot);
+				REX::WARN(
+					"head-centered framing fell back to bounds: HEAD bone not found in flattenedTree='{}', bones={}",
+					flattened->GetName(),
+					flattened->boneCount);
 				return false;
 			}
 
@@ -649,24 +596,6 @@ namespace TF3DHud
 			a_previewRoot.SetLocalTransform(centeredTransform);
 			a_previewRoot.Update(updateData);
 
-			if (a_log) {
-				REX::INFO(
-					"TF3DHud V1 head-centered preview root: flattenedTree='{}', headNode={:X}, headWorld=({}, {}, {}), localTranslate=({}, {}, {}), scale={}, yawDegrees={}, boundCenter=({}, {}, {}), boundRadius={}",
-					flattened->GetName(),
-					reinterpret_cast<std::uintptr_t>(headObject ? headObject : head->node.get()),
-					headWorld.x,
-					headWorld.y,
-					headWorld.z,
-					a_previewRoot.GetLocalTranslate().x,
-					a_previewRoot.GetLocalTranslate().y,
-					a_previewRoot.GetLocalTranslate().z,
-					centeredTransform.scale,
-					config.yawDegrees,
-					a_previewRoot.worldBound.center.x,
-					a_previewRoot.worldBound.center.y,
-					a_previewRoot.worldBound.center.z,
-					a_previewRoot.worldBound.fRadius);
-			}
 			return true;
 		}
 
@@ -702,34 +631,19 @@ namespace TF3DHud
 			const auto result = RE::BSModelDB::Demand(skeletonPath, std::addressof(loadedRoot), args);
 			if (result != RE::BSResource::ErrorCode::kNone || !loadedRoot) {
 				REX::WARN(
-					"TF3DHud V1 preview race skeleton load failed: path='{}', result={}",
+					"preview race skeleton load failed: path='{}', result={}",
 					skeletonPath,
 					std::to_underlying(result));
 				LogDiagnostic("preview race skeleton load failed: BSModelDB demand failed");
 				return nullptr;
 			}
 
-			REX::INFO(
-				"TF3DHud V1 loaded race skeleton source model: race={:08X}, sex={}, path='{}', root='{}', objectsBoundRadius={}",
-				race->GetFormID(),
-				sex,
-				skeletonPath,
-				loadedRoot->GetName(),
-				loadedRoot->worldBound.fRadius);
-
 			auto previewRoot = ClonePreviewObject(*loadedRoot);
 			if (!previewRoot) {
-				REX::WARN("TF3DHud V1 preview race skeleton clone failed: path='{}'", skeletonPath);
+				REX::WARN("preview race skeleton clone failed: path='{}'", skeletonPath);
 				LogDiagnostic("preview race skeleton clone failed");
 				return nullptr;
 			}
-
-			REX::INFO(
-				"TF3DHud V1 cloned preview-owned race skeleton: source={:X}, clone={:X}, root='{}', objectsBoundRadius={}",
-				reinterpret_cast<std::uintptr_t>(loadedRoot.get()),
-				reinterpret_cast<std::uintptr_t>(previewRoot.get()),
-				previewRoot->GetName(),
-				previewRoot->worldBound.fRadius);
 
 			if (!ConvertPreviewSkeletonToFlattenedTree(a_player, *previewRoot)) {
 				LogDiagnostic("preview race skeleton flatten failed");
@@ -754,7 +668,7 @@ namespace TF3DHud
 			const auto result = RE::BSModelDB::Demand(a_path, std::addressof(loadedRoot), args);
 			if (result != RE::BSResource::ErrorCode::kNone || !loadedRoot) {
 				REX::WARN(
-					"TF3DHud V1 preview model load failed: path='{}', result={}",
+					"preview model load failed: path='{}', result={}",
 					a_path,
 					std::to_underlying(result));
 				return nullptr;
@@ -762,7 +676,7 @@ namespace TF3DHud
 
 			auto previewRoot = ClonePreviewObject(*loadedRoot);
 			if (!previewRoot) {
-				REX::WARN("TF3DHud V1 preview model clone failed: path='{}'", a_path);
+				REX::WARN("preview model clone failed: path='{}'", a_path);
 				return nullptr;
 			}
 
@@ -785,109 +699,38 @@ namespace TF3DHud
 			a_fadeNode.previousMaxA = 1.0F;
 		}
 
-		[[nodiscard]] bool IsRootedAt(RE::NiAVObject* a_object, RE::NiAVObject& a_root)
-		{
-			for (auto* current = a_object; current; current = current->parent) {
-				if (current == std::addressof(a_root)) {
-					return true;
-				}
-			}
-			return false;
-		}
-
-		struct ShaderFadeNodeDiagnostics
-		{
-			std::uint32_t shaderProperties{ 0 };
-			std::uint32_t missingFadeNodes{ 0 };
-			std::uint32_t externalFadeNodes{ 0 };
-			std::string firstExternalGeometry;
-		};
-
-		[[nodiscard]] ShaderFadeNodeDiagnostics GetShaderFadeNodeDiagnostics(RE::NiAVObject& a_root)
-		{
-			ShaderFadeNodeDiagnostics diagnostics;
-			ForEachGeometry(std::addressof(a_root), [&](RE::BSGeometry& a_geometry) {
-				for (auto& property : a_geometry.properties) {
-					auto* shaderProperty = netimmerse_cast<RE::BSShaderProperty*>(property.get());
-					if (!shaderProperty) {
-						continue;
-					}
-
-					++diagnostics.shaderProperties;
-					if (!shaderProperty->fadeNode) {
-						++diagnostics.missingFadeNodes;
-						continue;
-					}
-					if (!IsRootedAt(shaderProperty->fadeNode, a_root)) {
-						++diagnostics.externalFadeNodes;
-						if (diagnostics.firstExternalGeometry.empty()) {
-							diagnostics.firstExternalGeometry = std::string(a_geometry.GetName());
-						}
-					}
-				}
-			});
-			return diagnostics;
-		}
-
 		void PrepareForInterface3DOffscreen(RE::NiAVObject& a_root)
 		{
-			std::uint32_t fadeNodes{ 0 };
-			std::uint32_t clearedTopFadeNodes{ 0 };
-			std::uint32_t forcedVisibleFadeNodes{ 0 };
-			const auto beforeFlags = a_root.GetFlags();
-			const auto beforeRadius = a_root.worldBound.fRadius;
-			const auto beforeFadeDiagnostics = GetShaderFadeNodeDiagnostics(a_root);
-
 			// The preview tree is assembled from separately loaded/cloned subtrees.
 			// Repair shader fade-node ownership once after final attachment so no
 			// geometry keeps a stale fade node from the source or attachment root.
 			RepairShaderFadeNodes(a_root, nullptr);
 
+			bool updated = false;
 			ForEachAVObject(std::addressof(a_root), [&](RE::NiAVObject& a_object) {
 				auto* fadeNode = a_object.IsFadeNode();
 				if (!fadeNode) {
 					return;
 				}
 
-				++fadeNodes;
 				if ((fadeNode->flags.flags & kNiAVObjectFadeDone) == 0 ||
 					fadeNode->fadeAmount != 1.0F ||
 					fadeNode->currentFade != 1.0F ||
 					fadeNode->currentDecalFade != 1.0F) {
-					++forcedVisibleFadeNodes;
+					updated = true;
 				}
 				MakePreviewFadeNodeVisible(*fadeNode);
 
 				if ((a_object.flags.flags & kNiAVObjectTopFadeNode) != 0) {
 					a_object.flags.flags &= ~kNiAVObjectTopFadeNode;
-					++clearedTopFadeNodes;
+					updated = true;
 				}
 			});
 
-			const auto afterFadeDiagnostics = GetShaderFadeNodeDiagnostics(a_root);
-			if (clearedTopFadeNodes > 0 ||
-				forcedVisibleFadeNodes > 0 ||
-				beforeFadeDiagnostics.externalFadeNodes != afterFadeDiagnostics.externalFadeNodes ||
-				beforeFadeDiagnostics.missingFadeNodes != afterFadeDiagnostics.missingFadeNodes) {
+			if (updated) {
 				RE::NiUpdateData updateData;
 				a_root.Update(updateData);
 			}
-
-			REX::INFO(
-				"TF3DHud V1 prepared preview root for Interface3D offscreen: fadeNodes={}, forcedVisibleFadeNodes={}, clearedTopFadeNodes={}, rootFlags {:016X}->{:016X}, boundRadius {}->{}, shaderFadeProps={}, missingFadeNodes {}->{}, externalFadeNodes {}->{}, firstExternalFade='{}'",
-				fadeNodes,
-				forcedVisibleFadeNodes,
-				clearedTopFadeNodes,
-				beforeFlags,
-				a_root.GetFlags(),
-				beforeRadius,
-				a_root.worldBound.fRadius,
-				afterFadeDiagnostics.shaderProperties,
-				beforeFadeDiagnostics.missingFadeNodes,
-				afterFadeDiagnostics.missingFadeNodes,
-				beforeFadeDiagnostics.externalFadeNodes,
-				afterFadeDiagnostics.externalFadeNodes,
-				beforeFadeDiagnostics.firstExternalGeometry);
 		}
 
 		void RepairShaderFadeNodes(RE::NiAVObject& a_object, RE::BSFadeNode* a_currentFadeNode)
@@ -921,13 +764,8 @@ namespace TF3DHud
 
 		void PreparePreviewTree(RE::NiAVObject& a_previewRoot)
 		{
-			std::uint32_t objects = 0;
-			std::uint32_t appCulledObjects = 0;
-
 			ForEachAVObject(std::addressof(a_previewRoot), [&](RE::NiAVObject& a_object) {
-				++objects;
 				if (a_object.GetAppCulled()) {
-					++appCulledObjects;
 					a_object.SetAppCulled(false);
 				}
 				a_object.fadeAmount = 1.0F;
@@ -937,11 +775,6 @@ namespace TF3DHud
 			});
 
 			RepairShaderFadeNodes(a_previewRoot, nullptr);
-
-			REX::INFO(
-				"TF3DHud V1 prepared preview tree: objects={}, clearedAppCulled={}",
-				objects,
-				appCulledObjects);
 		}
 
 		std::uint32_t StripControllerChains(RE::NiAVObject& a_root)
@@ -969,95 +802,11 @@ namespace TF3DHud
 			return a_name == "FemaleNeckGore" || a_name == "MaleNeckGore" || a_name == "NeckGore";
 		}
 
-		void LogPreviewRenderGeometryDetails(RE::NiAVObject& a_previewRoot, const char* a_stage)
+		void SanitizePreviewRenderTree(RE::NiAVObject& a_previewRoot)
 		{
-			std::uint32_t index = 0;
+			bool updated = false;
 			ForEachGeometry(std::addressof(a_previewRoot), [&](RE::BSGeometry& a_geometry) {
-				const auto geometryName = std::string(a_geometry.GetName());
-				auto* shaderProperty = GetGeometryShaderProperty(a_geometry);
-				auto* lightingProperty = netimmerse_cast<RE::BSLightingShaderProperty*>(shaderProperty);
-				auto* material = shaderProperty ? shaderProperty->material : nullptr;
-				const auto* skin = a_geometry.skinInstance.get();
-				std::uint32_t nullBones = 0;
-				if (skin) {
-					for (auto* bone : skin->bones) {
-						if (!bone) {
-							++nullBones;
-						}
-					}
-				}
-				const bool missingShaderOrMaterial = !shaderProperty || !material;
-				const bool neckGore = IsPreviewNeckGoreGeometry(geometryName);
-				const char* decision = neckGore ? "cull-neck-gore" : (missingShaderOrMaterial ? "cull-missing-shader-material" : "render");
-
-				REX::INFO(
-					"TF3DHud V1 render geometry detail [{}] #{} decision={} name='{}' geom={:X} parent='{}' parent={:X} parentRooted={} flags={:016X} appCulled={} fade={} localT=({}, {}, {}) localScale={} worldT=({}, {}, {}) worldScale={} worldBound=({}, {}, {})/{} modelBound=({}, {}, {})/{} shader={:X} shaderFlags={:016X} shaderAlpha={} shaderRoot='{}' shaderFadeNode={:X} shaderFadeRooted={} material={:X} materialFeature={} materialType={} materialHash={:08X} materialUnique={:08X} lighting={} baseTechnique={} skin={:X} skinRoot='{}' skinRoot={:X} skinRooted={} skinBones={} nullBones={} worldTransforms={} paletteStamp={} rendererData={:X} geomType={} registered={}",
-					a_stage,
-					index++,
-					decision,
-					geometryName,
-					reinterpret_cast<std::uintptr_t>(std::addressof(a_geometry)),
-					a_geometry.parent ? a_geometry.parent->GetName() : "",
-					reinterpret_cast<std::uintptr_t>(a_geometry.parent),
-					IsRootedAt(std::addressof(a_geometry), a_previewRoot),
-					a_geometry.GetFlags(),
-					a_geometry.GetAppCulled(),
-					a_geometry.fadeAmount,
-					a_geometry.local.translate.x,
-					a_geometry.local.translate.y,
-					a_geometry.local.translate.z,
-					a_geometry.local.scale,
-					a_geometry.world.translate.x,
-					a_geometry.world.translate.y,
-					a_geometry.world.translate.z,
-					a_geometry.world.scale,
-					a_geometry.worldBound.center.x,
-					a_geometry.worldBound.center.y,
-					a_geometry.worldBound.center.z,
-					a_geometry.worldBound.fRadius,
-					a_geometry.modelBound.center.x,
-					a_geometry.modelBound.center.y,
-					a_geometry.modelBound.center.z,
-					a_geometry.modelBound.fRadius,
-					reinterpret_cast<std::uintptr_t>(shaderProperty),
-					shaderProperty ? shaderProperty->flags.underlying() : 0,
-					shaderProperty ? shaderProperty->alpha : 0.0F,
-					lightingProperty ? lightingProperty->rootName.c_str() : "",
-					lightingProperty ? reinterpret_cast<std::uintptr_t>(lightingProperty->fadeNode) : 0,
-					lightingProperty && lightingProperty->fadeNode ? IsRootedAt(lightingProperty->fadeNode, a_previewRoot) : false,
-					reinterpret_cast<std::uintptr_t>(material),
-					material ? std::to_underlying(material->GetFeature()) : -1,
-					material ? std::to_underlying(material->GetType()) : -1,
-					material ? material->hashKey : 0,
-					material ? material->uniqueCode : 0,
-					lightingProperty != nullptr,
-					lightingProperty ? lightingProperty->baseTechniqueID : 0,
-					reinterpret_cast<std::uintptr_t>(skin),
-					skin && skin->rootNode ? skin->rootNode->GetName() : "",
-					skin ? reinterpret_cast<std::uintptr_t>(skin->rootNode) : 0,
-					skin && skin->rootNode ? IsRootedAt(skin->rootNode, a_previewRoot) : false,
-					skin ? skin->bones.size() : 0,
-					nullBones,
-					skin ? skin->worldTransforms.size() : 0,
-					skin ? skin->paletteStamp : 0,
-					reinterpret_cast<std::uintptr_t>(a_geometry.rendererData),
-					a_geometry.type,
-					a_geometry.registered);
-			});
-		}
-
-		void SanitizePreviewRenderTree(RE::NiAVObject& a_previewRoot, const char* a_stage)
-		{
-			std::uint32_t geometries = 0;
-			std::uint32_t culledMissingShaderOrMaterial = 0;
-			std::uint32_t culledNeckGore = 0;
-			std::string firstCulledMissingShaderOrMaterial;
-			std::string firstNeckGore;
-
-			ForEachGeometry(std::addressof(a_previewRoot), [&](RE::BSGeometry& a_geometry) {
-				++geometries;
-
-				const auto geometryName = std::string(a_geometry.GetName());
+				const std::string_view geometryName(a_geometry.GetName());
 				const auto* shaderProperty = GetGeometryShaderProperty(a_geometry);
 				const bool missingShaderPath = !shaderProperty || !shaderProperty->material;
 				const bool neckGore = IsPreviewNeckGoreGeometry(geometryName);
@@ -1065,45 +814,25 @@ namespace TF3DHud
 				if (missingShaderPath) {
 					a_geometry.SetAppCulled(true);
 					a_geometry.fadeAmount = 0.0F;
-					++culledMissingShaderOrMaterial;
-					if (firstCulledMissingShaderOrMaterial.empty()) {
-						firstCulledMissingShaderOrMaterial = geometryName;
-					}
+					updated = true;
 				}
 				if (neckGore) {
 					a_geometry.SetAppCulled(true);
 					a_geometry.fadeAmount = 0.0F;
-					++culledNeckGore;
-					if (firstNeckGore.empty()) {
-						firstNeckGore = geometryName;
-					}
+					updated = true;
 				}
 			});
 
-			if (culledMissingShaderOrMaterial == 0 && culledNeckGore == 0) {
+			if (!updated) {
 				return;
 			}
 
 			RE::NiUpdateData updateData;
 			a_previewRoot.Update(updateData);
-
-			REX::INFO(
-				"TF3DHud V1 sanitized preview render tree [{}]: geometries={}, culledMissingShaderOrMaterial={} first='{}', culledNeckGore={} first='{}', boundRadius={}",
-				a_stage,
-				geometries,
-				culledMissingShaderOrMaterial,
-				firstCulledMissingShaderOrMaterial,
-				culledNeckGore,
-				firstNeckGore,
-				a_previewRoot.worldBound.fRadius);
 		}
 
-		[[nodiscard]] bool ValidatePreviewRenderMaterials(RE::NiAVObject& a_previewRoot)
+		void RestorePreviewShaderAlpha(RE::NiAVObject& a_previewRoot)
 		{
-			std::uint32_t lightingProperties = 0;
-			std::uint32_t missingMaterials = 0;
-			std::string firstMissingGeometry;
-
 			ForEachGeometry(std::addressof(a_previewRoot), [&](RE::BSGeometry& a_geometry) {
 				for (auto& property : a_geometry.properties) {
 					auto* lightingProperty = netimmerse_cast<RE::BSLightingShaderProperty*>(property.get());
@@ -1111,59 +840,11 @@ namespace TF3DHud
 						continue;
 					}
 
-					++lightingProperties;
-					if (!lightingProperty->material) {
-						++missingMaterials;
-						if (firstMissingGeometry.empty()) {
-							firstMissingGeometry = std::string(a_geometry.GetName());
-						}
-					}
-				}
-			});
-
-			if (missingMaterials > 0) {
-				REX::WARN(
-					"TF3DHud V1 preview render material warning: lighting shader material is null on '{}' ({}/{})",
-					firstMissingGeometry,
-					missingMaterials,
-					lightingProperties);
-			}
-
-			return true;
-		}
-
-		void RestorePreviewShaderAlpha(RE::NiAVObject& a_previewRoot, const char* a_stage)
-		{
-			std::uint32_t lightingProperties = 0;
-			std::uint32_t restoredAlpha = 0;
-			std::string firstRestoredGeometry;
-
-			ForEachGeometry(std::addressof(a_previewRoot), [&](RE::BSGeometry& a_geometry) {
-				for (auto& property : a_geometry.properties) {
-					auto* lightingProperty = netimmerse_cast<RE::BSLightingShaderProperty*>(property.get());
-					if (!lightingProperty) {
-						continue;
-					}
-
-					++lightingProperties;
 					if (lightingProperty->alpha <= 0.0F) {
 						lightingProperty->alpha = 1.0F;
-						++restoredAlpha;
-						if (firstRestoredGeometry.empty()) {
-							firstRestoredGeometry = std::string(a_geometry.GetName());
-						}
 					}
 				}
 			});
-
-			if (restoredAlpha > 0) {
-				REX::INFO(
-					"TF3DHud V1 restored preview shader alpha after {}: restored={}/{} first='{}'",
-					a_stage,
-					restoredAlpha,
-					lightingProperties,
-					firstRestoredGeometry);
-			}
 		}
 
 		void StripClonedGeometry(RE::NiAVObject& a_previewRoot)
@@ -1190,85 +871,15 @@ namespace TF3DHud
 				}
 			}
 
-			REX::INFO("TF3DHud V1 stripped cloned root geometry: detached={}", detachedObjects.size());
 		}
 
-		void LogPreviewGeometrySummary(RE::NiAVObject& a_root, const std::string_view a_label)
-		{
-			std::uint32_t geometries = 0;
-			std::uint32_t visible = 0;
-			std::uint32_t skinned = 0;
-			std::uint32_t shaderProperties = 0;
-			std::uint32_t lightingProperties = 0;
-			std::uint32_t missingShader = 0;
-			std::uint32_t missingMaterial = 0;
-			std::uint32_t skinTintMaterials = 0;
-			std::string summary;
-
-			ForEachGeometry(std::addressof(a_root), [&](RE::BSGeometry& a_geometry) {
-				++geometries;
-				if (!a_geometry.GetAppCulled() && a_geometry.fadeAmount > 0.0F) {
-					++visible;
-				}
-				if (a_geometry.skinInstance) {
-					++skinned;
-				}
-
-				auto* shaderProperty = GetGeometryShaderProperty(a_geometry);
-				if (shaderProperty) {
-					++shaderProperties;
-					if (auto* lightingProperty = netimmerse_cast<RE::BSLightingShaderProperty*>(shaderProperty)) {
-						++lightingProperties;
-						if (auto* material = lightingProperty->material; material) {
-							if (material->GetFeature() == RE::BSShaderMaterial::Feature::kSkinTint) {
-								++skinTintMaterials;
-							}
-						} else {
-							++missingMaterial;
-						}
-					}
-				} else {
-					++missingShader;
-				}
-
-				if (summary.size() < 512) {
-					if (!summary.empty()) {
-						summary += ", ";
-					}
-					summary += "'";
-					summary += std::string(a_geometry.GetName());
-					summary += "'";
-					summary += a_geometry.GetAppCulled() ? "/culled" : "/visible";
-					summary += shaderProperty ? "/shader" : "/noShader";
-					if (auto* lightingProperty = netimmerse_cast<RE::BSLightingShaderProperty*>(shaderProperty)) {
-						summary += lightingProperty->material ? "/material" : "/noMaterial";
-					}
-				}
-			});
-
-			REX::INFO(
-				"TF3DHud V1 preview geometry summary [{}]: root='{}', geometries={}, visible={}, skinned={}, shaderProps={}, lightingProps={}, missingShader={}, missingMaterial={}, skinTintMaterials={}, summary={}",
-				a_label,
-				a_root.GetName(),
-				geometries,
-				visible,
-				skinned,
-				shaderProperties,
-				lightingProperties,
-				missingShader,
-				missingMaterial,
-				skinTintMaterials,
-				summary);
-		}
-
-		[[nodiscard]] std::uint32_t PrepareAttachmentSkinComplexion(
+		void PrepareAttachmentSkinComplexion(
 			RE::NiAVObject& a_attachmentRoot,
 			const RE::BIPED_OBJECT a_slot,
-			const RE::BipedAnim& a_sourceBiped,
-			const std::string_view a_label)
+			const RE::BipedAnim& a_sourceBiped)
 		{
 			if (a_slot == RE::BIPED_OBJECT::kNone) {
-				return 0;
+				return;
 			}
 
 			SkinComplexionContext context{
@@ -1277,40 +888,9 @@ namespace TF3DHud
 				.actorRef = a_sourceBiped.GetRequester(),
 			};
 
-			std::uint32_t geometries = 0;
-			std::uint32_t skinTintCandidates = 0;
-			std::uint32_t prepared = 0;
-			std::string firstSkinTintGeometry;
 			ForEachGeometry(std::addressof(a_attachmentRoot), [&](RE::BSGeometry& a_geometry) {
-				++geometries;
-
-				auto* lightingProperty = netimmerse_cast<RE::BSLightingShaderProperty*>(GetGeometryShaderProperty(a_geometry));
-				auto* material = lightingProperty ? lightingProperty->material : nullptr;
-				if (material && material->GetFeature() == RE::BSShaderMaterial::Feature::kSkinTint) {
-					++skinTintCandidates;
-					if (firstSkinTintGeometry.empty()) {
-						firstSkinTintGeometry = std::string(a_geometry.GetName());
-					}
-				}
-
 				g_doAdjustSkinComplexion(std::addressof(context), std::addressof(a_geometry));
-				++prepared;
 			});
-
-			if (skinTintCandidates > 0) {
-				const auto& sourceObject = a_sourceBiped.object[std::to_underlying(a_slot)];
-				REX::INFO(
-					"TF3DHud V1 prepared attachment skin complexion: slot={}, label='{}', geometries={}, calls={}, skinTintCandidates={}, firstSkinTint='{}', sourceSkinTexture={:X}",
-					std::to_underlying(a_slot),
-					a_label,
-					geometries,
-					prepared,
-					skinTintCandidates,
-					firstSkinTintGeometry,
-					reinterpret_cast<std::uintptr_t>(sourceObject.skinTexture));
-			}
-
-			return prepared;
 		}
 
 		[[nodiscard]] RE::BGSModelMaterialSwap* SelectArmorAddonFacebonesModel(RE::TESObjectARMA& a_addon, const RE::SEX a_sex)
@@ -1333,17 +913,6 @@ namespace TF3DHud
 				}
 			}
 			return false;
-		}
-
-		[[nodiscard]] std::uint32_t CountNullSkinBones(RE::BSSkin::Instance& a_skin)
-		{
-			std::uint32_t count = 0;
-			for (auto* bone : a_skin.bones) {
-				if (!bone) {
-					++count;
-				}
-			}
-			return count;
 		}
 
 		[[nodiscard]] RE::NiAVObject* GetTopRoot(RE::NiAVObject* a_object)
@@ -1398,34 +967,23 @@ namespace TF3DHud
 			return nullptr;
 		}
 
-		void RefreshPreviewBoneLookup(RE::NiAVObject& a_previewRoot, const char* a_reason)
+		void RefreshPreviewBoneLookup(RE::NiAVObject& a_previewRoot)
 		{
 			g_createBoneMap(std::addressof(a_previewRoot));
 
 			auto* flattened = FindFlattenedBoneTree(std::addressof(a_previewRoot));
 			if (!flattened) {
-				REX::INFO("TF3DHud V1 refreshed preview BSBoneMap for {}; no BSFlattenedBoneTree found", a_reason);
 				return;
 			}
 
-			const auto beforeBoneCount = flattened->boneCount;
-			const std::string treeName(flattened->GetName());
 			g_createBoneMap(flattened);
 			g_previewFlattenedBoneTree = flattened;
 			g_createBoneMap(std::addressof(a_previewRoot));
-			REX::INFO(
-				"TF3DHud V1 refreshed preview BSBoneMap for {}: flattenedTree='{}', bones={}",
-				a_reason,
-				treeName,
-				beforeBoneCount);
 		}
 
 		void ResolveNullSkinBonesFromFlattenedTree(
 			RE::BSSkin::Instance& a_skin,
-			RE::NiAVObject& a_attachmentRoot,
-			const std::string_view a_geometryName,
-			std::uint32_t& a_resolvedNullBones,
-			std::uint32_t& a_unresolvedNullBones)
+			RE::NiAVObject& a_attachmentRoot)
 		{
 			if (a_skin.bones.empty() || a_skin.bones.size() > RE::BSSkin::kMaxExpectedBones) {
 				return;
@@ -1434,8 +992,14 @@ namespace TF3DHud
 				return;
 			}
 
-			const auto beforeNullBones = CountNullSkinBones(a_skin);
-			if (beforeNullBones == 0) {
+			bool hasNullBones = false;
+			for (auto* bone : a_skin.bones) {
+				if (!bone) {
+					hasNullBones = true;
+					break;
+				}
+			}
+			if (!hasNullBones) {
 				return;
 			}
 
@@ -1444,7 +1008,6 @@ namespace TF3DHud
 				flattened = FindFlattenedBoneTree(GetTopRoot(std::addressof(a_attachmentRoot)));
 			}
 			if (!flattened) {
-				a_unresolvedNullBones += beforeNullBones;
 				return;
 			}
 
@@ -1455,7 +1018,6 @@ namespace TF3DHud
 				GetTopRoot(std::addressof(a_attachmentRoot)),
 			};
 
-			std::uint32_t resolved = 0;
 			for (std::uint32_t index = 0; index < a_skin.bones.size(); ++index) {
 				if (a_skin.bones[index]) {
 					continue;
@@ -1469,23 +1031,10 @@ namespace TF3DHud
 
 				a_skin.bones[index] = node;
 				a_skin.worldTransforms[index] = std::addressof(node->world);
-				++resolved;
-			}
-
-			const auto afterNullBones = CountNullSkinBones(a_skin);
-			a_resolvedNullBones += resolved;
-			a_unresolvedNullBones += afterNullBones;
-			if (resolved > 0 || afterNullBones > 0) {
-				REX::INFO(
-					"TF3DHud V1 resolved null skin bones from flattened tree: geometry='{}', nullBefore={}, resolved={}, nullAfter={}",
-					a_geometryName,
-					beforeNullBones,
-					resolved,
-					afterNullBones);
 			}
 		}
 
-		[[nodiscard]] std::uint32_t MergeAttachmentSkinBones(
+		void MergeAttachmentSkinBones(
 			RE::NiAVObject& a_attachmentRoot,
 			RE::NiNode& a_previewRootNode,
 			RE::NiAVObject& a_previewRoot,
@@ -1563,7 +1112,7 @@ namespace TF3DHud
 					continue;
 				}
 
-				auto previewClone = ClonePreviewObject(*candidate, std::addressof(a_previewRoot), std::addressof(a_previewNodes), nullptr);
+				auto previewClone = ClonePreviewObject(*candidate, std::addressof(a_previewRoot), std::addressof(a_previewNodes));
 				if (!previewClone) {
 					continue;
 				}
@@ -1587,7 +1136,7 @@ namespace TF3DHud
 					continue;
 				}
 
-				auto previewClone = ClonePreviewObject(*external.sourceBone, std::addressof(a_previewRoot), std::addressof(a_previewNodes), nullptr);
+				auto previewClone = ClonePreviewObject(*external.sourceBone, std::addressof(a_previewRoot), std::addressof(a_previewNodes));
 				if (!previewClone) {
 					continue;
 				}
@@ -1608,18 +1157,10 @@ namespace TF3DHud
 			}
 
 			if (mergedBones > 0 || externalClonedBones > 0) {
-				RefreshPreviewBoneLookup(a_previewRoot, "attachment bone merge");
+				RefreshPreviewBoneLookup(a_previewRoot);
 				a_previewNodes.clear();
 				CollectNamedNodes(std::addressof(a_previewRoot), a_previewNodes);
 			}
-			if (externalClonedBones > 0) {
-				REX::INFO(
-					"TF3DHud V1 cloned external attachment skin bone roots: cloned={}, attachment='{}'",
-					externalClonedBones,
-					a_attachmentRoot.GetName());
-			}
-
-			return mergedBones + externalClonedBones;
 		}
 
 		void RetirePreviewAttachments(const bool a_detach)
@@ -1635,19 +1176,18 @@ namespace TF3DHud
 			g_previewAttachments.clear();
 		}
 
-		void ResetPreview3DState(const char* a_reason, const bool a_disableRenderer)
+		void ResetPreview3DState(const bool a_disableRenderer)
 		{
 			Renderer::ClearPreviewRoot(a_disableRenderer);
 			RetirePreviewAttachments(true);
 			g_previewRoot.reset();
 			g_previewFlattenedBoneTree = nullptr;
 			g_previewFaceNode.reset();
-			REX::INFO("TF3DHud V1 cleared preview 3D state for {}", a_reason);
 		}
 
-		void ReleasePreview3DState(const char* a_reason)
+		void ReleasePreview3DState()
 		{
-			ResetPreview3DState(a_reason, true);
+			ResetPreview3DState(true);
 			g_retiredPreviewObjects.clear();
 		}
 
@@ -1655,63 +1195,39 @@ namespace TF3DHud
 		{
 			g_bipedSignature = 0;
 			g_visualSignature = 0;
-			g_failedPreviewSignature = 0;
 			g_lastDiagnostic.clear();
 		}
 
-		[[nodiscard]] bool RebindSkinInstance(
+		void RebindSkinInstance(
 			RE::BSSkin::Instance& a_skin,
 			RE::NiAVObject& a_previewRoot,
-			const std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes,
-			std::uint32_t& a_reboundBones,
-			std::uint32_t& a_missingBones,
-			std::string* a_firstFailedGeometry = nullptr,
-			std::string* a_firstMissingBone = nullptr,
-			const std::string_view a_geometryName = {})
+			const std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
 		{
 			if (a_skin.bones.empty()) {
-				return true;
+				return;
 			}
 
 			if (a_skin.bones.size() > RE::BSSkin::kMaxExpectedBones) {
-				if (a_firstFailedGeometry && a_firstFailedGeometry->empty()) {
-					*a_firstFailedGeometry = std::string(a_geometryName);
-				}
-				return false;
+				return;
 			}
 
 			if (!a_skin.worldTransforms.empty() && a_skin.worldTransforms.size() != a_skin.bones.size()) {
-				if (a_firstFailedGeometry && a_firstFailedGeometry->empty()) {
-					*a_firstFailedGeometry = std::string(a_geometryName);
-				}
-				return false;
+				return;
 			}
 
-			bool fullyBound = true;
 			for (std::uint32_t i = 0; i < a_skin.bones.size(); ++i) {
 				auto* originalBone = a_skin.bones[i];
 				if (!originalBone) {
-					++a_missingBones;
-					fullyBound = false;
 					continue;
 				}
 
 				auto* previewBone = FindNodeByName(a_previewNodes, originalBone->GetName());
 				if (!previewBone) {
-					++a_missingBones;
-					if (a_firstFailedGeometry && a_firstFailedGeometry->empty()) {
-						*a_firstFailedGeometry = std::string(a_geometryName);
-					}
-					if (a_firstMissingBone && a_firstMissingBone->empty()) {
-						*a_firstMissingBone = std::string(originalBone->GetName());
-					}
-					fullyBound = false;
 					continue;
 				}
 
 				if (a_skin.bones[i] != previewBone) {
 					a_skin.bones[i] = previewBone;
-					++a_reboundBones;
 				}
 				if (!a_skin.worldTransforms.empty()) {
 					a_skin.worldTransforms[i] = std::addressof(previewBone->world);
@@ -1720,54 +1236,6 @@ namespace TF3DHud
 
 			a_skin.rootNode = std::addressof(a_previewRoot);
 			a_skin.paletteStamp = 0;
-			return fullyBound;
-		}
-
-		[[nodiscard]] bool RebindAllSkinInstances(RE::NiAVObject& a_previewRoot)
-		{
-			std::unordered_map<std::string, RE::NiAVObject*> previewNodes;
-			CollectNamedNodes(std::addressof(a_previewRoot), previewNodes);
-			if (previewNodes.empty()) {
-				LogDiagnostic("preview root clone has no named nodes");
-				return false;
-			}
-
-			std::uint32_t skinnedGeometries = 0;
-			std::uint32_t reboundBones = 0;
-			std::uint32_t missingBones = 0;
-			std::uint32_t failedSkins = 0;
-			std::string firstFailedGeometry;
-			std::string firstMissingBone;
-			ForEachGeometry(std::addressof(a_previewRoot), [&](RE::BSGeometry& a_geometry) {
-				auto* skin = a_geometry.skinInstance.get();
-				if (!skin) {
-					return;
-				}
-				++skinnedGeometries;
-				if (!RebindSkinInstance(
-						*skin,
-						a_previewRoot,
-						previewNodes,
-						reboundBones,
-						missingBones,
-						std::addressof(firstFailedGeometry),
-						std::addressof(firstMissingBone),
-						a_geometry.GetName())) {
-					++failedSkins;
-				}
-			});
-
-			RefreshPreviewBoneLookup(a_previewRoot, "skin rebind");
-
-			REX::INFO(
-				"TF3DHud V1 rebound cloned root skinning: skinned={}, reboundBones={}, missingBones={}, failedSkins={}, firstFailedGeometry='{}', firstMissingBone='{}'",
-				skinnedGeometries,
-				reboundBones,
-				missingBones,
-				failedSkins,
-				firstFailedGeometry,
-				firstMissingBone);
-			return failedSkins == 0;
 		}
 
 		[[nodiscard]] bool SyncEquipmentsFromBiped(RE::NiAVObject& a_previewRoot, const RE::BipedAnim& a_sourceBiped)
@@ -1788,22 +1256,7 @@ namespace TF3DHud
 			}
 
 			std::unordered_set<RE::NiAVObject*> seenSourceObjects;
-			std::uint32_t clonedObjects = 0;
 			std::uint32_t attachedObjects = 0;
-			std::uint32_t skinnedGeometries = 0;
-			std::uint32_t reboundBones = 0;
-			std::uint32_t missingBones = 0;
-			std::uint32_t seededSkinMappings = 0;
-			std::uint32_t sharedSkinInstances = 0;
-			std::uint32_t strippedControllers = 0;
-			std::uint32_t failedClones = 0;
-			std::uint32_t failedSkins = 0;
-			std::uint32_t mergedAttachmentBones = 0;
-			std::uint32_t skinComplexionPrepared = 0;
-			std::uint32_t resolvedNullSkinBones = 0;
-			std::uint32_t unresolvedNullSkinBones = 0;
-			std::string firstFailedGeometry;
-			std::string firstMissingBone;
 
 			auto mirrorObject = [&](const RE::BIPED_OBJECT a_slot, RE::NiAVObject* a_sourceClone) {
 				auto* sourceClone = a_sourceClone;
@@ -1814,20 +1267,15 @@ namespace TF3DHud
 				std::unordered_set<RE::BSSkin::Instance*> sourceSkins;
 				CollectSkinInstances(sourceClone, sourceSkins);
 
-				std::uint32_t cloneSeededSkinMappings = 0;
-				auto previewClone = ClonePreviewObject(*sourceClone, std::addressof(a_previewRoot), std::addressof(previewNodes), std::addressof(cloneSeededSkinMappings));
-				seededSkinMappings += cloneSeededSkinMappings;
+				auto previewClone = ClonePreviewObject(*sourceClone, std::addressof(a_previewRoot), std::addressof(previewNodes));
 				if (!previewClone) {
-					++failedClones;
 					return;
 				}
-				++clonedObjects;
-				strippedControllers += StripControllerChains(*previewClone);
+				StripControllerChains(*previewClone);
 
 				auto* parent = FindPreviewAttachParent(*sourceClone, a_previewRoot, previewNodes);
 				if (!parent) {
 					g_retiredPreviewObjects.emplace_back(std::move(previewClone));
-					++failedClones;
 					return;
 				}
 
@@ -1837,13 +1285,10 @@ namespace TF3DHud
 					if (auto* skin = a_geometry.skinInstance.get()) {
 						ResolveNullSkinBonesFromFlattenedTree(
 							*skin,
-							*previewClone,
-							a_geometry.GetName(),
-							resolvedNullSkinBones,
-							unresolvedNullSkinBones);
+							*previewClone);
 					}
 				});
-				mergedAttachmentBones += MergeAttachmentSkinBones(
+				MergeAttachmentSkinBones(
 					*previewClone,
 					*previewRootNode,
 					a_previewRoot,
@@ -1854,32 +1299,15 @@ namespace TF3DHud
 					if (!skin) {
 						return;
 					}
-					++skinnedGeometries;
 					if (sourceSkins.contains(skin)) {
-						++sharedSkinInstances;
-						++failedSkins;
-						if (firstFailedGeometry.empty()) {
-							firstFailedGeometry = std::string(a_geometry.GetName());
-						}
 						return;
 					}
-					if (!RebindSkinInstance(
-							*skin,
-							a_previewRoot,
-							previewNodes,
-							reboundBones,
-							missingBones,
-							std::addressof(firstFailedGeometry),
-							std::addressof(firstMissingBone),
-							a_geometry.GetName())) {
-						++failedSkins;
-					}
+					RebindSkinInstance(*skin, a_previewRoot, previewNodes);
 				});
-				skinComplexionPrepared += PrepareAttachmentSkinComplexion(
+				PrepareAttachmentSkinComplexion(
 					*previewClone,
 					a_slot,
-					a_sourceBiped,
-					sourceClone->GetName());
+					a_sourceBiped);
 
 				parent->AttachChild(previewClone.get(), false);
 				g_previewAttachments.push_back({
@@ -1906,55 +1334,25 @@ namespace TF3DHud
 				mirrorObject(slot, sourceObject.partClone.get());
 			}
 
-			// FaceGen/head-part preview is temporarily disabled while isolating
-			// LooksMenu/F4EE native FaceGen crashes.
-
-			RefreshPreviewBoneLookup(a_previewRoot, "equipment sync");
+			RefreshPreviewBoneLookup(a_previewRoot);
 
 			RE::NiUpdateData updateData;
 			a_previewRoot.Update(updateData);
 
-			REX::INFO(
-				"TF3DHud V1 mirrored resolved biped/face geometry: cloned={}, attached={}, skinned={}, seededSkinMappings={}, sharedSkinInstances={}, strippedControllers={}, mergedAttachmentBones={}, skinComplexionPrepared={}, nullSkinBones=resolved={}/unresolved={}, reboundBones={}, missingBones={}, failedClones={}, failedSkins={}, firstFailedGeometry='{}', firstMissingBone='{}'",
-				clonedObjects,
-				attachedObjects,
-				skinnedGeometries,
-				seededSkinMappings,
-				sharedSkinInstances,
-				strippedControllers,
-				mergedAttachmentBones,
-				skinComplexionPrepared,
-				resolvedNullSkinBones,
-				unresolvedNullSkinBones,
-				reboundBones,
-				missingBones,
-				failedClones,
-				failedSkins,
-				firstFailedGeometry,
-				firstMissingBone);
 			return attachedObjects > 0;
 		}
 
-		struct FaceBoneAttachmentStats
-		{
-			std::uint32_t models{ 0 };
-			std::uint32_t attached{ 0 };
-			std::uint32_t failed{ 0 };
-			std::uint32_t strippedControllers{ 0 };
-		};
-
-		FaceBoneAttachmentStats AttachPreviewFaceBonesFromBiped(
+		void AttachPreviewFaceBonesFromBiped(
 			const RE::BipedAnim& a_sourceBiped,
 			RE::NiAVObject& a_previewRoot,
 			const RE::SEX a_sex)
 		{
-			FaceBoneAttachmentStats stats;
-
 			auto* previewRootNode = a_previewRoot.IsNode();
 			if (!previewRootNode) {
-				return stats;
+				return;
 			}
 
+			bool attached = false;
 			std::unordered_set<std::string> loadedPaths;
 			for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kTotal); ++i) {
 				const auto& sourceObject = a_sourceBiped.object[i];
@@ -1971,17 +1369,14 @@ namespace TF3DHud
 					continue;
 				}
 
-				++stats.models;
 				auto faceBones = LoadPreviewModel(modelPath);
 				if (!faceBones) {
-					++stats.failed;
 					continue;
 				}
 
-				stats.strippedControllers += StripControllerChains(*faceBones);
+				StripControllerChains(*faceBones);
 				RE::bhkWorld::RemoveObjects(faceBones.get(), true, true);
 				PreparePreviewTree(*faceBones);
-				LogPreviewGeometrySummary(*faceBones, modelPath);
 				StripClonedGeometry(*faceBones);
 
 				previewRootNode->AttachChild(faceBones.get(), false);
@@ -1990,20 +1385,12 @@ namespace TF3DHud
 					.object = faceBones,
 					.parent = previewRootNode,
 				});
-				++stats.attached;
+				attached = true;
 			}
 
-			if (stats.attached > 0) {
-				RefreshPreviewBoneLookup(a_previewRoot, "facebones model attach");
+			if (attached) {
+				RefreshPreviewBoneLookup(a_previewRoot);
 			}
-
-			REX::INFO(
-				"TF3DHud V1 attached preview-owned facebones from biped data: models={}, attached={}, failed={}, strippedControllers={}",
-				stats.models,
-				stats.attached,
-				stats.failed,
-				stats.strippedControllers);
-			return stats;
 		}
 
 		bool EnsurePreviewHead(RE::PlayerCharacter& a_player, RE::NiAVObject& a_previewRoot, const RE::BipedAnim& a_sourceBiped)
@@ -2046,58 +1433,27 @@ namespace TF3DHud
 				return false;
 			}
 
-			auto faceBoneStats = AttachPreviewFaceBonesFromBiped(a_sourceBiped, a_previewRoot, npc->GetSex());
+			AttachPreviewFaceBonesFromBiped(a_sourceBiped, a_previewRoot, npc->GetSex());
 
 			previewNodes.clear();
 			CollectNamedNodes(std::addressof(a_previewRoot), previewNodes);
-			const auto mergedFaceBones = MergeAttachmentSkinBones(
+			MergeAttachmentSkinBones(
 				*faceNode,
 				*previewRootNode,
 				a_previewRoot,
 				previewNodes);
 
-			std::uint32_t reboundBones = 0;
-			std::uint32_t missingBones = 0;
-			std::uint32_t failedSkins = 0;
-			std::string firstFailedGeometry;
-			std::string firstMissingBone;
 			ForEachGeometry(faceNode.get(), [&](RE::BSGeometry& a_geometry) {
 				auto* skin = a_geometry.skinInstance.get();
 				if (!skin) {
 					return;
 				}
-				if (!RebindSkinInstance(
-						*skin,
-						a_previewRoot,
-						previewNodes,
-						reboundBones,
-						missingBones,
-						std::addressof(firstFailedGeometry),
-						std::addressof(firstMissingBone),
-						a_geometry.GetName())) {
-					++failedSkins;
-				}
+				RebindSkinInstance(*skin, a_previewRoot, previewNodes);
 			});
 
 			parent->AttachChild(faceNode.get(), false);
 			g_previewFaceNode = faceNode;
-			RefreshPreviewBoneLookup(a_previewRoot, "facegen head attach");
-
-			REX::INFO(
-				"TF3DHud V1 created preview facegen head from player NPC {:08X}; root face NPC {:08X}, parent='{}', faceBoneModels={}, attachedFaceBones={}, failedFaceBones={}, strippedFaceBoneControllers={}, mergedFaceBones={}, reboundBones={}, missingBones={}, failedSkins={}, firstFailedGeometry='{}', firstMissingBone='{}'",
-				npc->GetFormID(),
-				rootFaceNPC->GetFormID(),
-				parent->GetName(),
-				faceBoneStats.models,
-				faceBoneStats.attached,
-				faceBoneStats.failed,
-				faceBoneStats.strippedControllers,
-				mergedFaceBones,
-				reboundBones,
-				missingBones,
-				failedSkins,
-				firstFailedGeometry,
-				firstMissingBone);
+			RefreshPreviewBoneLookup(a_previewRoot);
 			return true;
 		}
 
@@ -2105,66 +1461,9 @@ namespace TF3DHud
 		{
 			RE::NiColorA bodyTint{ 0.0F, 0.0F, 0.0F, 0.0F };
 			g_calculateBodyTintColor(std::addressof(a_npc), bodyTint, nullptr, true, false);
-			const auto calculatedRed = bodyTint.r;
-			const auto calculatedGreen = bodyTint.g;
-			const auto calculatedBlue = bodyTint.b;
-			const auto calculatedAlpha = bodyTint.a;
 			bodyTint.a = 1.0F;
 			g_updateBodyTintColorsOnScene(std::addressof(a_previewRoot), bodyTint);
-			RestorePreviewShaderAlpha(a_previewRoot, "body tint");
-
-			std::uint32_t geometries = 0;
-			std::uint32_t lightingProperties = 0;
-			std::uint32_t skinTintMaterials = 0;
-			std::uint32_t alphaZeroShaders = 0;
-			std::string firstSkinTintGeometry;
-			std::string firstAlphaZeroGeometry;
-			ForEachGeometry(std::addressof(a_previewRoot), [&](RE::BSGeometry& a_geometry) {
-				++geometries;
-				for (auto& property : a_geometry.properties) {
-					auto* lightingProperty = netimmerse_cast<RE::BSLightingShaderProperty*>(property.get());
-					if (!lightingProperty) {
-						continue;
-					}
-
-					++lightingProperties;
-					if (lightingProperty->alpha <= 0.0F) {
-						++alphaZeroShaders;
-						if (firstAlphaZeroGeometry.empty()) {
-							firstAlphaZeroGeometry = std::string(a_geometry.GetName());
-						}
-					}
-
-					auto* material = lightingProperty->material;
-					if (material && material->GetFeature() == RE::BSShaderMaterial::Feature::kSkinTint) {
-						++skinTintMaterials;
-						if (firstSkinTintGeometry.empty()) {
-							firstSkinTintGeometry = std::string(a_geometry.GetName());
-						}
-					}
-				}
-			});
-
-			REX::INFO(
-				"TF3DHud V1 applied preview body tint calculatedRgb=({}, {}, {}), appliedRgb=({}, {}, {}), calculatedAlpha={}, appliedAlpha=1, npcTintBytes=({}, {}, {}, {}) from NPC {:08X}; geometries={}, lightingProperties={}, skinTintMaterials={} firstSkinTint='{}', alphaZeroShaders={} firstAlphaZero='{}'",
-				calculatedRed,
-				calculatedGreen,
-				calculatedBlue,
-				bodyTint.r,
-				bodyTint.g,
-				bodyTint.b,
-				calculatedAlpha,
-				static_cast<std::uint8_t>(a_npc.bodyTintColorR),
-				static_cast<std::uint8_t>(a_npc.bodyTintColorG),
-				static_cast<std::uint8_t>(a_npc.bodyTintColorB),
-				static_cast<std::uint8_t>(a_npc.bodyTintColorA),
-				a_npc.GetFormID(),
-				geometries,
-				lightingProperties,
-				skinTintMaterials,
-				firstSkinTintGeometry,
-				alphaZeroShaders,
-				firstAlphaZeroGeometry);
+			RestorePreviewShaderAlpha(a_previewRoot);
 		}
 
 		bool RebuildPreview(
@@ -2176,7 +1475,7 @@ namespace TF3DHud
 			// IDA: Inventory3DManager::AddLoadedModel swaps Offscreen_Set3D roots
 			// without disabling the renderer. Keep that shape for in-frame preview
 			// rebuilds; true hides still go through ReleasePreview3DState/Hide.
-			ResetPreview3DState(g_visualSignature != a_visualSignature ? "player visual change" : "preview rebuild", false);
+			ResetPreview3DState(false);
 
 			RE::NiPointer<RE::NiAVObject> previewRoot = LoadPreviewRaceSkeleton(a_player);
 			if (!previewRoot) {
@@ -2189,7 +1488,7 @@ namespace TF3DHud
 			}
 
 			RE::bhkWorld::RemoveObjects(previewRoot.get(), true, true);
-			const auto strippedSkeletonControllers = StripControllerChains(*previewRoot);
+			StripControllerChains(*previewRoot);
 			PreparePreviewTree(*previewRoot);
 			if (!SyncEquipmentsFromBiped(*previewRoot, a_biped)) {
 				g_previewRoot.reset();
@@ -2211,67 +1510,23 @@ namespace TF3DHud
 				}
 			}
 
-			LogPreviewRenderGeometryDetails(*previewRoot, "before-sanitize");
-			SanitizePreviewRenderTree(*previewRoot, "before-framing");
-			ApplyHeadCenteredFraming(*previewRoot, true);
+			SanitizePreviewRenderTree(*previewRoot);
+			ApplyHeadCenteredFraming(*previewRoot);
 			PrepareForInterface3DOffscreen(*previewRoot);
-			if (!ValidatePreviewRenderMaterials(*previewRoot)) {
-				g_previewRoot.reset();
-				g_previewFlattenedBoneTree = nullptr;
-				g_bipedSignature = 0;
-				g_visualSignature = 0;
-				return false;
-			}
 
 			g_previewRoot = previewRoot;
 			g_bipedSignature = a_signature;
 			g_visualSignature = a_visualSignature;
-			g_failedPreviewSignature = 0;
 
 			Renderer::AttachPreviewRoot(*g_previewRoot);
 
-			REX::INFO(
-				"Rebuilt TF3DHud V1 preview from preview-owned race skeleton plus resolved biped visuals; visualSignature={:016X}, strippedSkeletonControllers={}",
-				g_visualSignature,
-				strippedSkeletonControllers);
 			return true;
 		}
 
-		float CalculateEngineDelta()
+		void Tick()
 		{
-			const auto currentEngineTime = *g_engineTime;
-			if (!g_hasLastEngineTime) {
-				g_lastEngineTime = currentEngineTime;
-				g_hasLastEngineTime = true;
-				return 0.0F;
-			}
-
-			const auto delta = currentEngineTime - g_lastEngineTime;
-			g_lastEngineTime = currentEngineTime;
-			return delta;
-		}
-
-		void Tick(float a_hookDeltaTime, float a_engineDeltaTime)
-		{
-			++g_frameTicks;
-			if (a_engineDeltaTime > 0.0F) {
-				g_diagnosticAccumulator += a_engineDeltaTime;
-			}
-			if (g_frameTicks == 1) {
-				REX::INFO(
-					"TF3DHud V1 state: frame hook is ticking; hook delta={}, engine time={}, engine delta={}",
-					a_hookDeltaTime,
-					g_lastEngineTime,
-					a_engineDeltaTime);
-			}
-
 			if (g_looksMenuSuspended) {
-				if (g_diagnosticAccumulator >= 5.0F) {
-					LogDiagnostic("halted: LooksMenu is open", true);
-					g_diagnosticAccumulator = 0.0F;
-				} else {
-					LogDiagnostic("halted: LooksMenu is open");
-				}
+				LogDiagnostic("halted: LooksMenu is open");
 				Renderer::Hide();
 				return;
 			}
@@ -2279,12 +1534,7 @@ namespace TF3DHud
 			auto player = RE::PlayerCharacter::GetSingleton();
 			std::string reason;
 			if (!ShouldShow(player, reason)) {
-				if (g_diagnosticAccumulator >= 5.0F) {
-					LogDiagnostic("hidden: " + reason, true);
-					g_diagnosticAccumulator = 0.0F;
-				} else {
-					LogDiagnostic("hidden: " + reason);
-				}
+				LogDiagnostic("hidden: " + reason);
 				Renderer::Hide();
 				return;
 			}
@@ -2298,7 +1548,6 @@ namespace TF3DHud
 				LogDiagnostic("renderer unavailable after configuration");
 				return;
 			}
-			Renderer::UpdatePostAAForDynamicResolution("tick");
 
 			const auto& biped = player->GetBiped(false);
 			if (!biped) {
@@ -2336,7 +1585,8 @@ namespace TF3DHud
 	{
 		void Update(float a_deltaTime)
 		{
-			Tick(a_deltaTime, CalculateEngineDelta());
+			(void)a_deltaTime;
+			Tick();
 		}
 
 		void Reset()
@@ -2344,11 +1594,10 @@ namespace TF3DHud
 			g_looksMenuSuspended = false;
 			Renderer::Hide();
 			Renderer::Reset();
-			ReleasePreview3DState("plugin reset");
+			ReleasePreview3DState();
 			g_previewRoot.reset();
 			g_previewFaceNode.reset();
 			ClearPreviewRebuildState();
-			REX::INFO("Reset TF3DHud V1 transient preview state");
 		}
 
 		void SuspendForLooksMenu()
@@ -2359,9 +1608,8 @@ namespace TF3DHud
 
 			g_looksMenuSuspended = true;
 			Renderer::Hide();
-			ReleasePreview3DState("LooksMenu open");
+			ReleasePreview3DState();
 			ClearPreviewRebuildState();
-			REX::INFO("TF3DHud V1 suspended preview updates while LooksMenu is open");
 		}
 
 		void ResumeAfterLooksMenu()
@@ -2372,7 +1620,6 @@ namespace TF3DHud
 
 			g_looksMenuSuspended = false;
 			ClearPreviewRebuildState();
-			REX::INFO("TF3DHud V1 resumed preview updates after LooksMenu close; preview will rebuild on next eligible frame");
 		}
 	}
 

@@ -120,12 +120,12 @@ namespace TF3DHud
 	{
 		const auto messaging = F4SE::GetMessagingInterface();
 		if (!messaging) {
-			REX::WARN("TF3DHud V1 could not acquire F4SE messaging interface");
+			REX::WARN("could not acquire F4SE messaging interface");
 			return;
 		}
 
 		if (!messaging->RegisterListener(F4SEMessageHandler)) {
-			REX::WARN("TF3DHud V1 failed to register F4SE message listener");
+			REX::WARN("failed to register F4SE message listener");
 		}
 	}
 
@@ -134,12 +134,12 @@ namespace TF3DHud
 		auto& trampoline = REL::GetTrampoline();
 		g_runActorUpdates = reinterpret_cast<RunActorUpdates_t*>(
 			trampoline.write_call<5>(g_runActorUpdatesCall.address(), &HookedRunActorUpdates));
-		REX::INFO("Installed TF3DHud V1 frame hook at {:X}", g_runActorUpdatesCall.address());
+		REX::INFO("Installed frame hook at {:X}", g_runActorUpdatesCall.address());
 
 		g_renderSceneDeferred = reinterpret_cast<RenderSceneDeferred_t*>(
 			trampoline.write_call<5>(g_interface3DDrawModelRenderSceneDeferredCall.address(), &HookedRenderSceneDeferred));
 		REX::INFO(
-			"Installed TF3DHud V1 Interface3D deferred render hook at {:X}",
+			"Installed Interface3D deferred render hook at {:X}",
 			g_interface3DDrawModelRenderSceneDeferredCall.address());
 	}
 }

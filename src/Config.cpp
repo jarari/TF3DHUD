@@ -127,7 +127,7 @@ namespace TF3DHud
 		g_config.anchor = std::clamp(g_config.anchor, 1, 9);
 
 		REX::INFO(
-			"Loaded TF3DHud config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, lighting={}, clipRect=({}, {}, {}, {}), hideInPowerArmor={}, lightPos=({}, {}, {}), lightColor=({}, {}, {}), lightSpec=({}, {}, {}), lightIntensity={}, nightLightPos=({}, {}, {}), nightLightColor=({}, {}, {}), nightLightSpec=({}, {}, {}), nightLightIntensity={}",
+			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, lighting={}, clipRect=({}, {}, {}, {}), hideInPowerArmor={}, lightPos=({}, {}, {}), lightColor=({}, {}, {}), lightSpec=({}, {}, {}), lightIntensity={}, nightLightPos=({}, {}, {}), nightLightColor=({}, {}, {}), nightLightSpec=({}, {}, {}), nightLightIntensity={}",
 			g_config.enabled,
 			g_config.fov,
 			g_config.placementX,

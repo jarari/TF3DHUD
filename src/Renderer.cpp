@@ -39,7 +39,6 @@ namespace TF3DHud::Renderer
 		using ForceUpgradeTextures_t = void(RE::NiAVObject*, bool, bool);
 
 		REL::Relocation<ForceUpgradeTextures_t*> g_forceUpgradeTextures{ REL::ID{ 1417022, 2229490 } };
-		REL::Relocation<RE::BSGraphics::RenderTargetManager*> g_renderTargetManager{ REL::ID{ 1508457, 2666735 } };
 
 		RE::Interface3D::Renderer* g_renderer{ nullptr };
 		RE::NiPointer<RE::NiAVObject> g_displayRoot;
@@ -202,27 +201,6 @@ namespace TF3DHud::Renderer
 			}
 		}
 
-		void UpdatePostAAForDynamicResolutionImpl(const char* a_stage)
-		{
-			if (!g_renderer) {
-				return;
-			}
-
-			if (g_renderer->postAA) {
-				return;
-			}
-
-			g_renderer->postAA = true;
-			auto& renderTargetManager = *g_renderTargetManager;
-			REX::INFO(
-				"TF3DHud V1 forced Interface3D Pass #2 RenderAll pass selector [{}]: postAA={}, dynamicRatio=({}, {}), dynamicActive={}",
-				a_stage,
-				g_renderer->postAA,
-				renderTargetManager.dynamicWidthRatio,
-				renderTargetManager.dynamicHeightRatio,
-				renderTargetManager.isDynamicResolutionCurrentlyActivated);
-		}
-
 		void ApplyCameraFOV(RE::NiCamera* a_camera, const float a_configFOV)
 		{
 			if (!a_camera) {
@@ -260,14 +238,6 @@ namespace TF3DHud::Renderer
 			ApplyCameraFOV(g_renderer->pipboyAspect.get(), a_configFOV);
 			ApplyCameraFOV(g_renderer->nativeAspect.get(), a_configFOV);
 			ApplyCameraFOV(g_renderer->nativeAspectLongRange.get(), a_configFOV);
-
-			REX::INFO(
-				"TF3DHud V1 applied Interface3D camera FOV: configFOV={}, effectiveVerticalFOV={}, pipboyCamera={:X}, nativeCamera={:X}, nativeLongRangeCamera={:X}",
-				a_configFOV,
-				a_configFOV * 0.3F,
-				reinterpret_cast<std::uintptr_t>(g_renderer->pipboyAspect.get()),
-				reinterpret_cast<std::uintptr_t>(g_renderer->nativeAspect.get()),
-				reinterpret_cast<std::uintptr_t>(g_renderer->nativeAspectLongRange.get()));
 		}
 
 		void ApplyDisplayClipRect()
@@ -278,12 +248,6 @@ namespace TF3DHud::Renderer
 
 			const auto bounds = GetDisplayBounds();
 			if (!bounds.custom) {
-				REX::INFO(
-					"TF3DHud V1 using vanilla display mesh bounds: clip rect disabled because local bounds are empty ({}, {}, {}, {})",
-					GetConfig().clipRect.left,
-					GetConfig().clipRect.top,
-					GetConfig().clipRect.right,
-					GetConfig().clipRect.bottom);
 				return;
 			}
 
@@ -294,7 +258,7 @@ namespace TF3DHud::Renderer
 			auto* vertexBuffer = rendererData ? rendererData->vertexBuffer : nullptr;
 			if (!triShape || !rendererData || !vertexBuffer || !vertexBuffer->data) {
 				REX::WARN(
-					"TF3DHud V1 skipped display clip rect: display geometry unavailable object={:X}, rendererData={:X}, vertexBuffer={:X}",
+					"skipped display clip rect: display geometry unavailable object={:X}, rendererData={:X}, vertexBuffer={:X}",
 					reinterpret_cast<std::uintptr_t>(object),
 					reinterpret_cast<std::uintptr_t>(rendererData),
 					reinterpret_cast<std::uintptr_t>(vertexBuffer));
@@ -308,7 +272,7 @@ namespace TF3DHud::Renderer
 			const auto fullPrecision = ((desc >> 44) & RE::BSGraphics::Vertex::VF_FULLPREC) != 0;
 			if (triShape->numVertices != 4 || stride != 20 || positionOffset != 0 || uvOffset != 8 || fullPrecision) {
 				REX::WARN(
-					"TF3DHud V1 skipped display clip rect: unsupported '{}' layout vertices={}, stride={}, posOffset={}, uvOffset={}, fullPrecision={}, desc={:X}",
+					"skipped display clip rect: unsupported '{}' layout vertices={}, stride={}, posOffset={}, uvOffset={}, fullPrecision={}, desc={:X}",
 					kDisplayMeshGeometry,
 					triShape->numVertices,
 					stride,
@@ -360,16 +324,6 @@ namespace TF3DHud::Renderer
 
 			RE::NiUpdateData updateData;
 			g_displayRoot->Update(updateData);
-
-			REX::INFO(
-				"TF3DHud V1 applied display clip rect: localBounds=({}, {}, {}, {}), radius={}, geometry={:X}, vertexBuffer={:X}",
-				bounds.left,
-				bounds.top,
-				bounds.right,
-				bounds.bottom,
-				radius,
-				reinterpret_cast<std::uintptr_t>(geometry),
-				reinterpret_cast<std::uintptr_t>(vertexBuffer));
 		}
 
 		void ApplyDisplayPlacement()
@@ -431,25 +385,6 @@ namespace TF3DHud::Renderer
 
 			RE::NiUpdateData updateData;
 			g_displayRoot->Update(updateData);
-
-			REX::INFO(
-				"TF3DHud V1 applied display placement: anchor={}, screenPlaneBounds=({}, {}, {}, {}), anchorPoint=({}, {}), placement=({}, {}), displayRootTranslate=({}, {}, {}), worldBound=({}, {}, {})/{}",
-				config.anchor,
-				screenBounds.left,
-				screenBounds.top,
-				screenBounds.right,
-				screenBounds.bottom,
-				anchorX,
-				anchorZ,
-				config.placementX,
-				config.placementY,
-				g_displayRoot->GetLocalTranslate().x,
-				g_displayRoot->GetLocalTranslate().y,
-				g_displayRoot->GetLocalTranslate().z,
-				g_displayRoot->worldBound.center.x,
-				g_displayRoot->worldBound.center.y,
-				g_displayRoot->worldBound.center.z,
-				g_displayRoot->worldBound.fRadius);
 		}
 
 		void ConfigureImpl()
@@ -457,7 +392,6 @@ namespace TF3DHud::Renderer
 			const auto name = RE::BSFixedString(kRendererName);
 			const auto& config = GetConfig();
 			g_renderer = RE::Interface3D::Renderer::GetByName(name);
-			const bool reusedRenderer = g_renderer != nullptr;
 			if (!g_renderer) {
 				g_renderer = RE::Interface3D::Renderer::Create(
 					name,
@@ -467,20 +401,14 @@ namespace TF3DHud::Renderer
 			}
 
 			if (!g_renderer) {
-				REX::WARN("TF3DHud V1 Interface3D renderer creation returned null");
+				REX::WARN("Interface3D renderer creation returned null");
 				return;
 			}
-
-			REX::INFO(
-				"TF3DHud V1 renderer acquired via Interface3D::Renderer::{}('{}'): renderer={:X}",
-				reusedRenderer ? "GetByName" : "Create",
-				kRendererName,
-				reinterpret_cast<std::uintptr_t>(g_renderer));
 
 			g_renderer->MainScreen_SetBackgroundMode(RE::Interface3D::BackgroundMode::kLive);
 			g_renderer->useFullPremultAlpha = true;
 			ApplyRendererFOV(config.fov);
-			UpdatePostAAForDynamicResolutionImpl("configured");
+			g_renderer->postAA = true;
 			g_renderer->Offscreen_Enable3D(true);
 			g_renderer->Offscreen_SetUseLongRangeCamera(true);
 			g_renderer->Offscreen_SetRenderTargetSize(RE::Interface3D::OffscreenMenuSize::kFullFrame);
@@ -504,20 +432,6 @@ namespace TF3DHud::Renderer
 			}
 
 			g_rendererConfigured = true;
-			REX::INFO(
-				"TF3DHud V1 renderer configured for Interface3D Pass #2 GunMod display plane: postfx={}, offscreenSize={}, screenMode={}, postAA={}, customRT={}, customSwap={}, clearColor=({}, {}, {}, {}), displayRoot={:X}, displayGeom='{}'",
-				std::to_underlying(g_renderer->postfx.get()),
-				std::to_underlying(g_renderer->omsize.get()),
-				std::to_underlying(g_renderer->screenmode.get()),
-				g_renderer->postAA,
-				g_renderer->customRenderTarget,
-				g_renderer->customSwapTarget,
-				g_renderer->clearColor.r,
-				g_renderer->clearColor.g,
-				g_renderer->clearColor.b,
-				g_renderer->clearColor.a,
-				reinterpret_cast<std::uintptr_t>(g_displayRoot.get()),
-				kDisplayMeshGeometry);
 		}
 
 		[[nodiscard]] float Lerp(const float a_from, const float a_to, const float a_t)
@@ -650,29 +564,9 @@ namespace TF3DHud::Renderer
 			}
 
 			AddFakePointLight(appliedPosition, appliedDiffuse, appliedSpecular, appliedIntensity);
-
-			REX::INFO(
-				"TF3DHud V1 configured presentation lighting: requestedMode={}, effectiveMode={}, interiorForcedFakePoint={}, timeOfDay={}, position=({}, {}, {}), diffuse=({}, {}, {}), specular=({}, {}, {}), intensity={}, mainLights={}, offscreenLights={}, needsLightSetupOffscreen={}",
-				std::to_underlying(config.lighting),
-				std::to_underlying(effectiveLighting),
-				interiorForcedFakePoint,
-				sky ? sky->currentGameHour : -1.0F,
-				appliedPosition.x,
-				appliedPosition.y,
-				appliedPosition.z,
-				appliedDiffuse.r,
-				appliedDiffuse.g,
-				appliedDiffuse.b,
-				appliedSpecular.r,
-				appliedSpecular.g,
-				appliedSpecular.b,
-				appliedIntensity,
-				g_renderer->mainLights.size(),
-				g_renderer->offscreenLights.size(),
-				g_renderer->needsLightSetupOffscreen);
 		}
 
-		void ApplyOffscreenFramingImpl(RE::NiAVObject& a_object, bool a_log)
+		void ApplyOffscreenFramingImpl(RE::NiAVObject& a_object)
 		{
 			const auto& config = GetConfig();
 			RE::NiTransform transform = RE::NiTransform::IDENTITY;
@@ -692,24 +586,6 @@ namespace TF3DHud::Renderer
 			};
 			a_object.SetLocalTransform(centeredTransform);
 			a_object.Update(updateData);
-
-			if (a_log) {
-				REX::INFO(
-					"TF3DHud V1 offscreen framed preview root: sourceCenter=({}, {}, {}), placement handled by display root, cameraDistance={}, localTranslate=({}, {}, {}), scale={}, yawDegrees={}, boundCenter=({}, {}, {}), boundRadius={}",
-					center.x,
-					center.y,
-					center.z,
-					config.cameraDistance,
-					a_object.GetLocalTranslate().x,
-					a_object.GetLocalTranslate().y,
-					a_object.GetLocalTranslate().z,
-					centeredTransform.scale,
-					config.yawDegrees,
-					a_object.worldBound.center.x,
-					a_object.worldBound.center.y,
-					a_object.worldBound.center.z,
-					a_object.worldBound.fRadius);
-			}
 		}
 
 		RE::NiPointer<RE::NiAVObject> LoadDisplayRoot()
@@ -718,7 +594,7 @@ namespace TF3DHud::Renderer
 			const auto result = DemandDisplayRoot(kDisplayMeshPath, loadedRoot);
 			if (!loadedRoot) {
 				REX::WARN(
-					"TF3DHud V1 failed to load Interface3D Pass #2 display mesh '{}'; BSModelDB result={}",
+					"failed to load Interface3D Pass #2 display mesh '{}'; BSModelDB result={}",
 					kDisplayMeshPath,
 					static_cast<std::uint32_t>(result));
 				return nullptr;
@@ -734,13 +610,6 @@ namespace TF3DHud::Renderer
 			displayRoot->SetLocalTranslate({ 0.0F, kDisplayRootY, 0.0F });
 			RE::NiUpdateData updateData;
 			displayRoot->Update(updateData);
-			REX::INFO(
-				"TF3DHud V1 loaded Interface3D Pass #2 GunMod display mesh '{}'; root='{}', flags={:016X}, boundRadius={}, displayGeom='{}'",
-				kDisplayMeshPath,
-				displayRoot->GetName(),
-				displayRoot->GetFlags(),
-				displayRoot->worldBound.fRadius,
-				kDisplayMeshGeometry);
 			return displayRoot;
 		}
 
@@ -793,14 +662,9 @@ namespace TF3DHud::Renderer
 		ConfigureLightingImpl();
 	}
 
-	void ApplyOffscreenFraming(RE::NiAVObject& a_object, bool a_log)
+	void ApplyOffscreenFraming(RE::NiAVObject& a_object)
 	{
-		ApplyOffscreenFramingImpl(a_object, a_log);
-	}
-
-	void UpdatePostAAForDynamicResolution(const char* a_stage)
-	{
-		UpdatePostAAForDynamicResolutionImpl(a_stage);
+		ApplyOffscreenFramingImpl(a_object);
 	}
 
 	void Reset()
@@ -842,24 +706,5 @@ namespace TF3DHud::Renderer
 		g_forceUpgradeTextures(std::addressof(a_previewRoot), false, false);
 		g_renderer->Offscreen_Set3D(std::addressof(a_previewRoot));
 		ConfigureLightingImpl();
-		REX::INFO(
-			"TF3DHud V1 attached Interface3D preview root: renderer={:X}, previewRoot={:X}, offscreenElement={:X}, displayRoot={:X}, screenAttachedRoot={:X}, enabled={}, offscreen3DEnabled={}, screenMode={}, postfx={}, customRT={}, customSwap={}, root='{}', rootFlags={:016X}, rootBound=({}, {}, {})/{}",
-			reinterpret_cast<std::uintptr_t>(g_renderer),
-			reinterpret_cast<std::uintptr_t>(std::addressof(a_previewRoot)),
-			reinterpret_cast<std::uintptr_t>(g_renderer->offscreenElement.get()),
-			reinterpret_cast<std::uintptr_t>(g_displayRoot.get()),
-			reinterpret_cast<std::uintptr_t>(g_renderer->screenAttachedElementRoot.get()),
-			g_renderer->enabled,
-			g_renderer->offscreen3DEnabled,
-			std::to_underlying(g_renderer->screenmode.get()),
-			std::to_underlying(g_renderer->postfx.get()),
-			g_renderer->customRenderTarget,
-			g_renderer->customSwapTarget,
-			a_previewRoot.GetName(),
-			a_previewRoot.GetFlags(),
-			a_previewRoot.worldBound.center.x,
-			a_previewRoot.worldBound.center.y,
-			a_previewRoot.worldBound.center.z,
-			a_previewRoot.worldBound.fRadius);
 	}
 }

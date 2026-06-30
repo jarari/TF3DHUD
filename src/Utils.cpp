@@ -9,7 +9,7 @@ namespace TF3DHud
 		if (displacement < (std::numeric_limits<std::int32_t>::min)() ||
 			displacement > (std::numeric_limits<std::int32_t>::max)()) {
 			REX::FAIL(
-				"TF3DHud V1 rel32 displacement out of range sourceNext={:X} destination={:X}",
+				"rel32 displacement out of range sourceNext={:X} destination={:X}",
 				a_sourceNext,
 				a_destination);
 		}

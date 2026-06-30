@@ -54,12 +54,12 @@ namespace TF3DHud::Events
 
 		auto* ui = RE::UI::GetSingleton();
 		if (!ui) {
-			REX::WARN("TF3DHud V1 could not acquire UI singleton for MenuOpenCloseEvent listener");
+			REX::WARN("could not acquire UI singleton for MenuOpenCloseEvent listener");
 			return;
 		}
 
 		ui->RegisterSink<RE::MenuOpenCloseEvent>(&g_menuOpenCloseSink);
 		g_registered = true;
-		REX::INFO("Registered TF3DHud V1 MenuOpenCloseEvent listener for LooksMenu");
+		REX::INFO("Registered MenuOpenCloseEvent listener for LooksMenu");
 	}
 }
