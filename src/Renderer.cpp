@@ -34,6 +34,7 @@ namespace TF3DHud::Renderer
 		constexpr float kVanillaDisplayTop = -79.875F;
 		constexpr float kVanillaDisplayRight = 148.125F;
 		constexpr float kVanillaDisplayBottom = 79.875F;
+		constexpr std::int32_t kFullFrameDisplayRenderTarget = 63;
 
 		using ForceUpgradeTextures_t = void(RE::NiAVObject*, bool, bool);
 
@@ -489,6 +490,11 @@ namespace TF3DHud::Renderer
 				nullptr);
 			g_renderer->MainScreen_EnableScreenAttached3DMasking(nullptr, nullptr);
 			g_renderer->Offscreen_SetPostEffect(RE::Interface3D::PostEffect::kModMenu);
+			// IDA: for kModMenu + kFullFrame + kScreenAttached, vanilla display sampling
+			// selects RT63 while DrawPostFX otherwise derives RT64. Pin the native custom
+			// render target so both paths use the same full-frame display target.
+			g_renderer->customRenderTarget = kFullFrameDisplayRenderTarget;
+			g_renderer->customSwapTarget = -1;
 
 			if (EnsureDisplayRoot()) {
 				ApplyDisplayClipRect();
@@ -499,11 +505,13 @@ namespace TF3DHud::Renderer
 
 			g_rendererConfigured = true;
 			REX::INFO(
-				"TF3DHud V1 renderer configured for Interface3D Pass #2 GunMod display plane: postfx={}, offscreenSize={}, screenMode={}, postAA={}, clearColor=({}, {}, {}, {}), displayRoot={:X}, displayGeom='{}'",
+				"TF3DHud V1 renderer configured for Interface3D Pass #2 GunMod display plane: postfx={}, offscreenSize={}, screenMode={}, postAA={}, customRT={}, customSwap={}, clearColor=({}, {}, {}, {}), displayRoot={:X}, displayGeom='{}'",
 				std::to_underlying(g_renderer->postfx.get()),
 				std::to_underlying(g_renderer->omsize.get()),
 				std::to_underlying(g_renderer->screenmode.get()),
 				g_renderer->postAA,
+				g_renderer->customRenderTarget,
+				g_renderer->customSwapTarget,
 				g_renderer->clearColor.r,
 				g_renderer->clearColor.g,
 				g_renderer->clearColor.b,
