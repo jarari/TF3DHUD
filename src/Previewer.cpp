@@ -768,28 +768,6 @@ namespace TF3DHud
 			return nullptr;
 		}
 
-		[[nodiscard]] RE::BSFlattenedBoneTree* FindFlattenedBoneTree(RE::NiAVObject* a_root)
-		{
-			if (!a_root) {
-				return nullptr;
-			}
-			if (auto* flattened = netimmerse_cast<RE::BSFlattenedBoneTree*>(a_root)) {
-				return flattened;
-			}
-
-			auto* node = a_root->IsNode();
-			if (!node) {
-				return nullptr;
-			}
-
-			for (auto& child : node->children) {
-				if (auto* flattened = FindFlattenedBoneTree(child.get())) {
-					return flattened;
-				}
-			}
-			return nullptr;
-		}
-
 		[[nodiscard]] bool ConvertPreviewSkeletonToFlattenedTree(RE::PlayerCharacter& a_player, RE::NiAVObject& a_skeletonRoot)
 		{
 			constexpr std::uint32_t kFlattenedSkeletonBodyPart = 0x12;
