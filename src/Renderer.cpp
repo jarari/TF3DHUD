@@ -5,6 +5,7 @@
 #include "RE/B/BSGraphics.h"
 #include "RE/B/BSGeometry.h"
 #include "RE/B/BSModelDB.h"
+#include "RE/B/BSShaderResourceManager.h"
 #include "RE/B/BSTriShape.h"
 #include "RE/N/NiCloningProcess.h"
 #include "RE/N/NiCamera.h"
@@ -36,15 +37,25 @@ namespace TF3DHud::Renderer
 		constexpr float kVanillaDisplayRight = 148.125F;
 		constexpr float kVanillaDisplayBottom = -79.875F;
 		constexpr std::int32_t kFullFrameDisplayRenderTarget = 63;
-
 		using ForceUpgradeTextures_t = void(RE::NiAVObject*, bool, bool);
 
 		REL::Relocation<ForceUpgradeTextures_t*> g_forceUpgradeTextures{ REL::ID{ 1417022, 2229490 } };
 
+		struct DisplayBounds
+		{
+			float left;
+			float top;
+			float right;
+			float bottom;
+		};
+
 		RE::Interface3D::Renderer* g_renderer{ nullptr };
 		RE::NiPointer<RE::NiAVObject> g_displayRoot;
+		RE::BSGraphics::TriShape* g_privateDisplayRendererData{ nullptr };
+		DisplayBounds g_appliedDisplayBounds{};
 		bool g_visible{ false };
 		bool g_rendererConfigured{ false };
+		bool g_displayClipApplied{ false };
 
 		struct AppliedLightState
 		{
@@ -58,14 +69,6 @@ namespace TF3DHud::Renderer
 		AppliedLightState g_appliedLightState{};
 
 		bool EnsureDisplayRoot();
-
-		struct DisplayBounds
-		{
-			float left;
-			float top;
-			float right;
-			float bottom;
-		};
 
 		[[nodiscard]] DisplayBounds GetDisplayBounds()
 		{
@@ -102,6 +105,15 @@ namespace TF3DHud::Renderer
 				kVanillaDisplayRight,
 				kVanillaDisplayBottom
 			};
+		}
+
+		[[nodiscard]] bool SameDisplayBounds(const DisplayBounds& a_lhs, const DisplayBounds& a_rhs)
+		{
+			constexpr float epsilon = 0.0001F;
+			return std::abs(a_lhs.left - a_rhs.left) <= epsilon &&
+			       std::abs(a_lhs.top - a_rhs.top) <= epsilon &&
+			       std::abs(a_lhs.right - a_rhs.right) <= epsilon &&
+			       std::abs(a_lhs.bottom - a_rhs.bottom) <= epsilon;
 		}
 
 		struct ScreenPlaneBounds
@@ -287,18 +299,23 @@ namespace TF3DHud::Renderer
 			}
 
 			const auto bounds = GetDisplayBounds();
+			if (g_displayClipApplied && SameDisplayBounds(g_appliedDisplayBounds, bounds)) {
+				return;
+			}
 
 			auto* object = g_displayRoot->GetObjectByName(RE::BSFixedString(kDisplayMeshGeometry));
 			auto* triShape = object ? object->IsTriShape() : nullptr;
 			auto* geometry = triShape ? static_cast<RE::BSGeometry*>(triShape) : nullptr;
 			auto* rendererData = geometry ? static_cast<RE::BSGraphics::TriShape*>(geometry->rendererData) : nullptr;
 			auto* vertexBuffer = rendererData ? rendererData->vertexBuffer : nullptr;
-			if (!triShape || !rendererData || !vertexBuffer || !vertexBuffer->data) {
+			auto* indexBuffer = rendererData ? rendererData->indexBuffer : nullptr;
+			if (!triShape || !rendererData || !vertexBuffer || !vertexBuffer->data || !indexBuffer || !indexBuffer->data) {
 				REX::WARN(
-					"skipped display clip rect: display geometry unavailable object={:X}, rendererData={:X}, vertexBuffer={:X}",
+					"skipped display clip rect: display geometry unavailable object={:X}, rendererData={:X}, vertexBuffer={:X}, indexBuffer={:X}",
 					reinterpret_cast<std::uintptr_t>(object),
 					reinterpret_cast<std::uintptr_t>(rendererData),
-					reinterpret_cast<std::uintptr_t>(vertexBuffer));
+					reinterpret_cast<std::uintptr_t>(vertexBuffer),
+					reinterpret_cast<std::uintptr_t>(indexBuffer));
 				return;
 			}
 
@@ -322,16 +339,16 @@ namespace TF3DHud::Renderer
 
 			constexpr float planeY = -0.0000013113022F;
 			const auto vertexBytes = static_cast<std::size_t>(triShape->numVertices) * stride;
-			constexpr std::size_t kUploadPadding = 32;
-			std::array<std::byte, 128> uploadData{};
-			if (vertexBytes + kUploadPadding > uploadData.size()) {
+			std::array<std::byte, 128> vertexDataCopy{};
+			if (vertexBytes > vertexDataCopy.size()) {
 				REX::WARN(
-					"skipped display clip rect: upload buffer too small vertices={}, stride={}, bytes={}",
+					"skipped display clip rect: copied vertex buffer too small vertices={}, stride={}, bytes={}",
 					triShape->numVertices,
 					stride,
 					vertexBytes);
 				return;
 			}
+			std::memcpy(vertexDataCopy.data(), vertexBuffer->data, vertexBytes);
 
 			const std::array<std::array<float, 3>, 4> positions{ {
 				{ bounds.left, planeY, bounds.bottom },
@@ -351,7 +368,7 @@ namespace TF3DHud::Renderer
 				{ uvLeft, uvTop }
 			} };
 
-			auto* vertexData = static_cast<std::byte*>(vertexBuffer->data);
+			auto* vertexData = vertexDataCopy.data();
 			for (std::uint16_t i = 0; i < triShape->numVertices; ++i) {
 				auto* position = vertexData + (static_cast<std::size_t>(i) * stride) + positionOffset;
 				WriteHalf(position, positions[i][0]);
@@ -363,27 +380,48 @@ namespace TF3DHud::Renderer
 				WriteHalf(uv, uvs[i][0]);
 				WriteHalf(uv + 2, uvs[i][1]);
 			}
-			std::memcpy(uploadData.data(), vertexData, vertexBytes);
 
-			if (auto* rendererDataSingleton = RE::BSGraphics::GetRendererData();
-				rendererDataSingleton && rendererDataSingleton->context && vertexBuffer->buffer) {
-				const REX::W32::D3D11_BOX updateBox{
-					.left = 0,
-					.top = 0,
-					.front = 0,
-					.right = static_cast<std::uint32_t>(vertexBytes),
-					.bottom = 1,
-					.back = 1
-				};
-				rendererDataSingleton->context->UpdateSubresource(
-					vertexBuffer->buffer,
-					0,
-					std::addressof(updateBox),
-					uploadData.data(),
-					static_cast<std::uint32_t>(vertexBytes),
-					static_cast<std::uint32_t>(vertexBytes));
-			} else {
-				vertexBuffer->pendingCopy = true;
+			auto* resourceManager = RE::BSShaderResourceManager::GetSingleton();
+			if (!resourceManager) {
+				REX::WARN("skipped display clip rect: BSShaderResourceManager unavailable");
+				return;
+			}
+
+			auto dataSize = static_cast<std::uint32_t>(vertexBytes);
+			auto* newVertexBuffer = static_cast<RE::BSGraphics::VertexBuffer*>(
+				resourceManager->CreateVertexBuffer(std::addressof(dataSize), vertexDataCopy.data(), stride, 0));
+			if (!newVertexBuffer) {
+				REX::WARN("skipped display clip rect: CreateVertexBuffer failed");
+				return;
+			}
+
+			const auto indexCount = triShape->numTriangles * 3U;
+			if (indexCount == 0 || indexBuffer->dataSize < indexCount * sizeof(std::uint16_t)) {
+				resourceManager->DecRefVertexBuffer(newVertexBuffer);
+				REX::WARN(
+					"skipped display clip rect: unsupported index data triangles={}, indexBytes={}",
+					triShape->numTriangles,
+					indexBuffer->dataSize);
+				return;
+			}
+
+			auto* newRendererData = static_cast<RE::BSGraphics::TriShape*>(
+				resourceManager->CreateTriShapeRendererData(
+					newVertexBuffer,
+					desc,
+					static_cast<std::uint16_t*>(indexBuffer->data),
+					indexCount));
+			resourceManager->DecRefVertexBuffer(newVertexBuffer);
+			if (!newRendererData) {
+				REX::WARN("skipped display clip rect: CreateTriShapeRendererData failed");
+				return;
+			}
+
+			auto* oldPrivateRendererData = g_privateDisplayRendererData;
+			geometry->rendererData = newRendererData;
+			g_privateDisplayRendererData = newRendererData;
+			if (oldPrivateRendererData && oldPrivateRendererData != newRendererData) {
+				resourceManager->DecRefTriShape(oldPrivateRendererData);
 			}
 
 			const auto centerX = (bounds.left + bounds.right) * 0.5F;
@@ -396,6 +434,8 @@ namespace TF3DHud::Renderer
 
 			RE::NiUpdateData updateData;
 			g_displayRoot->Update(updateData);
+			g_appliedDisplayBounds = bounds;
+			g_displayClipApplied = true;
 		}
 
 		void ApplyDisplayPlacement()
@@ -764,11 +804,14 @@ namespace TF3DHud::Renderer
 				return true;
 			}
 
+			g_privateDisplayRendererData = nullptr;
+			g_displayClipApplied = false;
 			g_displayRoot = LoadDisplayRoot();
 			ApplyDisplayClipRect();
 			ApplyDisplayPlacement();
 			return static_cast<bool>(g_displayRoot);
 		}
+
 	}
 
 	RE::Interface3D::Renderer* Get()
@@ -819,6 +862,8 @@ namespace TF3DHud::Renderer
 			g_renderer->MainScreen_SetScreenAttached3D(nullptr);
 		}
 		g_displayRoot.reset();
+		g_privateDisplayRendererData = nullptr;
+		g_displayClipApplied = false;
 		g_rendererConfigured = false;
 		g_visible = false;
 		g_hasAppliedLightState = false;
