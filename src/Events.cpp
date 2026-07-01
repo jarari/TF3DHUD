@@ -15,10 +15,10 @@ namespace TF3DHud::Events
 		constexpr std::string_view kLooksMenuName{ "LooksMenu" };
 		bool g_registered{ false };
 
-		[[nodiscard]] bool IsLooksMenu(const RE::BSFixedString& a_menuName)
+		[[nodiscard]] bool IsMenu(const RE::BSFixedString& a_menuName, const std::string_view a_expected)
 		{
 			const auto* name = a_menuName.c_str();
-			return name && std::string_view{ name } == kLooksMenuName;
+			return name && std::string_view{ name } == a_expected;
 		}
 
 		class MenuOpenCloseSink final :
@@ -29,7 +29,7 @@ namespace TF3DHud::Events
 				const RE::MenuOpenCloseEvent& a_event,
 				RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
 			{
-				if (!IsLooksMenu(a_event.menuName)) {
+				if (!IsMenu(a_event.menuName, kLooksMenuName)) {
 					return RE::BSEventNotifyControl::kContinue;
 				}
 

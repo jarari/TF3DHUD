@@ -86,6 +86,8 @@ namespace TF3DHud
 
 	void LoadConfig()
 	{
+		g_config = Config{};
+
 		CSimpleIniA ini;
 		ini.SetUnicode();
 

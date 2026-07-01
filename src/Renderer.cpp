@@ -32,9 +32,9 @@ namespace TF3DHud::Renderer
 		constexpr auto kPreviewCameraAspect = 16.0F / 9.0F;
 		constexpr float kDisplayRootY = 375.0F;
 		constexpr float kVanillaDisplayLeft = -148.125F;
-		constexpr float kVanillaDisplayTop = -79.875F;
+		constexpr float kVanillaDisplayTop = 79.875F;
 		constexpr float kVanillaDisplayRight = 148.125F;
-		constexpr float kVanillaDisplayBottom = 79.875F;
+		constexpr float kVanillaDisplayBottom = -79.875F;
 		constexpr std::int32_t kFullFrameDisplayRenderTarget = 63;
 
 		using ForceUpgradeTextures_t = void(RE::NiAVObject*, bool, bool);
@@ -46,6 +46,17 @@ namespace TF3DHud::Renderer
 		bool g_visible{ false };
 		bool g_rendererConfigured{ false };
 
+		struct AppliedLightState
+		{
+			RE::NiPoint3 position;
+			RE::NiColor diffuse;
+			RE::NiColor specular;
+			float intensity;
+		};
+
+		bool g_hasAppliedLightState{ false };
+		AppliedLightState g_appliedLightState{};
+
 		bool EnsureDisplayRoot();
 
 		struct DisplayBounds
@@ -54,28 +65,42 @@ namespace TF3DHud::Renderer
 			float top;
 			float right;
 			float bottom;
-			bool custom;
 		};
 
 		[[nodiscard]] DisplayBounds GetDisplayBounds()
 		{
 			const auto& clipRect = GetConfig().clipRect;
-			if (clipRect.right > clipRect.left && clipRect.bottom > clipRect.top) {
-				return {
+			const bool hasCustomBounds =
+				clipRect.left > 0.0F ||
+				clipRect.top > 0.0F ||
+				clipRect.right > 0.0F ||
+				clipRect.bottom > 0.0F;
+
+			if (hasCustomBounds) {
+				const DisplayBounds centeredBounds{
+					-std::max(clipRect.left, 0.0F),
+					std::max(clipRect.top, 0.0F),
+					std::max(clipRect.right, 0.0F),
+					-std::max(clipRect.bottom, 0.0F)
+				};
+
+				if (centeredBounds.right > centeredBounds.left && centeredBounds.top > centeredBounds.bottom) {
+					return centeredBounds;
+				}
+
+				REX::WARN(
+					"ignored invalid ClipRect centered extents: left={}, top={}, right={}, bottom={}",
 					clipRect.left,
 					clipRect.top,
 					clipRect.right,
-					clipRect.bottom,
-					true
-				};
+					clipRect.bottom);
 			}
 
 			return {
 				kVanillaDisplayLeft,
 				kVanillaDisplayTop,
 				kVanillaDisplayRight,
-				kVanillaDisplayBottom,
-				false
+				kVanillaDisplayBottom
 			};
 		}
 
@@ -167,6 +192,16 @@ namespace TF3DHud::Renderer
 			std::memcpy(a_target, std::addressof(half), sizeof(half));
 		}
 
+		[[nodiscard]] float NormalizeDisplayX(const float a_x)
+		{
+			return (a_x - kVanillaDisplayLeft) / (kVanillaDisplayRight - kVanillaDisplayLeft);
+		}
+
+		[[nodiscard]] float NormalizeDisplayZ(const float a_z)
+		{
+			return (a_z - kVanillaDisplayTop) / (kVanillaDisplayBottom - kVanillaDisplayTop);
+		}
+
 		RE::NiPointer<RE::NiAVObject> CloneDisplayObject(RE::NiAVObject& a_source)
 		{
 			RE::NiCloningProcess cloneProcess;
@@ -200,6 +235,11 @@ namespace TF3DHud::Renderer
 				g_renderer->Disable();
 				g_visible = false;
 			}
+		}
+
+		[[nodiscard]] std::uintptr_t Ptr(const void* a_ptr)
+		{
+			return reinterpret_cast<std::uintptr_t>(a_ptr);
 		}
 
 		void ApplyCameraFOV(RE::NiCamera* a_camera, const float a_configFOV)
@@ -247,9 +287,6 @@ namespace TF3DHud::Renderer
 			}
 
 			const auto bounds = GetDisplayBounds();
-			if (!bounds.custom) {
-				return;
-			}
 
 			auto* object = g_displayRoot->GetObjectByName(RE::BSFixedString(kDisplayMeshGeometry));
 			auto* triShape = object ? object->IsTriShape() : nullptr;
@@ -284,12 +321,34 @@ namespace TF3DHud::Renderer
 			}
 
 			constexpr float planeY = -0.0000013113022F;
+			const auto vertexBytes = static_cast<std::size_t>(triShape->numVertices) * stride;
+			constexpr std::size_t kUploadPadding = 32;
+			std::array<std::byte, 128> uploadData{};
+			if (vertexBytes + kUploadPadding > uploadData.size()) {
+				REX::WARN(
+					"skipped display clip rect: upload buffer too small vertices={}, stride={}, bytes={}",
+					triShape->numVertices,
+					stride,
+					vertexBytes);
+				return;
+			}
 
 			const std::array<std::array<float, 3>, 4> positions{ {
-				{ bounds.left, planeY, bounds.top },
-				{ bounds.right, planeY, bounds.top },
+				{ bounds.left, planeY, bounds.bottom },
 				{ bounds.right, planeY, bounds.bottom },
-				{ bounds.left, planeY, bounds.bottom }
+				{ bounds.right, planeY, bounds.top },
+				{ bounds.left, planeY, bounds.top }
+			} };
+			const auto uvLeft = std::clamp(NormalizeDisplayX(bounds.left), 0.0F, 1.0F);
+			// Vanilla ModMenuRenderMesh.nif uses z=-79.875 -> V=1 and z=+79.875 -> V=0.
+			const auto uvTop = std::clamp(NormalizeDisplayZ(bounds.top), 0.0F, 1.0F);
+			const auto uvRight = std::clamp(NormalizeDisplayX(bounds.right), 0.0F, 1.0F);
+			const auto uvBottom = std::clamp(NormalizeDisplayZ(bounds.bottom), 0.0F, 1.0F);
+			const std::array<std::array<float, 2>, 4> uvs{ {
+				{ uvLeft, uvBottom },
+				{ uvRight, uvBottom },
+				{ uvRight, uvTop },
+				{ uvLeft, uvTop }
 			} };
 
 			auto* vertexData = static_cast<std::byte*>(vertexBuffer->data);
@@ -299,17 +358,30 @@ namespace TF3DHud::Renderer
 				WriteHalf(position + 2, positions[i][1]);
 				WriteHalf(position + 4, positions[i][2]);
 				WriteHalf(position + 6, 1.0F);
+
+				auto* uv = vertexData + (static_cast<std::size_t>(i) * stride) + uvOffset;
+				WriteHalf(uv, uvs[i][0]);
+				WriteHalf(uv + 2, uvs[i][1]);
 			}
+			std::memcpy(uploadData.data(), vertexData, vertexBytes);
 
 			if (auto* rendererDataSingleton = RE::BSGraphics::GetRendererData();
 				rendererDataSingleton && rendererDataSingleton->context && vertexBuffer->buffer) {
+				const REX::W32::D3D11_BOX updateBox{
+					.left = 0,
+					.top = 0,
+					.front = 0,
+					.right = static_cast<std::uint32_t>(vertexBytes),
+					.bottom = 1,
+					.back = 1
+				};
 				rendererDataSingleton->context->UpdateSubresource(
 					vertexBuffer->buffer,
 					0,
-					nullptr,
-					vertexBuffer->data,
-					0,
-					0);
+					std::addressof(updateBox),
+					uploadData.data(),
+					static_cast<std::uint32_t>(vertexBytes),
+					static_cast<std::uint32_t>(vertexBytes));
 			} else {
 				vertexBuffer->pendingCopy = true;
 			}
@@ -317,7 +389,7 @@ namespace TF3DHud::Renderer
 			const auto centerX = (bounds.left + bounds.right) * 0.5F;
 			const auto centerZ = (bounds.top + bounds.bottom) * 0.5F;
 			const auto halfX = (bounds.right - bounds.left) * 0.5F;
-			const auto halfZ = (bounds.bottom - bounds.top) * 0.5F;
+			const auto halfZ = std::abs(bounds.top - bounds.bottom) * 0.5F;
 			const auto radius = std::sqrt((halfX * halfX) + (halfZ * halfZ));
 			geometry->modelBound.center = { centerX, planeY, centerZ };
 			geometry->modelBound.fRadius = radius;
@@ -392,18 +464,25 @@ namespace TF3DHud::Renderer
 			const auto name = RE::BSFixedString(kRendererName);
 			const auto& config = GetConfig();
 			g_renderer = RE::Interface3D::Renderer::GetByName(name);
+			bool createdRenderer = false;
 			if (!g_renderer) {
 				g_renderer = RE::Interface3D::Renderer::Create(
 					name,
 					RE::UI_DEPTH_PRIORITY::kStandard3DModel,
 					config.fov,
 					false);
+				createdRenderer = true;
 			}
 
 			if (!g_renderer) {
 				REX::WARN("Interface3D renderer creation returned null");
 				return;
 			}
+
+			REX::INFO(
+				"Interface3D renderer {}: renderer={:X}",
+				createdRenderer ? "created" : "reused",
+				Ptr(g_renderer));
 
 			g_renderer->MainScreen_SetBackgroundMode(RE::Interface3D::BackgroundMode::kLive);
 			g_renderer->useFullPremultAlpha = true;
@@ -430,6 +509,15 @@ namespace TF3DHud::Renderer
 				g_renderer->MainScreen_SetScreenAttached3D(g_displayRoot.get());
 				g_renderer->MainScreen_RegisterGeometryRequiringFullViewport(g_displayRoot.get());
 			}
+
+			REX::INFO(
+				"Interface3D renderer roots: renderer={:X}, screenSSN={:X}, offscreenSSN={:X}, screenRoot={:X}, offscreenRoot={:X}, displayRoot={:X}",
+				Ptr(g_renderer),
+				Ptr(g_renderer->screenSSN.get()),
+				Ptr(g_renderer->offscreenSSN.get()),
+				Ptr(g_renderer->screenAttachedElementRoot.get()),
+				Ptr(g_renderer->offscreenElement.get()),
+				Ptr(g_displayRoot.get()));
 
 			g_rendererConfigured = true;
 		}
@@ -517,14 +605,49 @@ namespace TF3DHud::Renderer
 			g_renderer->Offscreen_AddLight(a_position, a_diffuse, a_specular, a_intensity);
 		}
 
+		[[nodiscard]] bool NearlyEqual(const float a_lhs, const float a_rhs)
+		{
+			return std::abs(a_lhs - a_rhs) <= 0.0001F;
+		}
+
+		[[nodiscard]] bool SamePoint(const RE::NiPoint3& a_lhs, const RE::NiPoint3& a_rhs)
+		{
+			return NearlyEqual(a_lhs.x, a_rhs.x) &&
+			       NearlyEqual(a_lhs.y, a_rhs.y) &&
+			       NearlyEqual(a_lhs.z, a_rhs.z);
+		}
+
+		[[nodiscard]] bool SameColor(const RE::NiColor& a_lhs, const RE::NiColor& a_rhs)
+		{
+			return NearlyEqual(a_lhs.r, a_rhs.r) &&
+			       NearlyEqual(a_lhs.g, a_rhs.g) &&
+			       NearlyEqual(a_lhs.b, a_rhs.b);
+		}
+
+		[[nodiscard]] bool SameLightState(const AppliedLightState& a_lhs, const AppliedLightState& a_rhs)
+		{
+			return SamePoint(a_lhs.position, a_rhs.position) &&
+			       SameColor(a_lhs.diffuse, a_rhs.diffuse) &&
+			       SameColor(a_lhs.specular, a_rhs.specular) &&
+			       NearlyEqual(a_lhs.intensity, a_rhs.intensity);
+		}
+
+		void ClearOffscreenLightParamsOnly()
+		{
+			// IDA: Interface3D::Renderer::Offscreen_ClearLights also calls
+			// ShadowSceneNode::RemoveAllLights(). For normal preview light refresh,
+			// only reset the renderer-owned light-param array and let DrawModel's
+			// UpdateLights rebuild the isolated offscreen SSN when needed.
+			g_renderer->offscreenLights.clear();
+			g_renderer->needsLightSetupOffscreen = true;
+		}
+
 		void ConfigureLightingImpl()
 		{
 			if (!g_renderer) {
 				return;
 			}
 
-			g_renderer->MainScreen_ClearLights();
-			g_renderer->Offscreen_ClearLights();
 			const auto& config = GetConfig();
 
 			auto effectiveLighting = config.lighting;
@@ -563,7 +686,29 @@ namespace TF3DHud::Renderer
 				break;
 			}
 
-			AddFakePointLight(appliedPosition, appliedDiffuse, appliedSpecular, appliedIntensity);
+			const AppliedLightState state{
+				.position = appliedPosition,
+				.diffuse = appliedDiffuse,
+				.specular = appliedSpecular,
+				.intensity = appliedIntensity
+			};
+			if (g_hasAppliedLightState && SameLightState(g_appliedLightState, state)) {
+				return;
+			}
+
+			ClearOffscreenLightParamsOnly();
+			AddFakePointLight(state.position, state.diffuse, state.specular, state.intensity);
+			g_appliedLightState = state;
+			g_hasAppliedLightState = true;
+			REX::INFO(
+				"Interface3D offscreen light configured: renderer={:X}, offscreenSSN={:X}, lights={}, pos=({}, {}, {}), intensity={}",
+				Ptr(g_renderer),
+				Ptr(g_renderer->offscreenSSN.get()),
+				g_renderer->offscreenLights.size(),
+				state.position.x,
+				state.position.y,
+				state.position.z,
+				state.intensity);
 		}
 
 		void ApplyOffscreenFramingImpl(RE::NiAVObject& a_object)
@@ -676,6 +821,7 @@ namespace TF3DHud::Renderer
 		g_displayRoot.reset();
 		g_rendererConfigured = false;
 		g_visible = false;
+		g_hasAppliedLightState = false;
 	}
 
 	void ClearPreviewRoot(const bool a_disableRenderer)

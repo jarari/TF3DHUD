@@ -5,6 +5,7 @@ namespace TF3DHud::Previewer
 	void Update(float a_deltaTime);
 	void Reset();
 	void MarkEquipmentDirty();
+	void ReloadConfig();
 	void SuspendForLooksMenu();
 	void ResumeAfterLooksMenu();
 }

@@ -134,23 +134,29 @@ namespace TF3DHud
 		return nullptr;
 	}
 
-	void CollectGraphWrittenBoneNames(
-		const RE::IAnimationGraphManagerHolder& a_holder,
-		std::unordered_set<std::string>& a_names)
+	RE::IAnimationGraphManagerHolder& GetAnimationGraphHolder(RE::TESObjectREFR& a_reference)
 	{
+		return static_cast<RE::IAnimationGraphManagerHolder&>(a_reference);
+	}
+
+	[[nodiscard]] const GraphBoneRef* GetActiveGraphBoneRefs(
+		const RE::IAnimationGraphManagerHolder& a_holder,
+		std::uint32_t& a_count)
+	{
+		a_count = 0;
 		RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager;
 		if (!a_holder.GetAnimationGraphManagerImpl(manager) || !manager || manager->graph.empty()) {
-			return;
+			return nullptr;
 		}
 
 		const auto activeGraph = manager->activeGraph;
 		if (activeGraph >= manager->graph.size()) {
-			return;
+			return nullptr;
 		}
 
 		auto* graph = manager->graph[activeGraph].get();
 		if (!graph) {
-			return;
+			return nullptr;
 		}
 
 		// IDA: BShkbAnimationGraph::GenerateImpl passes graph+0x2A0 and graph+0x2B0
@@ -159,9 +165,77 @@ namespace TF3DHud
 		// otherwise target is a BSFlattenedBoneTree and boneIndex selects a flattened bone.
 		const auto graphBase = reinterpret_cast<const std::byte*>(graph);
 		const auto* refs = *reinterpret_cast<GraphBoneRef* const*>(graphBase + 0x2A0);
-		const auto count = *reinterpret_cast<const std::uint32_t*>(graphBase + 0x2B0);
+		a_count = *reinterpret_cast<const std::uint32_t*>(graphBase + 0x2B0);
 		constexpr std::uint32_t kMaxExpectedGraphBones = 1024;
-		if (!refs || count > kMaxExpectedGraphBones) {
+		if (!refs || a_count > kMaxExpectedGraphBones) {
+			a_count = 0;
+			return nullptr;
+		}
+
+		return refs;
+	}
+
+	GraphTargetStats InspectGraphTargets(
+		const RE::IAnimationGraphManagerHolder& a_holder,
+		RE::NiAVObject& a_expectedRoot)
+	{
+		GraphTargetStats stats;
+
+		std::uint32_t count = 0;
+		const auto* refs = GetActiveGraphBoneRefs(a_holder, count);
+		if (!refs || count == 0) {
+			return stats;
+		}
+
+		std::unordered_set<const RE::NiAVObject*> expectedObjects;
+		ForEachAVObject(std::addressof(a_expectedRoot), [&](RE::NiAVObject& a_object) {
+			expectedObjects.insert(std::addressof(a_object));
+		});
+
+		stats.refs = count;
+		for (std::uint32_t i = 0; i < count; ++i) {
+			const auto& ref = refs[i];
+			if (!ref.target) {
+				++stats.outsideExpectedRoot;
+				continue;
+			}
+
+			if (ref.boneIndex < 0) {
+				++stats.directRefs;
+				const auto* object = reinterpret_cast<const RE::NiAVObject*>(ref.target);
+				if (!expectedObjects.contains(object)) {
+					++stats.outsideExpectedRoot;
+				}
+				continue;
+			}
+
+			++stats.flattenedRefs;
+			const auto* tree = reinterpret_cast<const RE::BSFlattenedBoneTree*>(ref.target);
+			if (expectedObjects.contains(tree)) {
+				continue;
+			}
+
+			const auto boneIndex = static_cast<std::int32_t>(ref.boneIndex);
+			if (!tree->bone || boneIndex >= tree->boneCount || !tree->bone[boneIndex].node) {
+				++stats.outsideExpectedRoot;
+				continue;
+			}
+
+			if (!expectedObjects.contains(tree->bone[boneIndex].node.get())) {
+				++stats.outsideExpectedRoot;
+			}
+		}
+
+		return stats;
+	}
+
+	void CollectGraphWrittenBoneNames(
+		const RE::IAnimationGraphManagerHolder& a_holder,
+		std::unordered_set<std::string>& a_names)
+	{
+		std::uint32_t count = 0;
+		const auto* refs = GetActiveGraphBoneRefs(a_holder, count);
+		if (!refs || count == 0) {
 			return;
 		}
 
@@ -179,7 +253,7 @@ namespace TF3DHud
 
 			const auto* tree = reinterpret_cast<const RE::BSFlattenedBoneTree*>(ref.target);
 			const auto boneIndex = static_cast<std::int32_t>(ref.boneIndex);
-			if (boneIndex >= tree->boneCount || !tree->bone) {
+			if (!tree->bone || boneIndex >= tree->boneCount) {
 				continue;
 			}
 

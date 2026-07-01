@@ -3,6 +3,7 @@
 #include "RE/B/BSGeometry.h"
 #include "RE/I/IAnimationGraphManagerHolder.h"
 #include "RE/N/NiNode.h"
+#include "RE/T/TESObjectREFR.h"
 #include "REL/ASM.h"
 
 #include <cstdint>
@@ -16,6 +17,14 @@
 
 namespace TF3DHud
 {
+	struct GraphTargetStats
+	{
+		std::uint32_t refs{ 0 };
+		std::uint32_t directRefs{ 0 };
+		std::uint32_t flattenedRefs{ 0 };
+		std::uint32_t outsideExpectedRoot{ 0 };
+	};
+
 	std::int32_t MakeRel32Displacement(std::uintptr_t a_sourceNext, std::uintptr_t a_destination);
 	void WriteBranch5(std::uintptr_t a_source, std::uintptr_t a_destination);
 
@@ -77,6 +86,10 @@ namespace TF3DHud
 		RE::BSFlattenedBoneTree* a_tree,
 		std::unordered_map<std::string, RE::NiAVObject*>& a_nodes);
 	RE::BSFlattenedBoneTree* FindFlattenedBoneTree(RE::NiAVObject* a_root);
+	RE::IAnimationGraphManagerHolder& GetAnimationGraphHolder(RE::TESObjectREFR& a_reference);
+	GraphTargetStats InspectGraphTargets(
+		const RE::IAnimationGraphManagerHolder& a_holder,
+		RE::NiAVObject& a_expectedRoot);
 	void CollectGraphWrittenBoneNames(
 		const RE::IAnimationGraphManagerHolder& a_holder,
 		std::unordered_set<std::string>& a_names);
