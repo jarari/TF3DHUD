@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <string>
 
 namespace TF3DHud
 {
@@ -54,6 +55,26 @@ namespace TF3DHud
 			a_ini.SetDoubleValue("NightLighting", "SpecularG", g_config.nightLight.specularG);
 			a_ini.SetDoubleValue("NightLighting", "SpecularB", g_config.nightLight.specularB);
 			a_ini.SetDoubleValue("NightLighting", "Intensity", g_config.nightLight.intensity);
+			a_ini.SetValue("UI", "MenuKey", "0xDE");
+		}
+
+		[[nodiscard]] std::uint32_t ReadVirtualKey(CSimpleIniA& a_ini, const char* a_section, const char* a_key, const std::uint32_t a_default)
+		{
+			const auto* value = a_ini.GetValue(a_section, a_key, nullptr);
+			if (!value || value[0] == '\0') {
+				return a_default;
+			}
+
+			try {
+				const auto parsed = std::stoul(value, nullptr, 0);
+				if (parsed <= 0xFF) {
+					return static_cast<std::uint32_t>(parsed);
+				}
+			} catch (...) {
+			}
+
+			REX::WARN("Invalid virtual key {}.{}='{}'; using 0x{:02X}", a_section, a_key, value, a_default);
+			return a_default;
 		}
 
 		void ReadLightSettings(CSimpleIniA& a_ini, const char* a_section, LightSettings& a_settings)
@@ -105,6 +126,11 @@ namespace TF3DHud
 			return;
 		}
 
+		if (!ini.GetValue("UI", "MenuKey", nullptr)) {
+			ini.SetValue("UI", "MenuKey", "0xDE");
+			ini.SaveFile(path.string().c_str());
+		}
+
 		g_config.enabled = ini.GetBoolValue("General", "Enabled", g_config.enabled);
 		g_config.fov = static_cast<float>(ini.GetDoubleValue("View", "FOV", g_config.fov));
 		g_config.placementX = static_cast<float>(ini.GetDoubleValue("View", "PlacementX", g_config.placementX));
@@ -122,6 +148,7 @@ namespace TF3DHud
 		g_config.clipRect.right = static_cast<float>(ini.GetDoubleValue("ClipRect", "Right", g_config.clipRect.right));
 		g_config.clipRect.bottom = static_cast<float>(ini.GetDoubleValue("ClipRect", "Bottom", g_config.clipRect.bottom));
 		g_config.hideInPowerArmor = ini.GetBoolValue("Render", "HideInPowerArmor", g_config.hideInPowerArmor);
+		g_config.uiMenuKey = ReadVirtualKey(ini, "UI", "MenuKey", g_config.uiMenuKey);
 		ReadLightSettings(ini, "Lighting", g_config.light);
 		ReadLightSettings(ini, "NightLighting", g_config.nightLight);
 		g_config.fov = std::clamp(g_config.fov, 10.0F, 120.0F);
@@ -129,7 +156,7 @@ namespace TF3DHud
 		g_config.anchor = std::clamp(g_config.anchor, 1, 9);
 
 		REX::INFO(
-			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, lighting={}, clipRect=({}, {}, {}, {}), hideInPowerArmor={}, lightPos=({}, {}, {}), lightColor=({}, {}, {}), lightSpec=({}, {}, {}), lightIntensity={}, nightLightPos=({}, {}, {}), nightLightColor=({}, {}, {}), nightLightSpec=({}, {}, {}), nightLightIntensity={}",
+			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, lighting={}, clipRect=({}, {}, {}, {}), hideInPowerArmor={}, uiMenuKey=0x{:02X}, lightPos=({}, {}, {}), lightColor=({}, {}, {}), lightSpec=({}, {}, {}), lightIntensity={}, nightLightPos=({}, {}, {}), nightLightColor=({}, {}, {}), nightLightSpec=({}, {}, {}), nightLightIntensity={}",
 			g_config.enabled,
 			g_config.fov,
 			g_config.placementX,
@@ -144,6 +171,7 @@ namespace TF3DHud
 			g_config.clipRect.right,
 			g_config.clipRect.bottom,
 			g_config.hideInPowerArmor,
+			g_config.uiMenuKey,
 			g_config.light.positionX,
 			g_config.light.positionY,
 			g_config.light.positionZ,

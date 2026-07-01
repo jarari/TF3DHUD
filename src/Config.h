@@ -46,6 +46,7 @@ namespace TF3DHud
 		LightingType lighting{ LightingType::kWorldDirectional };
 		ClipRectSettings clipRect;
 		bool hideInPowerArmor{ true };
+		std::uint32_t uiMenuKey{ 0xDE };
 		LightSettings light;
 		LightSettings nightLight{
 			.positionX = 500.0F,

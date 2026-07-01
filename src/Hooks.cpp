@@ -1,7 +1,9 @@
 #include "Hooks.h"
 
+#include "Animations.h"
 #include "Config.h"
 #include "Events.h"
+#include "ImguiMenu.h"
 #include "Morph.h"
 #include "Previewer.h"
 #include "Renderer.h"
@@ -9,6 +11,9 @@
 
 #include "RE/A/AIProcess.h"
 #include "RE/A/Actor.h"
+#include "RE/B/BSAnimationGraphManager.h"
+#include "RE/B/BSFixedString.h"
+#include "RE/B/BSTimer.h"
 #include "RE/B/BSTEvent.h"
 #include "RE/I/Interface3D.h"
 #include "RE/P/PlayerCharacter.h"
@@ -36,6 +41,7 @@ namespace TF3DHud
 	namespace
 	{
 		using RunActorUpdates_t = void(RE::ProcessLists*, float, bool);
+		using ProcessGraphEvent_t = std::uint32_t(RE::BSAnimationGraphManager*, const RE::BSFixedString&);
 		using Update3DModel_t = void(RE::AIProcess*, RE::Actor*, bool);
 		using GetAll3DUpdateFlags_t = std::uint16_t(RE::AIProcess*);
 		using QUpdateEditorDeadActorModel_t = bool(RE::AIProcess*);
@@ -52,6 +58,7 @@ namespace TF3DHud
 		using QTiledLighting_t = bool();
 
 		REL::Relocation<std::uintptr_t> g_runActorUpdatesCall{ REL::ID(556439), 0x17 };
+		REL::Relocation<std::uintptr_t> g_processGraphEventTarget{ REL::ID(1199489) };
 		// BodyShapeManager hooks AIProcess::Update3dModel at this function entry and
 		// preserves the first 5-byte instruction (`mov [rsp+0x18], rbp`). Use the same
 		// post-original signal point so skeleton-adjustment/morph follow-up work has
@@ -60,6 +67,7 @@ namespace TF3DHud
 		REL::Relocation<GetAll3DUpdateFlags_t*> g_getAll3DUpdateFlags{ REL::ID{ 582098, 2232393 } };
 		REL::Relocation<QUpdateEditorDeadActorModel_t*> g_qUpdateEditorDeadActorModel{ REL::ID{ 16281, 2231571 } };
 		RunActorUpdates_t* g_runActorUpdates{ nullptr };
+		ProcessGraphEvent_t* g_processGraphEvent{ nullptr };
 		Update3DModel_t* g_update3DModel{ nullptr };
 		// IDA: Interface3D::Renderer::DrawModel calls BSShaderUtil::RenderSceneDeferred
 		// at +0x51A. BSDFCompositeShader's pixel shader ID reads DrawWorld::QTiledLighting()
@@ -131,7 +139,15 @@ namespace TF3DHud
 				g_runActorUpdates(a_processLists, a_deltaTime, a_instant);
 			}
 
-			Previewer::Update(a_deltaTime);
+			const auto* const timer = RE::BSTimer::GetSingleton();
+			Previewer::Update(timer ? timer->delta : a_deltaTime);
+		}
+
+		std::uint32_t HookedProcessGraphEvent(RE::BSAnimationGraphManager* a_manager, const RE::BSFixedString& a_eventName)
+		{
+			const auto result = g_processGraphEvent ? g_processGraphEvent(a_manager, a_eventName) : 0;
+			Animations::ObserveGraphRequest(a_manager, a_eventName.c_str(), result);
+			return result;
 		}
 
 		void HookedUpdate3DModel(RE::AIProcess* a_process, RE::Actor* a_actor, bool a_queued)
@@ -229,10 +245,18 @@ namespace TF3DHud
 
 	void InstallHooks()
 	{
+		Imgui::InstallHooks();
+
 		auto& trampoline = REL::GetTrampoline();
 		g_runActorUpdates = reinterpret_cast<RunActorUpdates_t*>(
 			trampoline.write_call<5>(g_runActorUpdatesCall.address(), &HookedRunActorUpdates));
 		REX::INFO("Installed frame hook at {:X}", g_runActorUpdatesCall.address());
+
+		g_processGraphEvent = CreateBranchGateway5<ProcessGraphEvent_t*>(
+			"BSAnimationGraphManager::ProcessGraphEvent",
+			g_processGraphEventTarget,
+			5,
+			reinterpret_cast<void*>(&HookedProcessGraphEvent));
 
 		g_update3DModel = CreateBranchGateway5<Update3DModel_t*>(
 			"AIProcess::Update3dModel",

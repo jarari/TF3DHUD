@@ -157,6 +157,7 @@ namespace TF3DHud
 		std::uint32_t g_equipmentAuditFrames{ 0 };
 		std::uint64_t g_pendingBipedSignature{ 0 };
 		std::uint32_t g_pendingBipedSignatureFrames{ 0 };
+		std::uint64_t g_deferredBipedRebuildSignature{ 0 };
 		std::uint64_t g_bipedSignature{ 0 };
 		std::uint64_t g_visualSignature{ 0 };
 		bool g_pendingMorphGeometryRebuild{ false };
@@ -2014,6 +2015,62 @@ namespace TF3DHud
 			return false;
 		}
 
+		[[nodiscard]] bool SyncPreviewAttachmentParentsFromBiped(
+			RE::NiAVObject& a_previewRoot,
+			const RE::BipedAnim& a_sourceBiped)
+		{
+			if (g_previewAttachments.empty()) {
+				return false;
+			}
+
+			std::unordered_map<std::string, RE::NiAVObject*> previewNodes;
+			CollectPreviewSkinTargetNodes(a_previewRoot, previewNodes);
+			if (previewNodes.empty()) {
+				return false;
+			}
+
+			bool changed = false;
+			for (auto& attachment : g_previewAttachments) {
+				if (!attachment.object) {
+					continue;
+				}
+
+				const auto slotIndex = std::to_underlying(attachment.slot);
+				if (slotIndex < 0 || slotIndex >= std::to_underlying(RE::BIPED_OBJECT::kTotal)) {
+					continue;
+				}
+
+				auto* sourceClone = a_sourceBiped.object[slotIndex].partClone.get();
+				if (!sourceClone) {
+					continue;
+				}
+
+				auto* parent = FindPreviewAttachParent(*sourceClone, a_previewRoot, previewNodes);
+				if (!parent || parent == attachment.parent) {
+					continue;
+				}
+
+				if (attachment.parent) {
+					attachment.parent->DetachChild(attachment.object.get());
+				}
+				parent->AttachChild(attachment.object.get(), false);
+				attachment.parent = parent;
+				changed = true;
+
+				REX::INFO(
+					"Preview attachment reparented: slot={}, object='{}', parent='{}'",
+					slotIndex,
+					attachment.object->GetName().c_str(),
+					parent->GetName().c_str());
+			}
+
+			if (changed) {
+				RE::NiUpdateData updateData;
+				a_previewRoot.Update(updateData);
+			}
+			return changed;
+		}
+
 		void RetirePreviewAttachments(const bool a_detach)
 		{
 			for (auto& attachment : g_previewAttachments) {
@@ -2049,6 +2106,7 @@ namespace TF3DHud
 			g_equipmentAuditFrames = 0;
 			g_pendingBipedSignature = 0;
 			g_pendingBipedSignatureFrames = 0;
+			g_deferredBipedRebuildSignature = 0;
 			g_bipedSignature = 0;
 			g_visualSignature = 0;
 			g_pendingMorphGeometryRebuild = false;
@@ -2127,6 +2185,26 @@ namespace TF3DHud
 			g_pendingBipedSignature = 0;
 			g_pendingBipedSignatureFrames = 0;
 			return true;
+		}
+
+		void UpdatePostAnimationBipedSignature(const RE::BipedAnim& a_biped)
+		{
+			if (g_deferredBipedRebuildSignature != 0) {
+				return;
+			}
+
+			std::uint64_t signature = 0;
+			if (g_equipmentAuditFrames != 0) {
+				if (TryResolveAuditedBipedSignature(a_biped, signature)) {
+					g_deferredBipedRebuildSignature = signature;
+					LogDiagnostic("equipment rebuild scheduled from post-animation biped hash");
+				}
+				return;
+			}
+
+			if (TryBuildBipedSignature(a_biped, signature)) {
+				g_bipedSignature = signature;
+			}
 		}
 
 		void RebindSkinInstance(
@@ -2678,7 +2756,11 @@ namespace TF3DHud
 			const auto visualSignature = BuildVisualSignature(*player);
 			std::uint64_t bipedSignature = 0;
 			const bool forceRebuild = !g_previewRoot || visualSignature != g_visualSignature;
-			const bool auditRebuild = !forceRebuild && TryResolveAuditedBipedSignature(*biped, bipedSignature);
+			const bool auditRebuild = !forceRebuild && g_deferredBipedRebuildSignature != 0;
+			if (auditRebuild) {
+				bipedSignature = g_deferredBipedRebuildSignature;
+				g_deferredBipedRebuildSignature = 0;
+			}
 
 			if (forceRebuild) {
 				std::int32_t pendingSlot = -1;
@@ -2727,7 +2809,9 @@ namespace TF3DHud
 			}
 
 			if (g_previewRoot) {
+				(void)SyncPreviewAttachmentParentsFromBiped(*g_previewRoot, *biped);
 				Animations::Update(*player, *g_previewRoot, a_deltaTime);
+				UpdatePostAnimationBipedSignature(*biped);
 			}
 
 			if (Renderer::Enable()) {
