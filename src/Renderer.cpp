@@ -29,6 +29,7 @@ namespace TF3DHud::Renderer
 		constexpr auto kDisplayMeshPath = "Interface/GunModMenu/ModMenuRenderMesh.nif";
 		constexpr auto kDisplayMeshGeometry = "ModMenuRenderMesh:0";
 		constexpr auto kPi = 3.14159265358979323846F;
+		constexpr auto kPreviewCameraAspect = 16.0F / 9.0F;
 		constexpr float kDisplayRootY = 375.0F;
 		constexpr float kVanillaDisplayLeft = -148.125F;
 		constexpr float kVanillaDisplayTop = -79.875F;
@@ -212,9 +213,8 @@ namespace TF3DHud::Renderer
 				return;
 			}
 
-			const auto aspect = (a_camera->viewFrustum.right - a_camera->viewFrustum.left) / currentHeight;
 			const auto top = std::tan((a_configFOV * kPi / 180.0F) * 0.15F);
-			const auto right = top * aspect;
+			const auto right = top * kPreviewCameraAspect;
 
 			a_camera->viewFrustum.left = -right;
 			a_camera->viewFrustum.right = right;
