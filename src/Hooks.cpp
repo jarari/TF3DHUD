@@ -54,6 +54,7 @@ namespace TF3DHud
 			std::int32_t,
 			bool,
 			bool);
+		using RenderPrepassesAndMenus_t = void(RE::Interface3D::Renderer*);
 		using SetDoTiledLighting_t = void(bool);
 		using QTiledLighting_t = bool();
 
@@ -73,9 +74,14 @@ namespace TF3DHud
 		// at +0x51A. BSDFCompositeShader's pixel shader ID reads DrawWorld::QTiledLighting()
 		// and toggles bit 0x10000, selecting the tiled composite variant that samples t11/t12.
 		REL::Relocation<std::uintptr_t> g_interface3DDrawModelRenderSceneDeferredCall{ REL::ID{ 917134, 2222570 }, 0x51A };
+		// IDA/Ghidra: Interface3D::Renderer::RenderAll calls RenderPrepassesAndMenus
+		// immediately before RenderMain for the selected renderer. Hook this entry so
+		// preview scenegraph commits happen at the DrawWorld/Interface3D boundary.
+		REL::Relocation<std::uintptr_t> g_renderPrepassesAndMenusTarget{ REL::ID(1189309) };
 		REL::Relocation<SetDoTiledLighting_t*> g_setDoTiledLighting{ REL::ID{ 716351, 2318370 } };
 		REL::Relocation<QTiledLighting_t*> g_qTiledLighting{ REL::ID{ 1154650, 2318371 } };
 		RenderSceneDeferred_t* g_renderSceneDeferred{ nullptr };
+		RenderPrepassesAndMenus_t* g_renderPrepassesAndMenus{ nullptr };
 		bool g_equipWatcherRegistered{ false };
 
 		class EquipWatcher :
@@ -205,6 +211,17 @@ namespace TF3DHud
 				a_arg8);
 		}
 
+		void HookedRenderPrepassesAndMenus(RE::Interface3D::Renderer* a_renderer)
+		{
+			if (a_renderer && a_renderer == Renderer::Get()) {
+				Previewer::CommitRenderState();
+			}
+
+			if (g_renderPrepassesAndMenus) {
+				g_renderPrepassesAndMenus(a_renderer);
+			}
+		}
+
 		void F4SEMessageHandler(F4SE::MessagingInterface::Message* a_message)
 		{
 			if (!a_message) {
@@ -263,6 +280,12 @@ namespace TF3DHud
 			g_update3DModelTarget,
 			5,
 			reinterpret_cast<void*>(&HookedUpdate3DModel));
+
+		g_renderPrepassesAndMenus = CreateBranchGateway5<RenderPrepassesAndMenus_t*>(
+			"Interface3D::Renderer::RenderPrepassesAndMenus",
+			g_renderPrepassesAndMenusTarget,
+			5,
+			reinterpret_cast<void*>(&HookedRenderPrepassesAndMenus));
 
 		g_renderSceneDeferred = reinterpret_cast<RenderSceneDeferred_t*>(
 			trampoline.write_call<5>(g_interface3DDrawModelRenderSceneDeferredCall.address(), &HookedRenderSceneDeferred));

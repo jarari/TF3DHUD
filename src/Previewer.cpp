@@ -210,6 +210,11 @@ namespace TF3DHud
 		std::uint64_t g_bipedSignature{ 0 };
 		std::uint64_t g_visualSignature{ 0 };
 		bool g_pendingMorphGeometryRebuild{ false };
+		bool g_pendingRendererAttach{ false };
+		bool g_pendingFramingUpdate{ false };
+		bool g_renderStateDirty{ false };
+		bool g_committingRenderState{ false };
+		float g_pendingRenderDelta{ 0.0F };
 		bool g_looksMenuSuspended{ false };
 		std::string g_lastDiagnostic;
 
@@ -422,6 +427,12 @@ namespace TF3DHud
 		{
 			Renderer::Hide();
 			Animations::Reset();
+		}
+
+		void MarkRenderStateDirty(const float a_deltaTime = 0.0F)
+		{
+			g_renderStateDirty = true;
+			g_pendingRenderDelta += a_deltaTime;
 		}
 
 		[[nodiscard]] bool ShouldShow(const RE::PlayerCharacter* a_player, std::string& a_reason)
@@ -2256,6 +2267,20 @@ namespace TF3DHud
 			g_previewRoot.reset();
 			g_previewFlattenedBoneTree = nullptr;
 			g_previewFaceNode.reset();
+			g_pendingRendererAttach = false;
+			g_pendingFramingUpdate = false;
+			g_renderStateDirty = false;
+			g_pendingRenderDelta = 0.0F;
+		}
+
+		void StagePreview3DReplacement()
+		{
+			RetirePreviewAttachments(true);
+			if (g_previewRoot) {
+				g_retiredPreviewObjects.emplace_back(std::move(g_previewRoot));
+			}
+			g_previewFlattenedBoneTree = nullptr;
+			g_previewFaceNode.reset();
 		}
 
 		void ReleasePreview3DState()
@@ -2275,6 +2300,10 @@ namespace TF3DHud
 			g_bipedSignature = 0;
 			g_visualSignature = 0;
 			g_pendingMorphGeometryRebuild = false;
+			g_pendingRendererAttach = false;
+			g_pendingFramingUpdate = false;
+			g_renderStateDirty = false;
+			g_pendingRenderDelta = 0.0F;
 			g_lastDiagnostic.clear();
 		}
 
@@ -2827,10 +2856,10 @@ namespace TF3DHud
 			std::uint64_t a_bipedSignature,
 			std::uint64_t a_visualSignature)
 		{
-			// IDA: Inventory3DManager::AddLoadedModel swaps Offscreen_Set3D roots
-			// without disabling the renderer. Keep that shape for in-frame preview
-			// rebuilds; true hides still go through ReleasePreview3DState/Hide.
-			ResetPreview3DState(false);
+			// Keep the renderer-owned root stable until the Interface3D render boundary.
+			// Native Interface3D consumes roots from DrawWorld; swapping here can race the
+			// offscreen deferred passes when rebuilds happen mid-frame.
+			StagePreview3DReplacement();
 
 			RE::NiPointer<RE::NiAVObject> previewRoot = LoadPreviewRaceSkeleton(a_player);
 			if (!previewRoot) {
@@ -2874,7 +2903,9 @@ namespace TF3DHud
 			g_bipedSignature = a_bipedSignature;
 			g_visualSignature = a_visualSignature;
 
-			Renderer::AttachPreviewRoot(*g_previewRoot);
+			g_pendingRendererAttach = true;
+			g_pendingFramingUpdate = false;
+			MarkRenderStateDirty();
 			Animations::ResetInitialState();
 			Morph::MarkSecondaryDirty();
 
@@ -2954,40 +2985,89 @@ namespace TF3DHud
 			}
 
 			if (g_previewRoot) {
-				const auto morphResult = Morph::Update(*player, *g_previewRoot, g_previewFlattenedBoneTree);
-				g_pendingMorphGeometryRebuild =
-					g_pendingMorphGeometryRebuild ||
-					Morph::HasResult(morphResult, Morph::UpdateResult::kGeometryRebuild);
-
-				if (g_pendingMorphGeometryRebuild) {
-					std::int32_t pendingSlot = -1;
-					if (HasPendingBipedModelHandles(*biped, pendingSlot)) {
-						LogDiagnostic("morph rebuild postponed: biped slot pending in slot " + std::to_string(pendingSlot));
-						return;
-					}
-
-					if (!TryBuildBipedSignature(*biped, bipedSignature)) {
-						HideRendererAndResetAnimation();
-						return;
-					}
-					if (!RebuildPreview(*player, *biped, bipedSignature, visualSignature)) {
-						HideRendererAndResetAnimation();
-						return;
-					}
-					g_pendingMorphGeometryRebuild = false;
-				}
-			}
-
-			if (g_previewRoot) {
-				(void)SyncPreviewAttachmentParentsFromBiped(*g_previewRoot, *biped);
-				Animations::Update(*player, *g_previewRoot, a_deltaTime);
-				SyncPreviewFacialExpression(*player);
-				ApplyHeadFollowTranslation(*g_previewRoot);
-				UpdatePostAnimationBipedSignature(*biped);
+				MarkRenderStateDirty(a_deltaTime);
 			}
 
 			if (Renderer::Enable()) {
 				LogDiagnostic("renderer enabled");
+			}
+		}
+
+		void CommitRenderStateImpl()
+		{
+			if (g_committingRenderState || (!g_renderStateDirty && !g_pendingRendererAttach)) {
+				return;
+			}
+			g_committingRenderState = true;
+
+			const REX::TScopeExit clearCommitGuard{ [&]() noexcept {
+				g_committingRenderState = false;
+			} };
+
+			if (!g_previewRoot) {
+				g_renderStateDirty = false;
+				g_pendingRenderDelta = 0.0F;
+				g_pendingRendererAttach = false;
+				return;
+			}
+
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player) {
+				return;
+			}
+
+			const auto& biped = player->GetBiped(false);
+			if (!biped) {
+				return;
+			}
+
+			const auto renderDelta = g_pendingRenderDelta;
+			g_pendingRenderDelta = 0.0F;
+			g_renderStateDirty = false;
+
+			if (g_pendingFramingUpdate) {
+				ApplyHeadCenteredFraming(*g_previewRoot);
+				g_pendingFramingUpdate = false;
+			}
+
+			const auto morphResult = Morph::Update(*player, *g_previewRoot, g_previewFlattenedBoneTree);
+			g_pendingMorphGeometryRebuild =
+				g_pendingMorphGeometryRebuild ||
+				Morph::HasResult(morphResult, Morph::UpdateResult::kGeometryRebuild);
+
+			if (g_pendingMorphGeometryRebuild) {
+				std::int32_t pendingSlot = -1;
+				if (HasPendingBipedModelHandles(*biped, pendingSlot)) {
+					LogDiagnostic("morph rebuild postponed: biped slot pending in slot " + std::to_string(pendingSlot));
+					return;
+				}
+
+				std::uint64_t bipedSignature = 0;
+				if (!TryBuildBipedSignature(*biped, bipedSignature)) {
+					HideRendererAndResetAnimation();
+					return;
+				}
+
+				if (!RebuildPreview(*player, *biped, bipedSignature, BuildVisualSignature(*player))) {
+					HideRendererAndResetAnimation();
+					return;
+				}
+				g_pendingMorphGeometryRebuild = false;
+			}
+
+			if (!g_previewRoot) {
+				return;
+			}
+
+			(void)SyncPreviewAttachmentParentsFromBiped(*g_previewRoot, *biped);
+			Animations::Update(*player, *g_previewRoot, renderDelta);
+			SyncPreviewFacialExpression(*player);
+			ApplyHeadFollowTranslation(*g_previewRoot);
+			UpdatePostAnimationBipedSignature(*biped);
+
+			if (g_pendingRendererAttach) {
+				Renderer::AttachPreviewRoot(*g_previewRoot);
+				g_pendingRendererAttach = false;
 			}
 		}
 	}
@@ -2997,6 +3077,11 @@ namespace TF3DHud
 		void Update(float a_deltaTime)
 		{
 			Tick(a_deltaTime);
+		}
+
+		void CommitRenderState()
+		{
+			CommitRenderStateImpl();
 		}
 
 		void Reset()
@@ -3034,7 +3119,8 @@ namespace TF3DHud
 			}
 
 			if (g_previewRoot) {
-				ApplyHeadCenteredFraming(*g_previewRoot);
+				g_pendingFramingUpdate = true;
+				MarkRenderStateDirty();
 			}
 
 			if (!Renderer::Get()) {
@@ -3056,7 +3142,9 @@ namespace TF3DHud
 			}
 
 			if (g_previewRoot) {
-				ApplyHeadCenteredFraming(*g_previewRoot);
+				g_pendingFramingUpdate = true;
+				g_pendingRendererAttach = true;
+				MarkRenderStateDirty();
 			}
 
 			if (!Renderer::Get()) {
@@ -3065,9 +3153,6 @@ namespace TF3DHud
 
 			Renderer::Configure();
 			Renderer::ConfigureLighting();
-			if (g_previewRoot) {
-				Renderer::AttachPreviewRoot(*g_previewRoot);
-			}
 		}
 
 		void SuspendForLooksMenu()
