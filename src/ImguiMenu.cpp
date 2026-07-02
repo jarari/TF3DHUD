@@ -2,6 +2,8 @@
 
 #include "Animations.h"
 #include "Config.h"
+#include "Previewer.h"
+#include "Renderer.h"
 
 #include "RE/B/BSGraphics.h"
 
@@ -15,8 +17,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -59,6 +64,252 @@ namespace TF3DHud::Imgui
 		bool g_imguiInitialized{ false };
 		bool g_menuOpen{ false };
 		bool g_windowActive{ true };
+		std::string g_editingValueId;
+		bool g_focusEditInput{ false };
+		std::uint32_t g_clipRectEditFrame{ 0 };
+		bool g_clipRectDirty{ false };
+		constexpr float kPi = 3.14159265358979323846F;
+		constexpr float kPreviewCameraAspect = 16.0F / 9.0F;
+		constexpr float kDisplayRootY = 375.0F;
+		constexpr float kVanillaDisplayLeft = -148.125F;
+		constexpr float kVanillaDisplayTop = 79.875F;
+		constexpr float kVanillaDisplayRight = 148.125F;
+		constexpr float kVanillaDisplayBottom = -79.875F;
+
+		struct DisplayBounds
+		{
+			float left;
+			float top;
+			float right;
+			float bottom;
+		};
+
+		[[nodiscard]] DisplayBounds GetOverlayDisplayBounds(const Config& a_config)
+		{
+			const auto screenBounds = GetOverlayScreenPlaneBounds(a_config);
+			const auto& clipRect = a_config.clipRect;
+			const bool hasCustomHorizontal = clipRect.left != 0.0F || clipRect.right != 0.0F;
+			const bool hasCustomVertical = clipRect.top != 0.0F || clipRect.bottom != 0.0F;
+			const DisplayBounds bounds{
+				.left = hasCustomHorizontal ? -(std::max)(clipRect.left, 0.0F) : screenBounds.left,
+				.top = hasCustomVertical ? (std::max)(clipRect.top, 0.0F) : screenBounds.top,
+				.right = hasCustomHorizontal ? (std::max)(clipRect.right, 0.0F) : screenBounds.right,
+				.bottom = hasCustomVertical ? -(std::max)(clipRect.bottom, 0.0F) : screenBounds.bottom
+			};
+			if (bounds.right > bounds.left && bounds.top > bounds.bottom) {
+				return bounds;
+			}
+
+			return {
+				.left = screenBounds.left,
+				.top = screenBounds.top,
+				.right = screenBounds.right,
+				.bottom = screenBounds.bottom
+			};
+		}
+
+		[[nodiscard]] DisplayBounds GetOverlayScreenPlaneBounds(const Config& a_config)
+		{
+			const auto displaySize = ImGui::GetIO().DisplaySize;
+			const auto aspect = displaySize.y > 0.0F ? displaySize.x / displaySize.y : kPreviewCameraAspect;
+			const auto top = std::tan((a_config.fov * kPi / 180.0F) * 0.15F) * kDisplayRootY;
+			const auto right = top * aspect;
+			return {
+				.left = -right,
+				.top = top,
+				.right = right,
+				.bottom = -top
+			};
+		}
+
+		[[nodiscard]] ImVec2 ProjectScreenPlanePoint(
+			const DisplayBounds& a_screenBounds,
+			const float a_x,
+			const float a_z,
+			const ImVec2& a_displaySize)
+		{
+			const auto normalizedX = (a_x - a_screenBounds.left) / (a_screenBounds.right - a_screenBounds.left);
+			const auto normalizedY = (a_screenBounds.top - a_z) / (a_screenBounds.top - a_screenBounds.bottom);
+			return {
+				std::clamp(normalizedX, 0.0F, 1.0F) * a_displaySize.x,
+				std::clamp(normalizedY, 0.0F, 1.0F) * a_displaySize.y
+			};
+		}
+
+		void DrawClipRectOverlay()
+		{
+			const auto& config = GetConfig();
+			const auto screenBounds = GetOverlayScreenPlaneBounds(config);
+			const auto displayBounds = GetOverlayDisplayBounds(config);
+			const auto centerX = (screenBounds.left + screenBounds.right) * 0.5F;
+			const auto centerZ = (screenBounds.top + screenBounds.bottom) * 0.5F;
+
+			float anchorX = centerX;
+			float anchorZ = centerZ;
+			switch (config.anchor) {
+			case 1:
+				anchorX = screenBounds.left;
+				anchorZ = screenBounds.bottom;
+				break;
+			case 2:
+				anchorX = centerX;
+				anchorZ = screenBounds.bottom;
+				break;
+			case 3:
+				anchorX = screenBounds.right;
+				anchorZ = screenBounds.bottom;
+				break;
+			case 4:
+				anchorX = screenBounds.left;
+				anchorZ = centerZ;
+				break;
+			case 6:
+				anchorX = screenBounds.right;
+				anchorZ = centerZ;
+				break;
+			case 7:
+				anchorX = screenBounds.left;
+				anchorZ = screenBounds.top;
+				break;
+			case 8:
+				anchorX = centerX;
+				anchorZ = screenBounds.top;
+				break;
+			case 9:
+				anchorX = screenBounds.right;
+				anchorZ = screenBounds.top;
+				break;
+			case 5:
+			default:
+				break;
+			}
+
+			const auto translateX = anchorX + config.placementX;
+			const auto translateZ = anchorZ + config.placementY;
+			const auto displaySize = ImGui::GetIO().DisplaySize;
+			const auto min = ProjectScreenPlanePoint(
+				screenBounds,
+				translateX + displayBounds.left,
+				translateZ + displayBounds.top,
+				displaySize);
+			const auto max = ProjectScreenPlanePoint(
+				screenBounds,
+				translateX + displayBounds.right,
+				translateZ + displayBounds.bottom,
+				displaySize);
+
+			ImGui::GetForegroundDrawList()->AddRect(
+				min,
+				max,
+				IM_COL32(255, 0, 0, 255),
+				0.0F,
+				0,
+				2.0F);
+		}
+
+		void ApplyLayoutEdit(const bool a_clipRectChanged = false)
+		{
+			if (a_clipRectChanged) {
+				g_clipRectDirty = true;
+			}
+			Previewer::ApplyConfigChanges();
+		}
+
+		void FlushClipRectEdit()
+		{
+			if (!g_clipRectDirty) {
+				return;
+			}
+
+			++g_clipRectEditFrame;
+			if (g_clipRectEditFrame < 10 || !Renderer::CanApplyDisplayClipRect()) {
+				return;
+			}
+
+			Renderer::ApplyDisplayClipRect();
+			g_clipRectDirty = false;
+			g_clipRectEditFrame = 0;
+		}
+
+		bool DrawEditButton(const char* a_id)
+		{
+			ImGui::SameLine();
+			if (ImGui::Button("(E)")) {
+				g_editingValueId = a_id;
+				g_focusEditInput = true;
+				return true;
+			}
+			return false;
+		}
+
+		[[nodiscard]] bool DrawIntSliderEdit(
+			const char* a_label,
+			float& a_value,
+			const int a_min,
+			const int a_max,
+			const int a_step)
+		{
+			bool changed = false;
+			ImGui::PushID(a_label);
+			const bool editing = g_editingValueId == a_label;
+			int value = static_cast<int>(std::lround(a_value));
+			if (editing) {
+				if (g_focusEditInput) {
+					ImGui::SetKeyboardFocusHere();
+					g_focusEditInput = false;
+				}
+				if (ImGui::InputInt(a_label, &value, a_step, a_step, ImGuiInputTextFlags_EnterReturnsTrue) ||
+				    ImGui::IsItemDeactivatedAfterEdit()) {
+					value = std::clamp(value, a_min, a_max);
+					a_value = static_cast<float>(value);
+					g_editingValueId.clear();
+					changed = true;
+				}
+			} else {
+				if (ImGui::SliderInt(a_label, &value, a_min, a_max, "%d", ImGuiSliderFlags_AlwaysClamp)) {
+					if (a_step > 1) {
+						value = std::clamp(((value + (a_step / 2)) / a_step) * a_step, a_min, a_max);
+					}
+					a_value = static_cast<float>(value);
+					changed = true;
+				}
+				DrawEditButton(a_label);
+			}
+			ImGui::PopID();
+			return changed;
+		}
+
+		[[nodiscard]] bool DrawFloatSliderEdit(
+			const char* a_label,
+			float& a_value,
+			const float a_min,
+			const float a_max,
+			const float a_step)
+		{
+			bool changed = false;
+			ImGui::PushID(a_label);
+			const bool editing = g_editingValueId == a_label;
+			if (editing) {
+				if (g_focusEditInput) {
+					ImGui::SetKeyboardFocusHere();
+					g_focusEditInput = false;
+				}
+				if (ImGui::InputFloat(a_label, &a_value, a_step, a_step, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue) ||
+				    ImGui::IsItemDeactivatedAfterEdit()) {
+					a_value = std::clamp(a_value, a_min, a_max);
+					g_editingValueId.clear();
+					changed = true;
+				}
+			} else {
+				if (ImGui::SliderFloat(a_label, &a_value, a_min, a_max, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+					a_value = std::clamp(std::round(a_value / a_step) * a_step, a_min, a_max);
+					changed = true;
+				}
+				DrawEditButton(a_label);
+			}
+			ImGui::PopID();
+			return changed;
+		}
 
 		[[nodiscard]] bool IsAltTabSystemKey(const UINT a_msg, const WPARAM a_wparam)
 		{
@@ -426,19 +677,246 @@ namespace TF3DHud::Imgui
 			ImGui::EndTable();
 		}
 
-		void DrawAnimationDebugWindow()
+		[[nodiscard]] const char* AnchorLabel(const std::int32_t a_anchor)
+		{
+			switch (a_anchor) {
+			case 1:
+				return "bottom left";
+			case 2:
+				return "bottom center";
+			case 3:
+				return "bottom right";
+			case 4:
+				return "middle left";
+			case 5:
+				return "middle center";
+			case 6:
+				return "middle right";
+			case 7:
+				return "top left";
+			case 8:
+				return "top center";
+			case 9:
+				return "top right";
+			default:
+				return "unknown";
+			}
+		}
+
+		void DrawAnchorButton(Config& a_config, const std::int32_t a_anchor)
+		{
+			const bool selected = a_config.anchor == a_anchor;
+			ImGui::PushID(a_anchor);
+			ImGui::PushStyleColor(ImGuiCol_Button, selected ? ImVec4(0.25F, 0.65F, 0.95F, 1.0F) : ImVec4(0.0F, 0.0F, 0.0F, 1.0F));
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selected ? ImVec4(0.35F, 0.75F, 1.0F, 1.0F) : ImVec4(0.35F, 0.35F, 0.35F, 1.0F));
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.25F, 0.65F, 0.95F, 1.0F));
+			if (ImGui::Button(AnchorLabel(a_anchor), ImVec2(118.0F, 28.0F))) {
+				a_config.anchor = a_anchor;
+				ApplyLayoutEdit();
+			}
+			ImGui::PopStyleColor(3);
+			ImGui::PopID();
+		}
+
+		void DrawLayoutTab()
+		{
+			auto& config = GetMutableConfig();
+
+			ImGui::TextUnformatted("Anchor");
+			for (int row = 2; row >= 0; --row) {
+				for (int col = 0; col < 3; ++col) {
+					const auto anchor = (row * 3) + col + 1;
+					DrawAnchorButton(config, anchor);
+					if (col < 2) {
+						ImGui::SameLine();
+					}
+				}
+			}
+
+			ImGui::Separator();
+			ImGui::TextUnformatted("View");
+			if (DrawIntSliderEdit("FOV", config.fov, 10, 120, 1)) {
+				ApplyLayoutEdit();
+			}
+			if (DrawIntSliderEdit("PlacementX", config.placementX, -200, 200, 1)) {
+				ApplyLayoutEdit();
+			}
+			if (DrawIntSliderEdit("PlacementY", config.placementY, -200, 200, 1)) {
+				ApplyLayoutEdit();
+			}
+			if (DrawIntSliderEdit("CameraDistance", config.cameraDistance, 100, 2000, 5)) {
+				ApplyLayoutEdit();
+			}
+			if (DrawFloatSliderEdit("ModelScale", config.modelScale, 0.01F, 2.0F, 0.01F)) {
+				ApplyLayoutEdit();
+			}
+			if (DrawIntSliderEdit("YawDegrees", config.yawDegrees, 0, 360, 1)) {
+				ApplyLayoutEdit();
+			}
+
+			ImGui::Separator();
+			ImGui::TextUnformatted("ClipRect");
+			if (DrawIntSliderEdit("Left", config.clipRect.left, -100, 200, 1)) {
+				ApplyLayoutEdit(true);
+			}
+			if (DrawIntSliderEdit("Right", config.clipRect.right, -100, 200, 1)) {
+				ApplyLayoutEdit(true);
+			}
+			if (DrawIntSliderEdit("Top", config.clipRect.top, -100, 200, 1)) {
+				ApplyLayoutEdit(true);
+			}
+			if (DrawIntSliderEdit("Bottom", config.clipRect.bottom, -100, 200, 1)) {
+				ApplyLayoutEdit(true);
+			}
+			FlushClipRectEdit();
+
+			ImGui::Separator();
+			ImGui::TextUnformatted("General");
+			if (ImGui::Checkbox("Enabled", &config.enabled)) {
+				ApplyLayoutEdit();
+			}
+			if (ImGui::Checkbox("HideInPowerArmor", &config.hideInPowerArmor)) {
+				ApplyLayoutEdit();
+			}
+		}
+
+		[[nodiscard]] bool LightNameExists(const Config& a_config, const std::string& a_name, const std::size_t a_ignoreIndex)
+		{
+			for (std::size_t index = 0; index < a_config.lights.size(); ++index) {
+				if (index != a_ignoreIndex && a_config.lights[index].name == a_name) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		[[nodiscard]] std::string MakeUniqueLightName(
+			const Config& a_config,
+			const std::string& a_baseName,
+			const std::size_t a_ignoreIndex = static_cast<std::size_t>(-1))
+		{
+			const auto baseName = a_baseName.empty() ? std::string{ "Light" } : a_baseName;
+			if (!LightNameExists(a_config, baseName, a_ignoreIndex)) {
+				return baseName;
+			}
+
+			for (std::uint32_t suffix = 2; suffix < 10000; ++suffix) {
+				auto candidate = baseName + "_" + std::to_string(suffix);
+				if (!LightNameExists(a_config, candidate, a_ignoreIndex)) {
+					return candidate;
+				}
+			}
+
+			return baseName;
+		}
+
+		void DrawLightTab()
+		{
+			auto& config = GetMutableConfig();
+			if (ImGui::Button("Add")) {
+				LightSettings light;
+				light.name = MakeUniqueLightName(config, "Directional");
+				light.type = LightType::kDirectional;
+				config.lights.push_back(light);
+				Previewer::ApplyConfigChanges();
+			}
+
+			std::optional<std::size_t> deleteIndex;
+			for (std::size_t index = 0; index < config.lights.size(); ++index) {
+				auto& light = config.lights[index];
+				ImGui::PushID(static_cast<int>(index));
+				const bool expanded = ImGui::TreeNode(light.name.empty() ? "(unnamed)" : light.name.c_str());
+				if (expanded) {
+					if (ImGui::Button("Delete")) {
+						deleteIndex = index;
+					}
+
+					std::array<char, 128> nameBuffer{};
+					const auto copySize = (std::min)(light.name.size(), nameBuffer.size() - 1);
+					std::memcpy(nameBuffer.data(), light.name.data(), copySize);
+					if (ImGui::InputText("Name", nameBuffer.data(), nameBuffer.size())) {
+						light.name = nameBuffer.data();
+					}
+					if (ImGui::IsItemDeactivatedAfterEdit()) {
+						light.name = MakeUniqueLightName(config, light.name, index);
+					}
+
+					int type = static_cast<int>(light.type);
+					const char* types[] = { "Directional", "Fixed", "ToD" };
+					if (ImGui::Combo("Type", &type, types, static_cast<int>(std::size(types)))) {
+						light.type = static_cast<LightType>(type);
+						Previewer::ApplyConfigChanges();
+					}
+					if (light.type != LightType::kDirectional && ImGui::Checkbox("UseInInterior", &light.useInInterior)) {
+						Previewer::ApplyConfigChanges();
+					}
+
+					const auto drawFixedControls = [&](FixedLightSettings& a_settings) {
+						bool changed = false;
+						changed |= DrawIntSliderEdit("PositionX", a_settings.position.x, -300, 300, 1);
+						changed |= DrawIntSliderEdit("PositionY", a_settings.position.y, -300, 300, 1);
+						changed |= DrawIntSliderEdit("PositionZ", a_settings.position.z, -300, 300, 1);
+
+						float diffuse[3] = { a_settings.diffuse.r, a_settings.diffuse.g, a_settings.diffuse.b };
+						if (ImGui::ColorEdit3("Diffuse", diffuse, ImGuiColorEditFlags_Float)) {
+							a_settings.diffuse.r = diffuse[0];
+							a_settings.diffuse.g = diffuse[1];
+							a_settings.diffuse.b = diffuse[2];
+							changed = true;
+						}
+
+						changed |= DrawIntSliderEdit("Distance", a_settings.distance, 50, 2000, 5);
+						changed |= DrawFloatSliderEdit("Intensity", a_settings.intensity, 0.01F, 10.0F, 0.01F);
+						return changed;
+					};
+
+					switch (light.type) {
+					case LightType::kDirectional:
+						if (DrawIntSliderEdit("PositionX", light.fixed.position.x, -300, 300, 1) ||
+						    DrawIntSliderEdit("PositionY", light.fixed.position.y, -300, 300, 1) ||
+						    DrawIntSliderEdit("PositionZ", light.fixed.position.z, -300, 300, 1) ||
+						    DrawFloatSliderEdit("Intensity", light.fixed.intensity, 0.01F, 10.0F, 0.01F)) {
+							Previewer::ApplyConfigChanges();
+						}
+						break;
+					case LightType::kFixed:
+						if (drawFixedControls(light.fixed)) {
+							Previewer::ApplyConfigChanges();
+						}
+						break;
+					case LightType::kTimeOfDay:
+						if (DrawFloatSliderEdit("StartToD", light.timeOfDay.startTimeOfDay, 0.0F, 24.0F, 0.01F) ||
+						    DrawFloatSliderEdit("EndToD", light.timeOfDay.endTimeOfDay, 0.0F, 24.0F, 0.01F)) {
+							Previewer::ApplyConfigChanges();
+						}
+						if (ImGui::TreeNode("Start")) {
+							if (drawFixedControls(light.timeOfDay.start)) {
+								Previewer::ApplyConfigChanges();
+							}
+							ImGui::TreePop();
+						}
+						if (ImGui::TreeNode("End")) {
+							if (drawFixedControls(light.timeOfDay.end)) {
+								Previewer::ApplyConfigChanges();
+							}
+							ImGui::TreePop();
+						}
+						break;
+					}
+					ImGui::TreePop();
+				}
+				ImGui::PopID();
+			}
+
+			if (deleteIndex && *deleteIndex < config.lights.size()) {
+				config.lights.erase(config.lights.begin() + static_cast<std::ptrdiff_t>(*deleteIndex));
+				Previewer::ApplyConfigChanges();
+			}
+		}
+
+		void DrawDebugTab()
 		{
 			const auto snapshot = Animations::GetDebugSnapshot();
-
-			ImGuiIO& io = ImGui::GetIO();
-			ImGui::SetNextWindowPos(ImVec2(20.0F, 20.0F), ImGuiCond_FirstUseEver);
-			ImGui::SetNextWindowSize(ImVec2((std::min)(920.0F, io.DisplaySize.x - 40.0F), 620.0F), ImGuiCond_FirstUseEver);
-			ImGui::SetNextWindowBgAlpha(0.92F);
-
-			if (!ImGui::Begin("TF3DHud Animation Debug", std::addressof(g_menuOpen))) {
-				ImGui::End();
-				return;
-			}
 
 			ImGui::Text("Project: %s", snapshot.project.empty() ? "(none)" : snapshot.project.c_str());
 			if (!snapshot.lastDiagnostic.empty()) {
@@ -488,6 +966,49 @@ namespace TF3DHud::Imgui
 			DrawActiveClip(snapshot);
 			ImGui::Separator();
 			DrawActiveNodesTable(snapshot);
+		}
+
+		void DrawMainWindow()
+		{
+			ImGuiIO& io = ImGui::GetIO();
+			ImGui::SetNextWindowPos(ImVec2(20.0F, 20.0F), ImGuiCond_FirstUseEver);
+			ImGui::SetNextWindowSize(ImVec2((std::min)(920.0F, io.DisplaySize.x - 40.0F), 620.0F), ImGuiCond_FirstUseEver);
+			ImGui::SetNextWindowBgAlpha(0.92F);
+
+			if (!ImGui::Begin("TF3DHud", nullptr, ImGuiWindowFlags_MenuBar)) {
+				ImGui::End();
+				return;
+			}
+
+			if (ImGui::BeginMenuBar()) {
+				if (ImGui::BeginMenu("File")) {
+					if (ImGui::MenuItem("Save")) {
+						(void)SaveConfig();
+					}
+					if (ImGui::MenuItem("Reload")) {
+						Previewer::ReloadConfig();
+					}
+					ImGui::EndMenu();
+				}
+				ImGui::EndMenuBar();
+			}
+
+			if (ImGui::BeginTabBar("tf3dhud_tabs")) {
+				if (ImGui::BeginTabItem("Layout")) {
+					DrawLayoutTab();
+					DrawClipRectOverlay();
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem("Light")) {
+					DrawLightTab();
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem("Debug")) {
+					DrawDebugTab();
+					ImGui::EndTabItem();
+				}
+				ImGui::EndTabBar();
+			}
 
 			ImGui::End();
 		}
@@ -548,7 +1069,7 @@ namespace TF3DHud::Imgui
 			ImGui_ImplWin32_NewFrame();
 			ImGui::NewFrame();
 			if (g_menuOpen) {
-				DrawAnimationDebugWindow();
+				DrawMainWindow();
 			}
 			ImGui::Render();
 

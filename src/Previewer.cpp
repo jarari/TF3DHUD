@@ -3026,6 +3026,25 @@ namespace TF3DHud
 				std::memory_order_acquire);
 		}
 
+		void ApplyConfigChanges()
+		{
+			if (!GetConfig().enabled) {
+				HideRendererAndResetAnimation();
+				return;
+			}
+
+			if (g_previewRoot) {
+				ApplyHeadCenteredFraming(*g_previewRoot);
+			}
+
+			if (!Renderer::Get()) {
+				return;
+			}
+
+			Renderer::ApplyDisplayLayout();
+			Renderer::ConfigureLighting();
+		}
+
 		void ReloadConfig()
 		{
 			LoadConfig();

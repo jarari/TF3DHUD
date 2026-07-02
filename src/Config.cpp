@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <format>
 #include <string>
 #include <string_view>
 
@@ -95,6 +96,26 @@ namespace TF3DHud
 			}
 		}
 
+		void WriteLightSections(CSimpleIniA& a_ini, const std::vector<LightSettings>& a_lights)
+		{
+			for (const auto& light : a_lights) {
+				if (light.name.empty()) {
+					continue;
+				}
+
+				const auto section = std::string{ kLightSectionPrefix } + light.name;
+				a_ini.SetValue(section.c_str(), "Type", TypeName(light.type));
+				a_ini.SetBoolValue(section.c_str(), "UseInInterior", light.useInInterior);
+				WriteFixedLight(a_ini, section.c_str(), light.fixed, "");
+				if (light.type == LightType::kTimeOfDay) {
+					a_ini.SetDoubleValue(section.c_str(), "StartToD", light.timeOfDay.startTimeOfDay);
+					a_ini.SetDoubleValue(section.c_str(), "EndToD", light.timeOfDay.endTimeOfDay);
+					WriteFixedLight(a_ini, section.c_str(), light.timeOfDay.start, "Start");
+					WriteFixedLight(a_ini, section.c_str(), light.timeOfDay.end, "End");
+				}
+			}
+		}
+
 		void WriteDefaults(CSimpleIniA& a_ini)
 		{
 			a_ini.SetBoolValue("General", "Enabled", g_config.enabled);
@@ -112,6 +133,37 @@ namespace TF3DHud
 			a_ini.SetBoolValue("Render", "HideInPowerArmor", g_config.hideInPowerArmor);
 			WriteDefaultLightSections(a_ini);
 			a_ini.SetValue("UI", "MenuKey", "0xDE");
+		}
+
+		void WriteConfig(CSimpleIniA& a_ini, const Config& a_config)
+		{
+			a_ini.SetBoolValue("General", "Enabled", a_config.enabled);
+			a_ini.SetDoubleValue("View", "FOV", a_config.fov);
+			a_ini.SetDoubleValue("View", "PlacementX", a_config.placementX);
+			a_ini.SetDoubleValue("View", "PlacementY", a_config.placementY);
+			a_ini.SetDoubleValue("View", "CameraDistance", a_config.cameraDistance);
+			a_ini.SetDoubleValue("View", "ModelScale", a_config.modelScale);
+			a_ini.SetDoubleValue("View", "YawDegrees", a_config.yawDegrees);
+			a_ini.SetLongValue("View", "Anchor", a_config.anchor);
+			a_ini.SetDoubleValue("ClipRect", "Left", a_config.clipRect.left);
+			a_ini.SetDoubleValue("ClipRect", "Right", a_config.clipRect.right);
+			a_ini.SetDoubleValue("ClipRect", "Top", a_config.clipRect.top);
+			a_ini.SetDoubleValue("ClipRect", "Bottom", a_config.clipRect.bottom);
+			a_ini.SetBoolValue("Render", "HideInPowerArmor", a_config.hideInPowerArmor);
+			WriteLightSections(a_ini, a_config.lights.empty() ? Lights::DefaultLights() : a_config.lights);
+			const auto menuKey = std::format("0x{:02X}", a_config.uiMenuKey);
+			a_ini.SetValue("UI", "MenuKey", menuKey.c_str());
+		}
+
+		void ClampConfig(Config& a_config)
+		{
+			a_config.fov = std::clamp(a_config.fov, 10.0F, 120.0F);
+			a_config.modelScale = std::clamp(a_config.modelScale, 0.01F, 10.0F);
+			a_config.anchor = std::clamp(a_config.anchor, 1, 9);
+			for (auto& light : a_config.lights) {
+				ClampFixedLight(light.fixed);
+				ClampTimeOfDayLight(light.timeOfDay);
+			}
 		}
 
 		[[nodiscard]] LightType ReadLightType(CSimpleIniA& a_ini, const char* a_section, const LightType a_default)
@@ -211,6 +263,11 @@ namespace TF3DHud
 		return g_config;
 	}
 
+	Config& GetMutableConfig()
+	{
+		return g_config;
+	}
+
 	void LoadConfig()
 	{
 		g_config = Config{};
@@ -252,9 +309,7 @@ namespace TF3DHud
 		g_config.hideInPowerArmor = ini.GetBoolValue("Render", "HideInPowerArmor", g_config.hideInPowerArmor);
 		g_config.uiMenuKey = ReadVirtualKey(ini, "UI", "MenuKey", g_config.uiMenuKey);
 		g_config.lights = ReadLights(ini);
-		g_config.fov = std::clamp(g_config.fov, 10.0F, 120.0F);
-		g_config.modelScale = std::clamp(g_config.modelScale, 0.01F, 10.0F);
-		g_config.anchor = std::clamp(g_config.anchor, 1, 9);
+		ClampConfig(g_config);
 
 		REX::INFO(
 			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, clipRect=({}, {}, {}, {}), hideInPowerArmor={}, uiMenuKey=0x{:02X}, lights={}",
@@ -273,5 +328,24 @@ namespace TF3DHud
 			g_config.hideInPowerArmor,
 			g_config.uiMenuKey,
 			g_config.lights.size());
+	}
+
+	bool SaveConfig()
+	{
+		ClampConfig(g_config);
+
+		CSimpleIniA ini;
+		ini.SetUnicode();
+		WriteConfig(ini, g_config);
+
+		const auto path = ConfigPath();
+		std::filesystem::create_directories(path.parent_path());
+		if (ini.SaveFile(path.string().c_str()) < 0) {
+			REX::WARN("Failed to save config to {}", path.string());
+			return false;
+		}
+
+		REX::INFO("Saved config to {}", path.string());
+		return true;
 	}
 }

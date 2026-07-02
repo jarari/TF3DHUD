@@ -32,5 +32,7 @@ namespace TF3DHud
 	};
 
 	const Config& GetConfig();
+	Config& GetMutableConfig();
 	void LoadConfig();
+	bool SaveConfig();
 }
