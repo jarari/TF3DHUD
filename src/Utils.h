@@ -20,20 +20,7 @@ namespace TF3DHud
 {
 	struct GraphTargetStats
 	{
-		struct Issue
-		{
-			std::uintptr_t target{ 0 };
-			std::int32_t boneIndex{ -1 };
-			std::array<char, 64> name{};
-			std::array<char, 32> reason{};
-		};
-
 		std::uint32_t refs{ 0 };
-		std::uint32_t directRefs{ 0 };
-		std::uint32_t flattenedRefs{ 0 };
-		std::uint32_t outsideExpectedRoot{ 0 };
-		std::uint32_t issueCount{ 0 };
-		std::array<Issue, 16> issues{};
 	};
 
 	std::int32_t MakeRel32Displacement(std::uintptr_t a_sourceNext, std::uintptr_t a_destination);

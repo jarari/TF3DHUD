@@ -21,38 +21,6 @@ namespace TF3DHud
 				a_names.emplace(a_name.c_str());
 			}
 		}
-
-		template <std::size_t N>
-		void CopyBoundedText(std::array<char, N>& a_out, const char* a_text)
-		{
-			a_out[0] = '\0';
-			if (!a_text || a_text[0] == '\0') {
-				return;
-			}
-
-			const auto length = (std::min)(std::strlen(a_text), N - 1);
-			std::memcpy(a_out.data(), a_text, length);
-			a_out[length] = '\0';
-		}
-
-		void RecordGraphTargetIssue(
-			GraphTargetStats& a_stats,
-			const void* a_target,
-			const std::int32_t a_boneIndex,
-			const char* a_name,
-			const char* a_reason)
-		{
-			++a_stats.outsideExpectedRoot;
-			if (a_stats.issueCount >= a_stats.issues.size()) {
-				return;
-			}
-
-			auto& issue = a_stats.issues[a_stats.issueCount++];
-			issue.target = reinterpret_cast<std::uintptr_t>(a_target);
-			issue.boneIndex = a_boneIndex;
-			CopyBoundedText(issue.name, a_name);
-			CopyBoundedText(issue.reason, a_reason);
-		}
 	}
 
 	std::int32_t MakeRel32Displacement(const std::uintptr_t a_sourceNext, const std::uintptr_t a_destination)
@@ -209,7 +177,7 @@ namespace TF3DHud
 
 	GraphTargetStats InspectGraphTargets(
 		const RE::IAnimationGraphManagerHolder& a_holder,
-		RE::NiAVObject& a_expectedRoot)
+		[[maybe_unused]] RE::NiAVObject& a_expectedRoot)
 	{
 		GraphTargetStats stats;
 
@@ -219,52 +187,7 @@ namespace TF3DHud
 			return stats;
 		}
 
-		std::unordered_set<const RE::NiAVObject*> expectedObjects;
-		ForEachAVObject(std::addressof(a_expectedRoot), [&](RE::NiAVObject& a_object) {
-			expectedObjects.insert(std::addressof(a_object));
-		});
-
 		stats.refs = count;
-		for (std::uint32_t i = 0; i < count; ++i) {
-			const auto& ref = refs[i];
-			if (!ref.target) {
-				RecordGraphTargetIssue(stats, nullptr, ref.boneIndex, "", "null target");
-				continue;
-			}
-
-			if (ref.boneIndex < 0) {
-				++stats.directRefs;
-				const auto* object = reinterpret_cast<const RE::NiAVObject*>(ref.target);
-				if (!expectedObjects.contains(object)) {
-					RecordGraphTargetIssue(stats, object, ref.boneIndex, object->GetName().c_str(), "outside root");
-				}
-				continue;
-			}
-
-			++stats.flattenedRefs;
-			const auto* tree = reinterpret_cast<const RE::BSFlattenedBoneTree*>(ref.target);
-			if (expectedObjects.contains(tree)) {
-				continue;
-			}
-
-			const auto boneIndex = static_cast<std::int32_t>(ref.boneIndex);
-			if (!tree->bone || boneIndex >= tree->boneCount || !tree->bone[boneIndex].node) {
-				const auto* boneName =
-					tree->bone && boneIndex < tree->boneCount ? tree->bone[boneIndex].name.c_str() : "";
-				RecordGraphTargetIssue(stats, tree, ref.boneIndex, boneName, "null flattened bone");
-				continue;
-			}
-
-			if (!expectedObjects.contains(tree->bone[boneIndex].node.get())) {
-				RecordGraphTargetIssue(
-					stats,
-					tree->bone[boneIndex].node.get(),
-					ref.boneIndex,
-					tree->bone[boneIndex].name.c_str(),
-					"outside root");
-			}
-		}
-
 		return stats;
 	}
 

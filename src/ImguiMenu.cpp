@@ -530,7 +530,6 @@ namespace TF3DHud::Imgui
 				reinterpret_cast<ID3D11DeviceContext*>(rendererData->context));
 
 			g_imguiInitialized = true;
-			REX::INFO("Animations: ImGui debug menu initialized, key=0x{:02X}", GetConfig().uiMenuKey);
 			return true;
 		}
 
@@ -590,7 +589,6 @@ namespace TF3DHud::Imgui
 			REL::Relocation<std::uintptr_t> swapChainVTableRel{ reinterpret_cast<std::uintptr_t>(swapChainVTable) };
 			g_originalPresent = reinterpret_cast<Present_t>(swapChainVTableRel.write_vfunc(8, &HookedPresent));
 			g_presentHookInstalled = true;
-			REX::INFO("Animations: Present hook installed for ImGui debug menu");
 		}
 
 		void InstallPresentHookFromRenderer()
@@ -671,14 +669,12 @@ namespace TF3DHud::Imgui
 				reinterpret_cast<D3D11CreateDeviceAndSwapChain_t>(
 					callSite.write_call<5>(reinterpret_cast<std::uintptr_t>(&HookedD3D11CreateDeviceAndSwapChain)));
 			g_d3dHookInstalled = true;
-			REX::INFO("Animations: D3D11CreateDeviceAndSwapChain hook installed at {:X}", d3d11Call);
 		}
 
 		if (!g_clipCursorHookInstalled) {
 			g_originalClipCursor = *reinterpret_cast<ClipCursor_t*>(g_clipCursor.address());
 			g_clipCursor.write_vfunc(0, &HookedClipCursor);
 			g_clipCursorHookInstalled = true;
-			REX::INFO("Animations: ClipCursor hook installed for ImGui debug menu");
 		}
 	}
 }

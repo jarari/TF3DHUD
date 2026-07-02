@@ -72,11 +72,6 @@ namespace TF3DHud::Animations
 	{
 		constexpr std::size_t kBShkbAnimationGraphSize = 0x3D0;
 		constexpr std::size_t kBShkbAnimationGraphAlignment = 0x10;
-		constexpr std::uint32_t kMaxGraphRequestDiagnosticLogs = 64;
-		constexpr std::uint32_t kMaxGraphEventDiagnosticLogs = 64;
-		constexpr std::uint32_t kMaxActiveSyncDiagnosticLogs = 24;
-		constexpr std::uint32_t kMaxActiveSyncPointLogsPerInfo = 8;
-
 		constexpr auto kLiveMirrorEventWhitelist = std::to_array<std::string_view>({
 			"reloadStart",
 			"reloadEnd",
@@ -188,7 +183,7 @@ namespace TF3DHud::Animations
 			"AimWobbleSpeedMult",
 		});
 
-		constexpr auto kSuppressedPlayerControllerChannels = std::to_array<std::string_view>({
+		constexpr auto kSuppressedControllerVariables = std::to_array<std::string_view>({
 			"Pitch",
 			"PitchDelta",
 			"PitchDeltaSmoothed",
@@ -231,14 +226,26 @@ namespace TF3DHud::Animations
 			return a_channel->variableName;
 		}
 
-		[[nodiscard]] bool IsSuppressedPlayerControllerChannel(RE::BSAnimationGraphChannel* a_channel)
+		[[nodiscard]] bool IsSuppressedControllerChannel(RE::BSAnimationGraphChannel* a_channel)
 		{
-			return ContainsEngineFixedString(GetAnimationChannelName(a_channel), kSuppressedPlayerControllerChannels);
+			return ContainsEngineFixedString(GetAnimationChannelName(a_channel), kSuppressedControllerVariables);
 		}
 
 		[[nodiscard]] bool IsSuppressedControllerVariable(const RE::BSFixedString& a_variable)
 		{
-			return ContainsEngineFixedString(a_variable, kSuppressedPlayerControllerChannels);
+			return ContainsEngineFixedString(a_variable, kSuppressedControllerVariables);
+		}
+
+		template <class ChannelArray>
+		void PruneSuppressedControllerChannels(ChannelArray& a_channels)
+		{
+			for (std::uint32_t index = 0; index < a_channels.size();) {
+				if (IsSuppressedControllerChannel(a_channels[index].get())) {
+					a_channels.erase(a_channels.begin() + index);
+				} else {
+					++index;
+				}
+			}
 		}
 
 		using BShkbAnimationGraphCtor_t =
@@ -419,22 +426,6 @@ namespace TF3DHud::Animations
 			return false;
 		}
 
-		[[nodiscard]] const char* SyncPointTypeName(const SyncPointType a_type)
-		{
-			switch (a_type) {
-			case SyncPointType::kLeft:
-				return "SyncLeft";
-			case SyncPointType::kRight:
-				return "SyncRight";
-			case SyncPointType::kSecondLeft:
-				return "SyncLeft2";
-			case SyncPointType::kSecondRight:
-				return "SyncRight2";
-			default:
-				return "unknown";
-			}
-		}
-
 		[[nodiscard]] bool TryGetNextLiveSyncPointTarget(
 			const RE::BGSAnimationSystemUtils::ActiveSyncInfo& a_liveInfo,
 			SyncPointType& a_type,
@@ -611,40 +602,6 @@ namespace TF3DHud::Animations
 				a_values[index] = static_cast<std::uint64_t>(data[index].identifier);
 			}
 		}
-
-		struct GraphBoneRefDiagnostic
-		{
-			void* target;
-			std::int32_t boneIndex;
-			std::int32_t pad;
-		};
-		static_assert(sizeof(GraphBoneRefDiagnostic) == 0x10);
-
-		struct GraphTargetPoseEntry
-		{
-			void* target{ nullptr };
-			std::int32_t boneIndex{ -1 };
-			RE::NiTransform local{ RE::NiTransform::IDENTITY };
-		};
-
-		struct GraphTargetPoseSnapshot
-		{
-			std::uint16_t generatedBoneCount{ 0 };
-			std::uint32_t refs{ 0 };
-			std::uint32_t directRefs{ 0 };
-			std::uint32_t flattenedRefs{ 0 };
-			std::uint32_t nodeBackedFlattenedRefs{ 0 };
-			std::uint32_t nullRefs{ 0 };
-			std::uint64_t localHash{ 0xCBF29CE484222325ull };
-			std::uint64_t generatedPoseHash{ 0xCBF29CE484222325ull };
-			std::vector<GraphTargetPoseEntry> entries;
-			bool generateHavokBones{ false };
-			bool syncBlocked{ false };
-			bool behaviorReady{ false };
-			bool hasRagdollInterface{ false };
-			bool hasPhysicsWorld{ false };
-			bool hasGeneratedPose{ false };
-		};
 
 		struct ActiveNodeArrayDiagnostic
 		{
@@ -923,91 +880,6 @@ namespace TF3DHud::Animations
 				reinterpret_cast<std::byte*>(a_graph) + 0x68);
 		}
 
-		void MixPoseHash(std::uint64_t& a_hash, const std::uint64_t a_value)
-		{
-			a_hash ^= a_value + 0x9E3779B97F4A7C15ull + (a_hash << 6) + (a_hash >> 2);
-		}
-
-		void HashFloat(std::uint64_t& a_hash, const float a_value)
-		{
-			std::uint32_t bits = 0;
-			static_assert(sizeof(bits) == sizeof(a_value));
-			std::memcpy(std::addressof(bits), std::addressof(a_value), sizeof(bits));
-			MixPoseHash(a_hash, bits);
-		}
-
-		void HashTransform(std::uint64_t& a_hash, const RE::NiTransform& a_transform)
-		{
-			for (std::uint32_t row = 0; row < 3; ++row) {
-				for (std::uint32_t column = 0; column < 4; ++column) {
-					HashFloat(a_hash, a_transform.rotate.entry[row][column]);
-				}
-			}
-			HashFloat(a_hash, a_transform.translate.x);
-			HashFloat(a_hash, a_transform.translate.y);
-			HashFloat(a_hash, a_transform.translate.z);
-			HashFloat(a_hash, a_transform.scale);
-		}
-
-		void HashBytes(std::uint64_t& a_hash, const void* a_data, const std::size_t a_size)
-		{
-			const auto* bytes = static_cast<const std::uint8_t*>(a_data);
-			for (std::size_t index = 0; index < a_size; ++index) {
-				a_hash ^= bytes[index];
-				a_hash *= 0x100000001B3ull;
-			}
-		}
-
-		[[nodiscard]] bool ResolveGraphTargetLocalTransform(
-			const GraphBoneRefDiagnostic& a_ref,
-			RE::NiTransform const*& a_transform)
-		{
-			a_transform = nullptr;
-			if (!a_ref.target) {
-				return false;
-			}
-
-			if (a_ref.boneIndex < 0) {
-				const auto* object = reinterpret_cast<const RE::NiAVObject*>(a_ref.target);
-				a_transform = std::addressof(object->local);
-				return true;
-			}
-
-			const auto* tree = reinterpret_cast<const RE::BSFlattenedBoneTree*>(a_ref.target);
-			const auto boneIndex = static_cast<std::int32_t>(a_ref.boneIndex);
-			if (!tree->bone || boneIndex >= tree->boneCount || tree->boneCount > 1024) {
-				return false;
-			}
-
-			const auto& bone = tree->bone[boneIndex];
-			if (bone.node) {
-				a_transform = std::addressof(bone.node->local);
-				return true;
-			}
-
-			a_transform = std::addressof(bone.local);
-			return true;
-		}
-
-		[[nodiscard]] std::uint32_t CountChangedGraphTargetLocals(
-			const GraphTargetPoseSnapshot& a_before,
-			const GraphTargetPoseSnapshot& a_after)
-		{
-			const auto count = (std::min)(a_before.entries.size(), a_after.entries.size());
-			std::uint32_t changed = 0;
-			for (std::size_t index = 0; index < count; ++index) {
-				const auto& before = a_before.entries[index];
-				const auto& after = a_after.entries[index];
-				if (before.target != after.target || before.boneIndex != after.boneIndex) {
-					continue;
-				}
-				if (before.local != after.local) {
-					++changed;
-				}
-			}
-			return changed;
-		}
-
 		class PreviewAnimationGraphHolder final :
 			public RE::IAnimationGraphManagerHolder
 		{
@@ -1070,35 +942,6 @@ namespace TF3DHud::Animations
 			{
 				UnregisterLiveEventSource();
 				UnregisterPreviewEventSource();
-				if (liveRequestAcceptedCount_ > 0 || liveRequestRejectedCount_ > 0 || liveRequestUnmirroredCount_ > 0) {
-					REX::INFO(
-						"Animations: live graph requests accepted={}, rejected={}, acceptedUnmirrored={}",
-						liveRequestAcceptedCount_,
-						liveRequestRejectedCount_,
-						liveRequestUnmirroredCount_);
-				}
-				if (mirroredRequestCount_ > 0) {
-					REX::INFO("Animations: mirrored animation requests={}", mirroredRequestCount_);
-				}
-				if (mirroredEventCount_ > 0) {
-					REX::INFO("Animations: mirrored animation events={}", mirroredEventCount_);
-				}
-				if (previewRequestRejectedCount_ > 0) {
-					REX::INFO("Animations: preview graph rejected mirrored requests={}", previewRequestRejectedCount_);
-				}
-				if (liveEventCount_ > 0) {
-					REX::INFO("Animations: live graph events observed={}", liveEventCount_);
-				}
-				if (previewEventCount_ > 0) {
-					REX::INFO("Animations: preview graph events={}", previewEventCount_);
-				}
-				if (activeClipSyncFrames_ > 0) {
-					REX::INFO(
-						"Animations: active clip sync data frames={}, adjustedFrames={}, maxSpeedAdjust={:.4f}",
-						activeClipSyncFrames_,
-						activeClipSyncAdjustedFrames_,
-						maxActiveClipSpeedAdjust_);
-				}
 				manager_.reset();
 			}
 
@@ -1116,6 +959,11 @@ namespace TF3DHud::Animations
 			bool SetAnimationGraphManagerImpl(const RE::BSTSmartPointer<RE::BSAnimationGraphManager>& a_animGraphMgr) override
 			{
 				manager_ = a_animGraphMgr;
+				if (manager_) {
+					// IDA: BSAnimationGraphManager::UpdateChannels iterates
+					// boundChannel immediately before BShkbAnimationGraph::ReceiveChannelsImpl.
+					PruneSuppressedControllerChannels(manager_->boundChannel);
+				}
 				return true;
 			}
 
@@ -1181,19 +1029,7 @@ namespace TF3DHud::Animations
 					return false;
 				}
 
-				std::uint32_t removed = 0;
-				for (auto it = a_channels.begin(); it != a_channels.end();) {
-					if (IsSuppressedPlayerControllerChannel(it->get())) {
-						it = a_channels.erase(it);
-						++removed;
-					} else {
-						++it;
-					}
-				}
-
-				if (removed != 0) {
-					REX::INFO("Animations: suppressed player controller animation channels count={}", removed);
-				}
+				PruneSuppressedControllerChannels(a_channels);
 				return true;
 			}
 
@@ -1305,7 +1141,6 @@ namespace TF3DHud::Animations
 				auto* const tes = RE::TES::GetSingleton();
 				auto* const parentCell = sourceActor_->GetParentCell();
 				if (!tes || !parentCell) {
-					REX::WARN("Animations: initial subgraphs skipped: native cell priority unavailable");
 					return false;
 				}
 
@@ -1326,16 +1161,6 @@ namespace TF3DHud::Animations
 					std::addressof(weaponSubgraphHandles_),
 					std::addressof(weaponSubgraphIds_));
 
-				REX::INFO(
-					"Animations: subgraphs requested priority={}, defaultResult={}, defaultHandles={}, defaultIds={}, weaponResult={}, weaponHandles={}, weaponIds={}",
-					priority,
-					defaultRequested,
-					defaultSubgraphHandles_.size(),
-					defaultSubgraphIds_.size(),
-					weaponRequested,
-					weaponSubgraphHandles_.size(),
-					weaponSubgraphIds_.size());
-
 				return defaultRequested || weaponRequested;
 			}
 
@@ -1346,41 +1171,19 @@ namespace TF3DHud::Animations
 				}
 
 				auto graph = GetActivePreviewGraph();
-				const auto graphAddress = reinterpret_cast<std::uintptr_t>(graph.get());
 				const auto behavior = graph ?
 					*reinterpret_cast<HkbBehaviorGraphDiagnostic* const*>(
 						reinterpret_cast<const std::byte*>(graph.get()) + 0x378) :
 					nullptr;
-				const auto swapData = graph ?
-					*reinterpret_cast<BehaviorGraphSwapDataDiagnostic* const*>(
-						reinterpret_cast<const std::byte*>(graph.get()) + 0x3A0) :
-					nullptr;
-
-				REX::INFO(
-					"Animations: preview graph manager activate precheck manager={:X}, graphs={}, activeGraph={}, graph={:X}, behavior={:X}, behaviorActive={}, behaviorLinked={}, updateActiveNodes={}, stateOrTransitionChanged={}, swapData={:X}, swapSlots={}",
-					reinterpret_cast<std::uintptr_t>(manager_.get()),
-					manager_->graph.size(),
-					manager_->activeGraph,
-					graphAddress,
-					reinterpret_cast<std::uintptr_t>(behavior),
-					behavior && behavior->isActive,
-					behavior && behavior->isLinked,
-					behavior && behavior->updateActiveNodes,
-					behavior && behavior->stateOrTransitionChanged,
-					reinterpret_cast<std::uintptr_t>(swapData),
-					swapData ? swapData->size : 0);
 
 				// IDA: BShkbAnimationGraph::ActivateImpl returns false when
 				// graph+0x378 is null or hkbBehaviorGraph+0x1AA is already set.
 				// Already-active is not a failed activation path.
 				if (behavior && behavior->isActive) {
-					REX::INFO("Animations: preview graph manager activate skipped: behavior graph is already active");
 					return true;
 				}
 
-				const bool activated = g_activateAnimationGraphManager(manager_.get());
-				REX::INFO("Animations: preview graph manager activate result={}", activated);
-				return activated;
+				return g_activateAnimationGraphManager(manager_.get());
 			}
 
 			bool IsDefaultSubgraphLinked() const
@@ -1448,15 +1251,6 @@ namespace TF3DHud::Animations
 				const bool interpreted = g_interpretAction(actionData.data());
 				const auto& eventName = *reinterpret_cast<const RE::BSFixedString*>(actionData.data() + 0x28);
 				const bool processed = interpreted && !eventName.empty() && NotifyAnimationGraphImpl(eventName);
-				if (!initialStateEventLogged_) {
-					initialStateEventLogged_ = true;
-					REX::INFO(
-						"Animations: preview initial state action='{}', event='{}', interpreted={}, processed={}",
-						a_action->GetFormEditorID(),
-						eventName.c_str(),
-						interpreted,
-						processed);
-				}
 
 				g_destroyTESActionData(actionData.data());
 				return processed;
@@ -1491,101 +1285,6 @@ namespace TF3DHud::Animations
 
 				if (processed) {
 					initialStateApplied_ = true;
-				} else if (!initialStateFailureLogged_) {
-					initialStateFailureLogged_ = true;
-					REX::WARN("Animations: preview initial state action did not produce an accepted graph event");
-				}
-			}
-
-			void LogPreviewSubgraphSwapState(const char* a_reason)
-			{
-				auto graph = GetActivePreviewGraph();
-				if (!graph) {
-					return;
-				}
-
-				auto* const swapData = *reinterpret_cast<BehaviorGraphSwapDataDiagnostic**>(
-					reinterpret_cast<std::byte*>(graph.get()) + 0x3A0);
-				if (!swapData) {
-					if (!previewSubgraphSwapDataMissingLogged_) {
-						previewSubgraphSwapDataMissingLogged_ = true;
-						REX::INFO(
-							"Animations: preview subgraph swap data missing graph={:X}, reason={}",
-							reinterpret_cast<std::uintptr_t>(graph.get()),
-							a_reason);
-					}
-					return;
-				}
-
-				std::uint32_t linkedSlots = 0;
-				std::uint32_t requestedSlots = 0;
-				std::uint32_t pendingRemoveSlots = 0;
-				std::uint32_t useCountTotal = 0;
-				if (swapData->entries) {
-					for (std::uint32_t index = 0; index < swapData->size; ++index) {
-						const auto& entry = swapData->entries[index];
-						if (entry.sharedData) {
-							++linkedSlots;
-						}
-						if (entry.useCount != 0) {
-							++requestedSlots;
-							useCountTotal += entry.useCount;
-						}
-						if (entry.pendingRemove != 0) {
-							++pendingRemoveSlots;
-						}
-					}
-				}
-
-				if (previewSubgraphSwapStateLogged_ &&
-					previewSubgraphSwapSlots_ == swapData->size &&
-					previewSubgraphSwapLinkedSlots_ == linkedSlots &&
-					previewSubgraphSwapRequestedSlots_ == requestedSlots &&
-					previewSubgraphSwapPendingRemoveSlots_ == pendingRemoveSlots &&
-					previewSubgraphSwapUseCountTotal_ == useCountTotal) {
-					return;
-				}
-
-				previewSubgraphSwapStateLogged_ = true;
-				previewSubgraphSwapSlots_ = swapData->size;
-				previewSubgraphSwapLinkedSlots_ = linkedSlots;
-				previewSubgraphSwapRequestedSlots_ = requestedSlots;
-				previewSubgraphSwapPendingRemoveSlots_ = pendingRemoveSlots;
-				previewSubgraphSwapUseCountTotal_ = useCountTotal;
-
-				REX::INFO(
-					"Animations: preview subgraph swap state reason={}, graph={:X}, data={:X}, slots={}, requestedSlots={}, linkedSlots={}, pendingRemoveSlots={}, useCountTotal={}, stateMachine={:X}, behavior={:X}, defaultHandles={}, weaponHandles={}",
-					a_reason,
-					reinterpret_cast<std::uintptr_t>(graph.get()),
-					reinterpret_cast<std::uintptr_t>(swapData),
-					swapData->size,
-					requestedSlots,
-					linkedSlots,
-					pendingRemoveSlots,
-					useCountTotal,
-					reinterpret_cast<std::uintptr_t>(swapData->stateMachine),
-					reinterpret_cast<std::uintptr_t>(swapData->behavior),
-					defaultSubgraphHandles_.size(),
-					weaponSubgraphHandles_.size());
-
-				if (swapData->entries) {
-					for (std::uint32_t index = 0; index < swapData->size && index < 4; ++index) {
-						const auto& entry = swapData->entries[index];
-						const auto rootGenerator = entry.sharedData ?
-							*reinterpret_cast<const std::uintptr_t*>(
-								reinterpret_cast<const std::byte*>(entry.sharedData) + 0xC0) :
-							0;
-						const auto* const rootName = rootGenerator ? ReadTaggedString(rootGenerator + 0x38) : "";
-						REX::INFO(
-							"Animations: preview subgraph swap slot[{}] handle={:X}, sharedData={:X}, root={:X}, rootName='{}', useCount={}, pendingRemove={}",
-							index,
-							entry.handle.handle,
-							reinterpret_cast<std::uintptr_t>(entry.sharedData),
-							rootGenerator,
-							SafeString(rootName),
-							entry.useCount,
-							entry.pendingRemove);
-					}
 				}
 			}
 
@@ -1671,124 +1370,6 @@ namespace TF3DHud::Animations
 				}
 			}
 
-			[[nodiscard]] GraphTargetPoseSnapshot CaptureGraphTargetPoseSnapshot() const
-			{
-				GraphTargetPoseSnapshot snapshot;
-				auto graph = GetActivePreviewGraph();
-				if (!graph) {
-					return snapshot;
-				}
-
-				const auto* const graphBase = reinterpret_cast<const std::byte*>(graph.get());
-				constexpr std::uint32_t kMaxExpectedGraphTargets = 1024;
-				snapshot.generatedBoneCount = *reinterpret_cast<const std::uint16_t*>(graphBase + 0x3C0);
-				snapshot.generateHavokBones = *reinterpret_cast<const std::uint8_t*>(graphBase + 0x3C6) != 0;
-				snapshot.hasRagdollInterface = *reinterpret_cast<void* const*>(graphBase + 0x210) != nullptr;
-				snapshot.hasPhysicsWorld = *reinterpret_cast<void* const*>(graphBase + 0x3B8) != nullptr;
-
-				// IDA: GenerateImpl passes
-				// **(graph+0x1F8) + *(int16_t*)(**(graph+0x1F8)+0x34)
-				// as the hkQsTransformf pose base to BShkbUtils::SyncSceneGraphs.
-				const auto* poseStorageOwner = *reinterpret_cast<const std::byte* const*>(graphBase + 0x1F8);
-				if (poseStorageOwner && snapshot.generatedBoneCount <= kMaxExpectedGraphTargets) {
-					const auto* poseStorage = *reinterpret_cast<const std::byte* const*>(poseStorageOwner);
-					if (poseStorage) {
-						const auto poseOffset = *reinterpret_cast<const std::int16_t*>(poseStorage + 0x34);
-						HashBytes(snapshot.generatedPoseHash, poseStorage + poseOffset, snapshot.generatedBoneCount * 0x30ull);
-						snapshot.hasGeneratedPose = true;
-					}
-				}
-
-				// IDA: GenerateImpl checks *(graph+0x378)+0x1AA before pose generation.
-				const auto* behaviorState = *reinterpret_cast<void* const*>(graphBase + 0x378);
-				snapshot.behaviorReady =
-					behaviorState &&
-					*reinterpret_cast<const std::uint8_t*>(
-						reinterpret_cast<const std::byte*>(behaviorState) + 0x1AA) != 0;
-
-				const auto* refs = *reinterpret_cast<GraphBoneRefDiagnostic* const*>(graphBase + 0x2A0);
-				const auto count = *reinterpret_cast<const std::uint32_t*>(graphBase + 0x2B0);
-				if (!refs || count > kMaxExpectedGraphTargets) {
-					return snapshot;
-				}
-
-				snapshot.refs = count;
-				snapshot.entries.reserve(count);
-				for (std::uint32_t index = 0; index < count; ++index) {
-					const auto& ref = refs[index];
-					if (!ref.target) {
-						++snapshot.nullRefs;
-						continue;
-					}
-
-					if (ref.boneIndex < 0) {
-						++snapshot.directRefs;
-					} else {
-						++snapshot.flattenedRefs;
-						const auto* tree = reinterpret_cast<const RE::BSFlattenedBoneTree*>(ref.target);
-						const auto boneIndex = static_cast<std::int32_t>(ref.boneIndex);
-						if (tree->bone && boneIndex < tree->boneCount && tree->boneCount <= 1024 &&
-							tree->bone[boneIndex].node) {
-							++snapshot.nodeBackedFlattenedRefs;
-						}
-					}
-
-					const RE::NiTransform* transform = nullptr;
-					if (!ResolveGraphTargetLocalTransform(ref, transform) || !transform) {
-						++snapshot.nullRefs;
-						continue;
-					}
-
-					HashTransform(snapshot.localHash, *transform);
-					snapshot.entries.push_back({ ref.target, ref.boneIndex, *transform });
-				}
-				return snapshot;
-			}
-
-			void LogPoseWritebackDiagnostic(
-				const GraphTargetPoseSnapshot& a_before,
-				const GraphTargetPoseSnapshot& a_after,
-				const bool a_updated)
-			{
-				const auto changedLocals = CountChangedGraphTargetLocals(a_before, a_after);
-				const bool poseChanged = changedLocals != 0 || a_before.localHash != a_after.localHash;
-				if (poseWritebackDiagnosticLogs_ >= 16 &&
-					poseChanged == poseWritebackChanging_ &&
-					a_before.generatedBoneCount == poseWritebackGeneratedBoneCount_ &&
-					a_after.refs == poseWritebackRefs_) {
-					return;
-				}
-
-				if (poseWritebackDiagnosticLogs_ >= 16) {
-					return;
-				}
-
-				++poseWritebackDiagnosticLogs_;
-				poseWritebackChanging_ = poseChanged;
-				poseWritebackGeneratedBoneCount_ = a_before.generatedBoneCount;
-				poseWritebackRefs_ = a_after.refs;
-				REX::INFO(
-					"Animations: pose writeback update={}, changed={}, changedLocals={}, beforeHash={:016X}, afterHash={:016X}, generatedPoseHash={:016X}->{:016X}, hasGeneratedPose={}, generatedBones={}, refs={}, directRefs={}, flattenedRefs={}, nodeBackedFlattenedRefs={}, nullRefs={}, behaviorReady={}, generateHavokBones={}, ragdollInterface={}, physicsWorld={}",
-					a_updated,
-					poseChanged,
-					changedLocals,
-					a_before.localHash,
-					a_after.localHash,
-					a_before.generatedPoseHash,
-					a_after.generatedPoseHash,
-					a_after.hasGeneratedPose,
-					a_before.generatedBoneCount,
-					a_after.refs,
-					a_after.directRefs,
-					a_after.flattenedRefs,
-					a_after.nodeBackedFlattenedRefs,
-					a_after.nullRefs,
-					a_before.behaviorReady,
-					a_before.generateHavokBones,
-					a_before.hasRagdollInterface,
-					a_before.hasPhysicsWorld);
-			}
-
 			void SyncLiveEventSource()
 			{
 				RE::BSTSmartPointer<RE::BSAnimationGraphManager> sourceManager;
@@ -1820,23 +1401,11 @@ namespace TF3DHud::Animations
 				eventSource->RegisterSink(std::addressof(liveAnimationEventSink_));
 				liveEventGraph_ = std::move(liveGraph);
 				liveEventSource_ = eventSource;
-				REX::INFO(
-					"Animations: registered live graph event source graph={:X}",
-					reinterpret_cast<std::uintptr_t>(liveEventGraph_.get()));
 			}
 
 			void RecordLiveAnimationEvent(const RE::BSAnimationGraphEvent& a_event)
 			{
 				if (!a_event.tag.empty()) {
-					++liveEventCount_;
-					if (graphEventDiagnosticLogs_ < kMaxGraphEventDiagnosticLogs) {
-						++graphEventDiagnosticLogs_;
-						REX::INFO(
-							"Animations: live graph event tag='{}', payload='{}'",
-							a_event.tag.c_str(),
-							a_event.payload.c_str());
-					}
-
 					// BShkbAnimationGraph::BroadcastQueuedEventsImpl emits graph events
 					// after Generate(). Root swap selection uses normal graph events,
 					// so replay whitelisted live graph events through the preview graph
@@ -1855,31 +1424,12 @@ namespace TF3DHud::Animations
 				}
 
 				const bool accepted = a_result != 0;
-				if (accepted) {
-					++liveRequestAcceptedCount_;
-				} else {
-					++liveRequestRejectedCount_;
-				}
-
 				const bool whitelisted = IsLiveMirrorEventWhitelisted(a_eventName);
-				if (requestDiagnosticLogs_ < kMaxGraphRequestDiagnosticLogs && (accepted || whitelisted)) {
-					++requestDiagnosticLogs_;
-					REX::INFO(
-						"Animations: live graph request event='{}', accepted={}, whitelisted={}",
-						a_eventName,
-						accepted,
-						whitelisted);
-				}
-
 				if (!accepted || !whitelisted) {
-					if (accepted) {
-						++liveRequestUnmirroredCount_;
-					}
 					return;
 				}
 
 				QueueMirroredEvent(RE::BSFixedString(a_eventName));
-				++mirroredRequestCount_;
 			}
 
 			void QueueMirroredEvent(const RE::BSFixedString& a_eventName)
@@ -1904,35 +1454,14 @@ namespace TF3DHud::Animations
 				}
 
 				for (const auto& eventName : events) {
-					const bool processed = NotifyAnimationGraphImpl(eventName);
-					if (requestDiagnosticLogs_ < kMaxGraphRequestDiagnosticLogs) {
-						++requestDiagnosticLogs_;
-						REX::INFO(
-							"Animations: preview graph request event='{}', accepted={}",
-							eventName.c_str(),
-							processed);
-					}
-
-					if (processed) {
-						++mirroredEventCount_;
-					} else {
-						++previewRequestRejectedCount_;
-					}
+					(void)NotifyAnimationGraphImpl(eventName);
 				}
 			}
 
 			void RecordPreviewAnimationEvent(const RE::BSAnimationGraphEvent& a_event)
 			{
 				if (!a_event.tag.empty()) {
-					++previewEventCount_;
 					ApplyPreviewCullBoneEvent(a_event);
-					if (graphEventDiagnosticLogs_ < kMaxGraphEventDiagnosticLogs) {
-						++graphEventDiagnosticLogs_;
-						REX::INFO(
-							"Animations: preview graph event tag='{}', payload='{}'",
-							a_event.tag.c_str(),
-							a_event.payload.c_str());
-					}
 				}
 			}
 
@@ -1952,11 +1481,7 @@ namespace TF3DHud::Animations
 					return;
 				}
 
-				REX::INFO(
-					"Animations: preview {} payload='{}', targets={}",
-					cull ? "CullBone" : "UncullBone",
-					a_event.payload.c_str(),
-					targets);
+				(void)targets;
 			}
 
 			void ApplyPreviewWeaponVisibilityEvent(const RE::BSFixedString& a_eventName)
@@ -1970,12 +1495,7 @@ namespace TF3DHud::Animations
 					return;
 				}
 
-				const auto targets = SetPreviewBoneCulled(RE::BSFixedString("Weapon"), cull);
-				REX::INFO(
-					"Animations: preview weapon bone {} event='{}', targets={}",
-					cull ? "culled" : "unculled",
-					a_eventName.c_str(),
-					targets);
+				(void)SetPreviewBoneCulled(RE::BSFixedString("Weapon"), cull);
 			}
 
 			std::uint32_t SetPreviewBoneCulled(const RE::BSFixedString& a_boneName, const bool a_cull)
@@ -2056,87 +1576,19 @@ namespace TF3DHud::Animations
 				(void)SetPreviewBoneCulled(RE::BSFixedString("Weapon"), false);
 			}
 
-			void LogActiveSyncInfoDiagnostic(
-				const char* a_label,
-				const bool a_active,
-				const RE::BGSAnimationSystemUtils::ActiveSyncInfo& a_info)
-			{
-				if (activeSyncDiagnosticLogs_ >= kMaxActiveSyncDiagnosticLogs) {
-					return;
-				}
-
-				++activeSyncDiagnosticLogs_;
-				REX::INFO(
-					"Animations: active sync {} active={}, time={:.4f}/{:.4f}, speed={:.4f}, syncPoints={}",
-					a_label,
-					a_active,
-					a_info.currentAnimTime,
-					a_info.totalAnimTime,
-					a_info.animSpeedMult,
-					CountSyncPoints(a_info));
-
-				std::uint32_t pointIndex = 0;
-				for (const auto& syncPoint : a_info.otherSyncInfo) {
-					if (pointIndex >= kMaxActiveSyncPointLogsPerInfo) {
-						break;
-					}
-
-					REX::INFO(
-						"Animations: active sync {} point[{}] tag='{}', time={:.4f}",
-						a_label,
-						pointIndex,
-						syncPoint.first.c_str(),
-						syncPoint.second);
-					++pointIndex;
-				}
-			}
-
 			float GetActiveClipSynchronizedDeltaTime(const float a_deltaTime)
 			{
 				RE::BGSAnimationSystemUtils::ActiveSyncInfo liveInfo;
 				RE::BGSAnimationSystemUtils::ActiveSyncInfo previewInfo;
 				const bool liveActive = TryGetActiveSyncInfo(sourceHolder_, liveInfo);
 				const bool previewActive = TryGetActiveSyncInfo(this, previewInfo);
-
-				if (liveActive != liveActiveSyncAvailable_ ||
-					previewActive != previewActiveSyncAvailable_) {
-					liveActiveSyncAvailable_ = liveActive;
-					previewActiveSyncAvailable_ = previewActive;
-					REX::INFO(
-						"Animations: active clip sync data status live={}, preview={}",
-						liveActive,
-						previewActive);
-					LogActiveSyncInfoDiagnostic("live", liveActive, liveInfo);
-					LogActiveSyncInfoDiagnostic("preview", previewActive, previewInfo);
-					if (!liveActive || !previewActive) {
-						activeClipSyncAdjustmentLogged_ = false;
-					}
-				}
-
 				if (!liveActive || !previewActive) {
 					return a_deltaTime;
-				}
-
-				++activeClipSyncFrames_;
-				if (!activeClipSyncLogged_) {
-					activeClipSyncLogged_ = true;
-					REX::INFO(
-						"Animations: active clip sync data observed liveTime={:.4f}/{:.4f}, liveSpeed={:.4f}, previewTime={:.4f}/{:.4f}, previewSpeed={:.4f}",
-						liveInfo.currentAnimTime,
-						liveInfo.totalAnimTime,
-						liveInfo.animSpeedMult,
-						previewInfo.currentAnimTime,
-						previewInfo.totalAnimTime,
-						previewInfo.animSpeedMult);
 				}
 
 				SyncPointType syncPointType;
 				float liveTimeUntilSyncPoint = 0.0F;
 				if (!TryGetNextLiveSyncPointTarget(liveInfo, syncPointType, liveTimeUntilSyncPoint)) {
-					if (!activeClipSyncNoTargetLogged_) {
-						activeClipSyncNoTargetLogged_ = true;
-						REX::INFO("Animations: active clip sync has no live sync-point target");
-					}
 					return a_deltaTime;
 				}
 
@@ -2157,21 +1609,6 @@ namespace TF3DHud::Animations
 					return a_deltaTime;
 				}
 
-				++activeClipSyncAdjustedFrames_;
-				const auto absoluteSpeedAdjust = std::fabs(speedAdjust);
-				if (absoluteSpeedAdjust > maxActiveClipSpeedAdjust_) {
-					maxActiveClipSpeedAdjust_ = absoluteSpeedAdjust;
-				}
-				if (!activeClipSyncAdjustmentLogged_) {
-					activeClipSyncAdjustmentLogged_ = true;
-					REX::INFO(
-						"Animations: active clip sync delta adjusted target={}, liveTargetDelta={:.4f}, speedAdjust={:.4f}, updateDelta={:.4f}->{:.4f}",
-						SyncPointTypeName(syncPointType),
-						liveTimeUntilSyncPoint,
-						speedAdjust,
-						a_deltaTime,
-						adjustedDeltaTime);
-				}
 				return adjustedDeltaTime;
 			}
 
@@ -2319,39 +1756,7 @@ namespace TF3DHud::Animations
 			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> defaultSubgraphIds_;
 			RE::BSTSmallArray<RE::SubgraphHandle, 2> weaponSubgraphHandles_;
 			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> weaponSubgraphIds_;
-			std::uint32_t liveRequestAcceptedCount_{ 0 };
-			std::uint32_t liveRequestRejectedCount_{ 0 };
-			std::uint32_t liveRequestUnmirroredCount_{ 0 };
-			std::uint32_t mirroredRequestCount_{ 0 };
-			std::uint32_t mirroredEventCount_{ 0 };
-			std::uint32_t previewRequestRejectedCount_{ 0 };
-			std::uint32_t liveEventCount_{ 0 };
-			std::uint32_t previewEventCount_{ 0 };
-			std::uint32_t activeClipSyncFrames_{ 0 };
-			std::uint32_t activeClipSyncAdjustedFrames_{ 0 };
-			std::uint32_t requestDiagnosticLogs_{ 0 };
-			std::uint32_t graphEventDiagnosticLogs_{ 0 };
-			std::uint32_t activeSyncDiagnosticLogs_{ 0 };
-			std::uint32_t poseWritebackDiagnosticLogs_{ 0 };
-			std::uint32_t previewSubgraphSwapSlots_{ 0 };
-			std::uint32_t previewSubgraphSwapLinkedSlots_{ 0 };
-			std::uint32_t previewSubgraphSwapRequestedSlots_{ 0 };
-			std::uint32_t previewSubgraphSwapPendingRemoveSlots_{ 0 };
-			std::uint32_t previewSubgraphSwapUseCountTotal_{ 0 };
-			std::uint32_t poseWritebackRefs_{ 0 };
-			std::uint16_t poseWritebackGeneratedBoneCount_{ 0 };
-			float maxActiveClipSpeedAdjust_{ 0.0F };
-			bool liveActiveSyncAvailable_{ false };
-			bool previewActiveSyncAvailable_{ false };
-			bool activeClipSyncLogged_{ false };
-			bool activeClipSyncAdjustmentLogged_{ false };
-			bool activeClipSyncNoTargetLogged_{ false };
 			bool initialStateApplied_{ false };
-			bool initialStateEventLogged_{ false };
-			bool initialStateFailureLogged_{ false };
-			bool previewSubgraphSwapStateLogged_{ false };
-			bool previewSubgraphSwapDataMissingLogged_{ false };
-			bool poseWritebackChanging_{ false };
 
 			[[nodiscard]] RE::BSTSmartPointer<RE::BShkbAnimationGraph> GetActivePreviewGraph() const
 			{
@@ -2538,49 +1943,18 @@ namespace TF3DHud::Animations
 				return false;
 			}
 
-			std::unordered_set<std::string> graphBones;
-			CollectGraphWrittenBoneNames(*holder, graphBones);
 			const auto targetStats = InspectGraphTargets(*holder, a_previewRoot);
 			if (targetStats.refs == 0) {
 				LogDiagnostic("manager discarded: graph target refs are empty for project '" + project + "'");
 				return false;
 			}
-			REX::INFO(
-				"Animations: manager created project='{}', targetRoot={:X}, graphRoot={:X}, graphWrittenBones={}, graphTargets={}, directTargets={}, flattenedTargets={}, outsidePreviewRoot={}",
-				project,
-				reinterpret_cast<std::uintptr_t>(std::addressof(a_previewRoot)),
-				reinterpret_cast<std::uintptr_t>(holder->TargetGraphRoot()),
-				graphBones.size(),
-				targetStats.refs,
-				targetStats.directRefs,
-				targetStats.flattenedRefs,
-				targetStats.outsideExpectedRoot);
-			if (targetStats.outsideExpectedRoot != 0) {
-				REX::WARN(
-					"Animations: preview graph has {} target refs outside preview root",
-					targetStats.outsideExpectedRoot);
-				for (std::uint32_t index = 0; index < targetStats.issueCount; ++index) {
-					const auto& issue = targetStats.issues[index];
-					REX::WARN(
-						"Animations: preview graph target issue[{}] target={:X}, boneIndex={}, name='{}', reason='{}'",
-						index,
-						issue.target,
-						issue.boneIndex,
-						issue.name.data(),
-						issue.reason.data());
-				}
-			}
 			holder->PrepareGraphManagerForSubgraphs();
-			if (!holder->RequestInitialSubgraphs()) {
-				REX::WARN("Animations: initial default/weapon subgraph requests returned false");
-			}
+			(void)holder->RequestInitialSubgraphs();
 			holder->PrepareGraphManagerForSubgraphs();
 			if (!holder->ActivatePreviewGraphManager()) {
 				LogDiagnostic("manager discarded: Activate failed for project '" + project + "'");
 				return false;
 			}
-			holder->LogPreviewSubgraphSwapState("after request");
-
 			g_project = project;
 			g_liveSubgraphSignature = liveSubgraphSignature;
 			g_holder = std::move(holder);
@@ -2610,11 +1984,7 @@ namespace TF3DHud::Animations
 		const auto previewRootLocal = a_previewRoot.GetLocalTransform();
 		const auto updateDelta = g_holder->GetActiveClipSynchronizedDeltaTime(a_deltaTime);
 
-		const auto beforePose = g_holder->CaptureGraphTargetPoseSnapshot();
 		const bool updated = g_updateAnimationGraphManagerFloat(g_holder.get(), updateDelta);
-		const auto afterPose = g_holder->CaptureGraphTargetPoseSnapshot();
-		g_holder->LogPoseWritebackDiagnostic(beforePose, afterPose, updated);
-		g_holder->LogPreviewSubgraphSwapState("after update");
 
 		a_previewRoot.SetLocalTransform(previewRootLocal);
 		RE::NiUpdateData niUpdateData;
