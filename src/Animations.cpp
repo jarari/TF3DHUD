@@ -74,18 +74,10 @@ namespace TF3DHud::Animations
 		constexpr std::size_t kBShkbAnimationGraphAlignment = 0x10;
 		constexpr auto kLiveMirrorEventWhitelist = std::to_array<std::string_view>({
 			"reloadStart",
-			"reloadEnd",
-			"reloadComplete",
 			"reloadStateEnter",
 			"reloadStateExit",
-			"reloadStartSlave",
-			"reloadEndSlave",
 			"reloadStartSlaveLoop",
-			"InjuredDownReloadStart",
 			"reloadReserveStart",
-			"weaponFire",
-			"weaponFireEffect",
-			"fireSingle",
 			"attackStart",
 			"attackStartAuto",
 			"attackRelease",
@@ -103,6 +95,7 @@ namespace TF3DHud::Animations
 			"blockStart",
 			"weapEquip",
 			"weapUnequip",
+			"Unequip",
 			"weaponDraw",
 			"weaponSheathe",
 			"BeginWeaponDraw",
@@ -111,15 +104,12 @@ namespace TF3DHud::Animations
 			"g_weapForceEquipInstant",
 			"weaponAttach",
 			"weaponDetach",
-			"AnimObjDraw",
-			"AnimObjUnequip",
 			"rifleSightedStart",
 			"rifleSightedEnd",
 			"rifleSightedStartOver",
 			"sightedStateEnter",
 			"sightedStateExit",
 			"UpdateSighted",
-			"STSAim",
 			"jumpStart",
 			"jumpFall",
 			"jumpLand",
@@ -127,12 +117,6 @@ namespace TF3DHud::Animations
 			"jumpEnd",
 			"JumpUp",
 			"JumpDown",
-			"SprintJumpStart",
-			"SprintJumpStop",
-			"MoveStart",
-			"MoveStop",
-			"SprintStart",
-			"SprintStop",
 			"sneakStart",
 			"sneakStop",
 			"sneakStateEnter",
@@ -154,11 +138,6 @@ namespace TF3DHud::Animations
 			"iAttackState",
 			"CurrentJumpState",
 			"iIsInSneak",
-			"iSyncSneakWalkRun",
-			"iSyncSprintState",
-			"iSyncIdleLocomotion",
-			"iSyncTurnState",
-			"iSyncDirection",
 		});
 
 		constexpr auto kBoolGraphVariableWhitelist = std::to_array<std::string_view>({
@@ -183,16 +162,16 @@ namespace TF3DHud::Animations
 			"AimWobbleSpeedMult",
 		});
 
-		constexpr auto kSuppressedControllerVariables = std::to_array<std::string_view>({
+		constexpr auto kPreviewSuppressedAnimationChannels = std::to_array<std::string_view>({
+			"Direction",
+			"Speed",
 			"Pitch",
+			"Roll",
+			"TurnDelta",
 			"PitchDelta",
-			"PitchDeltaSmoothed",
-			"fControllerXSum",
-			"fControllerYSum",
-			"fControllerYSmoothed",
-			"fControllerXSmoothed",
-			"fControllerXRaw",
-			"fControllerYRaw",
+			"TurnDeltaSmoothed",
+			"SpeedSmoothed",
+			"DirectionDegrees",
 		});
 
 		template <std::size_t N>
@@ -215,37 +194,6 @@ namespace TF3DHud::Animations
 			// so vanilla event casing such as "WeapEquip" matches the intended
 			// whitelist entry without raw string case heuristics.
 			return ContainsEngineFixedString(RE::BSFixedString(a_event), kLiveMirrorEventWhitelist);
-		}
-
-		[[nodiscard]] RE::BSFixedString GetAnimationChannelName(RE::BSAnimationGraphChannel* a_channel)
-		{
-			if (!a_channel) {
-				return {};
-			}
-
-			return a_channel->variableName;
-		}
-
-		[[nodiscard]] bool IsSuppressedControllerChannel(RE::BSAnimationGraphChannel* a_channel)
-		{
-			return ContainsEngineFixedString(GetAnimationChannelName(a_channel), kSuppressedControllerVariables);
-		}
-
-		[[nodiscard]] bool IsSuppressedControllerVariable(const RE::BSFixedString& a_variable)
-		{
-			return ContainsEngineFixedString(a_variable, kSuppressedControllerVariables);
-		}
-
-		template <class ChannelArray>
-		void PruneSuppressedControllerChannels(ChannelArray& a_channels)
-		{
-			for (std::uint32_t index = 0; index < a_channels.size();) {
-				if (IsSuppressedControllerChannel(a_channels[index].get())) {
-					a_channels.erase(a_channels.begin() + index);
-				} else {
-					++index;
-				}
-			}
 		}
 
 		using BShkbAnimationGraphCtor_t =
@@ -959,11 +907,6 @@ namespace TF3DHud::Animations
 			bool SetAnimationGraphManagerImpl(const RE::BSTSmartPointer<RE::BSAnimationGraphManager>& a_animGraphMgr) override
 			{
 				manager_ = a_animGraphMgr;
-				if (manager_) {
-					// IDA: BSAnimationGraphManager::UpdateChannels iterates
-					// boundChannel immediately before BShkbAnimationGraph::ReceiveChannelsImpl.
-					PruneSuppressedControllerChannels(manager_->boundChannel);
-				}
 				return true;
 			}
 
@@ -1029,7 +972,16 @@ namespace TF3DHud::Animations
 					return false;
 				}
 
-				PruneSuppressedControllerChannels(a_channels);
+				for (auto it = a_channels.begin(); it != a_channels.end();) {
+					const auto& channel = *it;
+					if (channel &&
+						ContainsEngineFixedString(channel->variableName, kPreviewSuppressedAnimationChannels)) {
+						it = a_channels.erase(it);
+					} else {
+						++it;
+					}
+				}
+
 				return true;
 			}
 
@@ -1057,28 +1009,16 @@ namespace TF3DHud::Animations
 
 			bool GetGraphVariableImplFloat(const RE::BSFixedString& a_variable, float& a_out) const override
 			{
-				if (IsSuppressedControllerVariable(a_variable)) {
-					a_out = 0.0F;
-					return true;
-				}
 				return sourceHolder_ && sourceHolder_->GetGraphVariableImplFloat(a_variable, a_out);
 			}
 
 			bool GetGraphVariableImplInt(const RE::BSFixedString& a_variable, std::int32_t& a_out) const override
 			{
-				if (IsSuppressedControllerVariable(a_variable)) {
-					a_out = 0;
-					return true;
-				}
 				return sourceHolder_ && sourceHolder_->GetGraphVariableImplInt(a_variable, a_out);
 			}
 
 			bool GetGraphVariableImplBool(const RE::BSFixedString& a_variable, bool& a_out) const override
 			{
-				if (IsSuppressedControllerVariable(a_variable)) {
-					a_out = false;
-					return true;
-				}
 				return sourceHolder_ && sourceHolder_->GetGraphVariableImplBool(a_variable, a_out);
 			}
 
@@ -1564,6 +1504,14 @@ namespace TF3DHud::Animations
 				}
 			}
 
+			void SyncWeaponCullStateFromLive()
+			{
+				const auto* process = sourceActor_ ? sourceActor_->currentProcess : nullptr;
+				const auto* middleHigh = process ? process->middleHigh : nullptr;
+				const bool cullWeapon = !middleHigh || middleHigh->weaponCullCounter != 0;
+				(void)SetPreviewBoneCulled(RE::BSFixedString("Weapon"), cullWeapon);
+			}
+
 			void ApplyPreviewWeaponDrawState(const std::int32_t a_state)
 			{
 				// IDA: InitializeActorInstant sets iSyncWeaponDrawState=2 while
@@ -1736,6 +1684,7 @@ namespace TF3DHud::Animations
 			{
 				return a_manager && GetLiveSourceManager() == a_manager;
 			}
+			void ResetInitialState() { initialStateApplied_ = false; }
 
 		private:
 			RE::PlayerCharacter* sourceActor_{ nullptr };
@@ -1955,6 +1904,7 @@ namespace TF3DHud::Animations
 				LogDiagnostic("manager discarded: Activate failed for project '" + project + "'");
 				return false;
 			}
+			(void)holder->SetGraphVariableBool("bAimEnabled", false);
 			g_project = project;
 			g_liveSubgraphSignature = liveSubgraphSignature;
 			g_holder = std::move(holder);
@@ -1969,6 +1919,14 @@ namespace TF3DHud::Animations
 		g_lastDiagnostic.clear();
 	}
 
+	void ResetInitialState()
+	{
+		std::scoped_lock lock(g_stateLock);
+		if (g_holder) {
+			g_holder->ResetInitialState();
+		}
+	}
+
 	void Update(RE::PlayerCharacter& a_player, RE::NiAVObject& a_previewRoot, const float a_deltaTime)
 	{
 		std::scoped_lock lock(g_stateLock);
@@ -1980,6 +1938,7 @@ namespace TF3DHud::Animations
 		g_holder->RefreshPendingSubgraphLoads();
 		g_holder->TryApplyInitialAnimationState();
 		g_holder->ProcessMirroredEvents();
+		g_holder->SyncWeaponCullStateFromLive();
 
 		const auto previewRootLocal = a_previewRoot.GetLocalTransform();
 		const auto updateDelta = g_holder->GetActiveClipSynchronizedDeltaTime(a_deltaTime);
