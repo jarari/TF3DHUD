@@ -2384,10 +2384,6 @@ namespace TF3DHud
 				const auto slot = static_cast<RE::BIPED_OBJECT>(i);
 				switch (slot) {
 				case RE::BIPED_OBJECT::kFaceGenHead:
-				case RE::BIPED_OBJECT::kEyes:
-				case RE::BIPED_OBJECT::kBeard:
-				case RE::BIPED_OBJECT::kMouth:
-				case RE::BIPED_OBJECT::kScalp:
 					continue;
 				default:
 					break;
