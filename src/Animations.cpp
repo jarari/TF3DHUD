@@ -16,6 +16,7 @@
 #include "RE/B/BSStringT.h"
 #include "RE/B/BSTArray.h"
 #include "RE/B/BSTEvent.h"
+#include "RE/B/BSTObjectArena.h"
 #include "RE/B/BSTSmartPointer.h"
 #include "RE/I/IAnimationGraphManagerHolder.h"
 #include "RE/M/MiddleHighProcessData.h"
@@ -26,6 +27,7 @@
 #include "RE/P/PlayerCharacter.h"
 #include "RE/S/SubgraphHandle.h"
 #include "RE/S/SubgraphIdentifier.h"
+#include "RE/S/SubGraphIdleRootData.h"
 #include "RE/T/TES.h"
 
 #include <cmath>
@@ -150,8 +152,6 @@ namespace TF3DHud::Animations
 			"IsSneaking",
 			"bIsSneaking",
 			"bEquipOk",
-			"bAimActive",
-			"bAimEnabled",
 		});
 
 		constexpr auto kFloatGraphVariableWhitelist = std::to_array<std::string_view>({
@@ -164,14 +164,75 @@ namespace TF3DHud::Animations
 
 		constexpr auto kPreviewSuppressedAnimationChannels = std::to_array<std::string_view>({
 			"Direction",
+			"DirectionSmoothed",
 			"Speed",
 			"Pitch",
 			"Roll",
 			"TurnDelta",
 			"PitchDelta",
+			"PitchDeltaSmoothed",
 			"TurnDeltaSmoothed",
 			"SpeedSmoothed",
 			"DirectionDegrees",
+			"fControllerXSum",
+			"fControllerYSum",
+		});
+
+		constexpr auto kPreviewNeutralBoolGraphVariables = std::to_array<std::string_view>({
+			"bAimActive",
+			"bAimEnabled",
+			"bAimCaptureEnabled",
+			"bShouldAimHeadTrack",
+			"bSyncDirection",
+			"m_bEnablePitchTwistModifier",
+		});
+
+		constexpr auto kPreviewEnabledBoolGraphVariables = std::to_array<std::string_view>({
+			"bFreezeSpeedUpdate",
+			"DisableCharacterPitch",
+			"bFreezeRotationUpdate",
+		});
+
+		constexpr auto kPreviewNeutralIntGraphVariables = std::to_array<std::string_view>({
+			"iLocomotionSpeedState",
+			"iSyncDirection",
+			"iSyncIdleLocomotion",
+			"iSyncRunDirection",
+			"iSyncSneakWalkRun",
+		});
+
+		constexpr auto kPreviewReadyIntGraphVariables = std::to_array<std::string_view>({
+			"iSyncTurnState",
+		});
+
+		constexpr auto kPreviewNeutralFloatGraphVariables = std::to_array<std::string_view>({
+			"AimHeadingCurrent",
+			"AimPitchCurrent",
+			"BowAimOffsetHeading",
+			"BowAimOffsetPitch",
+			"CamPitch",
+			"CamPitchDamped",
+			"Direction",
+			"DirectionDamped",
+			"DirectionDegrees",
+			"DirectionSmoothed",
+			"Speed",
+			"SpeedDamped",
+			"SpeedSmoothed",
+			"PitchDelta",
+			"PitchDeltaDamped",
+			"PitchDeltaSmoothed",
+			"PitchDeltaSmoothedDamped",
+			"PitchOffset",
+			"TurnDelta",
+			"TurnDeltaDamped",
+			"TurnDeltaSmoothed",
+			"TurnDeltaSmoothedDamped",
+			"TurnDeltaSpeedLimitedDampened",
+			"fControllerXSum",
+			"fControllerYSum",
+			"speedDamped",
+			"pitch",
 		});
 
 		template <std::size_t N>
@@ -194,6 +255,11 @@ namespace TF3DHud::Animations
 			// so vanilla event casing such as "WeapEquip" matches the intended
 			// whitelist entry without raw string case heuristics.
 			return ContainsEngineFixedString(RE::BSFixedString(a_event), kLiveMirrorEventWhitelist);
+		}
+
+		[[nodiscard]] bool IsSuppressedAnimationChannel(const RE::BSAnimationGraphChannel& a_channel)
+		{
+			return ContainsEngineFixedString(a_channel.variableName, kPreviewSuppressedAnimationChannels);
 		}
 
 		using BShkbAnimationGraphCtor_t =
@@ -233,12 +299,21 @@ namespace TF3DHud::Animations
 			float,
 			const SyncPointType&,
 			float&);
-		using RequestActorSubGraph_t = bool(
-			RE::Actor*,
-			RE::BSAnimationGraphManager*,
+		using SubgraphPreloadArena = RE::BSTObjectArena<RE::BSFixedString, RE::BSTObjectArenaScrapAlloc, 32>;
+		using RetrieveSubGraphData_t = bool(
+			void*,
+			std::uint32_t,
+			const RE::SubgraphIdentifier*,
+			RE::BSFixedString*,
+			SubgraphPreloadArena*);
+		using InitializeSubGraph_t = bool(
+			void*,
+			RE::BShkbAnimationGraph*,
+			const RE::BSFixedString*,
+			SubgraphPreloadArena*,
+			SubgraphPreloadArena*,
 			const std::int32_t*,
-			RE::BSTSmallArray<RE::SubgraphHandle, 2>*,
-			RE::BSTSmallArray<RE::SubgraphIdentifier, 2>*);
+			RE::SubgraphHandle*);
 		using ActivateAnimationGraphManager_t = bool(RE::BSAnimationGraphManager*);
 		using GetCellPriority_t = std::int32_t(RE::TES*, const RE::TESObjectCELL*, RE::NiPoint3*);
 		using GetDefaultAction_t = RE::BGSAction*(void);
@@ -265,8 +340,12 @@ namespace TF3DHud::Animations
 		REL::Relocation<CalculateSpeedAdjustToSyncAnimationCycles_t*> g_calculateSpeedAdjustToSyncAnimationCycles{
 			REL::ID{ 552450, 2214290 }
 		};
-		REL::Relocation<RequestActorSubGraph_t*> g_requestDefaultSubGraph{ REL::ID{ 1305500, 2232254 } };
-		REL::Relocation<RequestActorSubGraph_t*> g_requestWeaponSubGraph{ REL::ID{ 973680, 2232255 } };
+		REL::Relocation<RetrieveSubGraphData_t*> g_retrieveSubGraphData{ REL::ID{ 1291992, 2188860 } };
+		// IDA OG 1.10.163: BSBehaviorGraphSwapSingleton::InitializeSubGraph at 0x1416F3890.
+		// The AE ID is not present in the local OG->AE mapping CSV yet.
+		REL::Relocation<InitializeSubGraph_t*> g_initializeSubGraph{ REL::ID(649876) };
+		REL::Relocation<void**> g_behaviorGraphSwapSingleton{ REL::ID(153510) };
+		REL::Relocation<void**> g_animationSubGraphDataSingleton{ REL::ID(1363506) };
 		REL::Relocation<ActivateAnimationGraphManager_t*> g_activateAnimationGraphManager{ REL::ID(950096) };
 		REL::Relocation<GetCellPriority_t*> g_getCellPriority{ REL::ID{ 665767, 2192052 } };
 		REL::Relocation<GetDefaultAction_t*> g_getDefaultObjectForActionInitializeToBaseState{ REL::ID(639576) };
@@ -968,17 +1047,20 @@ namespace TF3DHud::Animations
 			bool CreateAnimationChannels(
 				RE::BSScrapArray<RE::BSTSmartPointer<RE::BSAnimationGraphChannel>>& a_channels) override
 			{
-				if (!sourceHolder_ || !sourceHolder_->CreateAnimationChannels(a_channels)) {
+				if (!sourceHolder_) {
 					return false;
 				}
 
-				for (auto it = a_channels.begin(); it != a_channels.end();) {
-					const auto& channel = *it;
-					if (channel &&
-						ContainsEngineFixedString(channel->variableName, kPreviewSuppressedAnimationChannels)) {
-						it = a_channels.erase(it);
-					} else {
-						++it;
+				// IDA: IAnimationGraphManagerHolder::InitializeGraphManager calls vtable +0x58
+				// to fill this temporary array immediately before RegisterChannels().
+				RE::BSScrapArray<RE::BSTSmartPointer<RE::BSAnimationGraphChannel>> sourceChannels;
+				if (!sourceHolder_->CreateAnimationChannels(sourceChannels)) {
+					return false;
+				}
+
+				for (const auto& channel : sourceChannels) {
+					if (channel && !IsSuppressedAnimationChannel(*channel)) {
+						a_channels.push_back(channel);
 					}
 				}
 
@@ -1072,6 +1154,98 @@ namespace TF3DHud::Animations
 				return g_setAnimationGraphTarget(this, targetGraphRoot_, true);
 			}
 
+			[[nodiscard]] bool LoadMirroredSubgraph(
+				const RE::SubgraphIdentifier& a_identifier,
+				const std::int32_t& a_priority,
+				RE::BSTSmallArray<RE::SubgraphHandle, 2>& a_handles,
+				RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_identifiers)
+			{
+				if (!sourceActor_ || !manager_) {
+					return false;
+				}
+
+				auto graph = GetActivePreviewGraph();
+				if (!graph) {
+					return false;
+				}
+
+				auto* const subGraphData = *g_animationSubGraphDataSingleton;
+				auto* const swapSingleton = *g_behaviorGraphSwapSingleton;
+				if (!subGraphData || !swapSingleton) {
+					return false;
+				}
+
+				auto* race = sourceActor_->GetVisualsRace();
+				if (!race) {
+					race = sourceActor_->race;
+				}
+				if (!race) {
+					return false;
+				}
+
+				RE::BSFixedString rootName;
+				SubgraphPreloadArena preloadFiles;
+				if (!g_retrieveSubGraphData(
+						subGraphData,
+						race->formID,
+						std::addressof(a_identifier),
+						std::addressof(rootName),
+						std::addressof(preloadFiles)) ||
+					rootName.empty()) {
+					return false;
+				}
+
+				SubgraphPreloadArena lowPriorityPreloadFiles;
+				RE::SubgraphHandle handle;
+				if (!g_initializeSubGraph(
+						swapSingleton,
+						graph.get(),
+						std::addressof(rootName),
+						std::addressof(preloadFiles),
+						std::addressof(lowPriorityPreloadFiles),
+						std::addressof(a_priority),
+						std::addressof(handle)) ||
+					handle.handle == 0) {
+					return false;
+				}
+
+				a_handles.push_back(handle);
+				a_identifiers.push_back(a_identifier);
+				return true;
+			}
+
+			[[nodiscard]] bool LoadThirdPersonSubgraphRoots(
+				const RE::MiddleHighProcessData& a_middleHigh,
+				const std::int32_t& a_priority,
+				bool& a_attempted)
+			{
+				bool loaded = false;
+				for (const auto& root : a_middleHigh.subGraphIdleManagerRoots) {
+					if (root.forFirstPerson || root.subGraphID.identifier == 0) {
+						continue;
+					}
+
+					a_attempted = true;
+					// IDA: the live actor requests the default subgraph before the
+					// weapon subgraph, and AIProcess stores resulting idle roots in
+					// request order. We mirror that resolved third-person order only.
+					if (defaultSubgraphIds_.empty()) {
+						loaded |= LoadMirroredSubgraph(
+							root.subGraphID,
+							a_priority,
+							defaultSubgraphHandles_,
+							defaultSubgraphIds_);
+					} else {
+						loaded |= LoadMirroredSubgraph(
+							root.subGraphID,
+							a_priority,
+							weaponSubgraphHandles_,
+							weaponSubgraphIds_);
+					}
+				}
+				return loaded;
+			}
+
 			bool RequestInitialSubgraphs()
 			{
 				if (!sourceActor_ || !sourceActor_->currentProcess || !manager_) {
@@ -1088,20 +1262,13 @@ namespace TF3DHud::Animations
 				// TES::GetCellPriority(actor.parentCell, nullptr), then forwards it
 				// through RequestDefaultSubGraph/RequestWeaponSubGraph.
 				const std::int32_t priority = g_getCellPriority(tes, parentCell, nullptr);
-				const bool defaultRequested = g_requestDefaultSubGraph(
-					sourceActor_,
-					manager_.get(),
-					std::addressof(priority),
-					std::addressof(defaultSubgraphHandles_),
-					std::addressof(defaultSubgraphIds_));
-				const bool weaponRequested = g_requestWeaponSubGraph(
-					sourceActor_,
-					manager_.get(),
-					std::addressof(priority),
-					std::addressof(weaponSubgraphHandles_),
-					std::addressof(weaponSubgraphIds_));
+				auto* const middleHigh = sourceActor_->currentProcess->middleHigh;
+				if (!middleHigh) {
+					return false;
+				}
 
-				return defaultRequested || weaponRequested;
+				bool thirdPersonAttempted = false;
+				return LoadThirdPersonSubgraphRoots(*middleHigh, priority, thirdPersonAttempted) && thirdPersonAttempted;
 			}
 
 			bool ActivatePreviewGraphManager()
@@ -1202,6 +1369,8 @@ namespace TF3DHud::Animations
 					return;
 				}
 
+				ApplyPreviewGraphVariableOverrides();
+
 				// IDA: BGSAnimationSystemUtils::InitializeActorInstant scopes
 				// iSyncWeaponDrawState=2 only around the instant base-state
 				// action, then resets it after the tiny graph update.
@@ -1222,6 +1391,7 @@ namespace TF3DHud::Animations
 				updateData.flags1C = 1;
 				(void)g_updateAnimationGraphManager(this, updateData);
 				SetGraphVariableInt("iSyncWeaponDrawState", 0);
+				ApplyPreviewGraphVariableOverrides();
 
 				if (processed) {
 					initialStateApplied_ = true;
@@ -1504,6 +1674,37 @@ namespace TF3DHud::Animations
 				}
 			}
 
+			void ApplyPreviewGraphVariableOverrides()
+			{
+				// IDA: BShkbAnimationGraph::ReceiveChannelsImpl only writes registered
+				// channel values. Live dumps showed these behavior variables still
+				// seeded by graph initialization, so keep them preview-owned.
+				for (const auto& variableName : kPreviewNeutralBoolGraphVariables) {
+					SetGraphVariableBool(variableName.data(), false);
+				}
+				for (const auto& variableName : kPreviewEnabledBoolGraphVariables) {
+					SetGraphVariableBool(variableName.data(), true);
+				}
+				for (const auto& variableName : kPreviewNeutralIntGraphVariables) {
+					SetGraphVariableInt(variableName.data(), 0);
+				}
+				for (const auto& variableName : kPreviewReadyIntGraphVariables) {
+					SetGraphVariableInt(variableName.data(), 1);
+				}
+				for (const auto& variableName : kPreviewNeutralFloatGraphVariables) {
+					SetGraphVariableFloat(variableName.data(), 0.0F);
+				}
+
+				if (!previewStopEventsApplied_) {
+					// WeaponBehavior.xml exposes these stop events for turn and
+					// locomotion state machines. Send once after graph creation to
+					// unwind any live state copied during variable initialization.
+					(void)NotifyAnimationGraphImpl("TurnStop");
+					(void)NotifyAnimationGraphImpl("moveStop");
+					previewStopEventsApplied_ = true;
+				}
+			}
+
 			void SyncWeaponCullStateFromLive()
 			{
 				const auto* process = sourceActor_ ? sourceActor_->currentProcess : nullptr;
@@ -1654,8 +1855,6 @@ namespace TF3DHud::Animations
 							const auto animBinding = *reinterpret_cast<const std::uintptr_t*>(animCtrl + 0x38);
 							const auto anim = animBinding ? *reinterpret_cast<const std::uintptr_t*>(animBinding + 0x18) : 0;
 							if (anim) {
-								// OAR/HaBCR identify hkbClipGenerator::localTime at +0x140.
-								// HaBCR mirrors writes to hkaDefaultAnimationControl +0x10.
 								nodeInfo.currentTime = *reinterpret_cast<const float*>(nodeInfo.clip + 0x140);
 								nodeInfo.controlLocalTime = *reinterpret_cast<const float*>(animCtrl + 0x10);
 								nodeInfo.duration = *reinterpret_cast<const float*>(anim + 0x14);
@@ -1684,7 +1883,11 @@ namespace TF3DHud::Animations
 			{
 				return a_manager && GetLiveSourceManager() == a_manager;
 			}
-			void ResetInitialState() { initialStateApplied_ = false; }
+			void ResetInitialState()
+			{
+				initialStateApplied_ = false;
+				previewStopEventsApplied_ = false;
+			}
 
 		private:
 			RE::PlayerCharacter* sourceActor_{ nullptr };
@@ -1706,6 +1909,7 @@ namespace TF3DHud::Animations
 			RE::BSTSmallArray<RE::SubgraphHandle, 2> weaponSubgraphHandles_;
 			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> weaponSubgraphIds_;
 			bool initialStateApplied_{ false };
+			bool previewStopEventsApplied_{ false };
 
 			[[nodiscard]] RE::BSTSmartPointer<RE::BShkbAnimationGraph> GetActivePreviewGraph() const
 			{
@@ -1904,7 +2108,6 @@ namespace TF3DHud::Animations
 				LogDiagnostic("manager discarded: Activate failed for project '" + project + "'");
 				return false;
 			}
-			(void)holder->SetGraphVariableBool("bAimEnabled", false);
 			g_project = project;
 			g_liveSubgraphSignature = liveSubgraphSignature;
 			g_holder = std::move(holder);
@@ -1939,6 +2142,7 @@ namespace TF3DHud::Animations
 		g_holder->TryApplyInitialAnimationState();
 		g_holder->ProcessMirroredEvents();
 		g_holder->SyncWeaponCullStateFromLive();
+		g_holder->SetGraphVariableBool("bAimEnabled", false);
 
 		const auto previewRootLocal = a_previewRoot.GetLocalTransform();
 		const auto updateDelta = g_holder->GetActiveClipSynchronizedDeltaTime(a_deltaTime);
