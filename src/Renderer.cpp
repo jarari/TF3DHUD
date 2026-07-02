@@ -1,6 +1,7 @@
 #include "Renderer.h"
 
 #include "Config.h"
+#include "Lights.h"
 
 #include "RE/B/BSGraphics.h"
 #include "RE/B/BSGeometry.h"
@@ -9,12 +10,7 @@
 #include "RE/B/BSTriShape.h"
 #include "RE/N/NiCloningProcess.h"
 #include "RE/N/NiCamera.h"
-#include "RE/N/NiLight.h"
 #include "RE/N/NiUpdateData.h"
-#include "RE/P/PlayerCharacter.h"
-#include "RE/S/Sky.h"
-#include "RE/S/Sun.h"
-#include "RE/T/TESObjectCELL.h"
 
 #include <algorithm>
 #include <array>
@@ -56,17 +52,6 @@ namespace TF3DHud::Renderer
 		bool g_visible{ false };
 		bool g_rendererConfigured{ false };
 		bool g_displayClipApplied{ false };
-
-		struct AppliedLightState
-		{
-			RE::NiPoint3 position;
-			RE::NiColor diffuse;
-			RE::NiColor specular;
-			float intensity;
-		};
-
-		bool g_hasAppliedLightState{ false };
-		AppliedLightState g_appliedLightState{};
 
 		bool EnsureDisplayRoot();
 
@@ -562,193 +547,13 @@ namespace TF3DHud::Renderer
 			g_rendererConfigured = true;
 		}
 
-		[[nodiscard]] float Lerp(const float a_from, const float a_to, const float a_t)
-		{
-			return a_from + (a_to - a_from) * a_t;
-		}
-
-		[[nodiscard]] RE::NiPoint3 LerpPoint(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to, const float a_t)
-		{
-			return {
-				Lerp(a_from.x, a_to.x, a_t),
-				Lerp(a_from.y, a_to.y, a_t),
-				Lerp(a_from.z, a_to.z, a_t)
-			};
-		}
-
-		[[nodiscard]] RE::NiColor LerpColor(const RE::NiColor& a_from, const RE::NiColor& a_to, const float a_t)
-		{
-			return {
-				Lerp(a_from.r, a_to.r, a_t),
-				Lerp(a_from.g, a_to.g, a_t),
-				Lerp(a_from.b, a_to.b, a_t)
-			};
-		}
-
-		[[nodiscard]] RE::NiPoint3 LightPosition(const LightSettings& a_settings)
-		{
-			return { a_settings.positionX, a_settings.positionY, a_settings.positionZ };
-		}
-
-		[[nodiscard]] RE::NiColor LightDiffuse(const LightSettings& a_settings)
-		{
-			return { a_settings.diffuseR, a_settings.diffuseG, a_settings.diffuseB };
-		}
-
-		[[nodiscard]] RE::NiColor LightSpecular(const LightSettings& a_settings)
-		{
-			return { a_settings.specularR, a_settings.specularG, a_settings.specularB };
-		}
-
-		[[nodiscard]] float NightLightingBlend(const float a_timeOfDay)
-		{
-			const auto hour = std::fmod(std::fmod(a_timeOfDay, 24.0F) + 24.0F, 24.0F);
-			if (hour < 6.0F) {
-				return 1.0F;
-			}
-			if (hour < 8.0F) {
-				return 1.0F - ((hour - 6.0F) / 2.0F);
-			}
-			if (hour < 18.0F) {
-				return 0.0F;
-			}
-			if (hour < 20.0F) {
-				return (hour - 18.0F) / 2.0F;
-			}
-			return 1.0F;
-		}
-
-		[[nodiscard]] bool IsInteriorWithLightingTemplate()
-		{
-			const auto* player = RE::PlayerCharacter::GetSingleton();
-			const auto* parentCell = player ? player->GetParentCell() : nullptr;
-			return parentCell && parentCell->IsInterior() && parentCell->lightingTemplate;
-		}
-
-		[[nodiscard]] bool GetSunDirection(const RE::NiLight& a_sunLight, RE::NiPoint3& a_direction)
-		{
-			a_direction = a_sunLight.world.rotate * RE::NiPoint3{ 0.0F, 1.0F, 0.0F };
-			if (a_direction.Unitize() <= 0.0001F) {
-				return false;
-			}
-			return true;
-		}
-
-		[[nodiscard]] float LightPositionRadius(const LightSettings& a_settings)
-		{
-			const auto position = LightPosition(a_settings);
-			return std::max(position.Length(), 1.0F);
-		}
-
-		void AddFakePointLight(const RE::NiPoint3& a_position, const RE::NiColor& a_diffuse, const RE::NiColor& a_specular, const float a_intensity)
-		{
-			g_renderer->Offscreen_AddLight(a_position, a_diffuse, a_specular, a_intensity);
-		}
-
-		[[nodiscard]] bool NearlyEqual(const float a_lhs, const float a_rhs)
-		{
-			return std::abs(a_lhs - a_rhs) <= 0.0001F;
-		}
-
-		[[nodiscard]] bool SamePoint(const RE::NiPoint3& a_lhs, const RE::NiPoint3& a_rhs)
-		{
-			return NearlyEqual(a_lhs.x, a_rhs.x) &&
-			       NearlyEqual(a_lhs.y, a_rhs.y) &&
-			       NearlyEqual(a_lhs.z, a_rhs.z);
-		}
-
-		[[nodiscard]] bool SameColor(const RE::NiColor& a_lhs, const RE::NiColor& a_rhs)
-		{
-			return NearlyEqual(a_lhs.r, a_rhs.r) &&
-			       NearlyEqual(a_lhs.g, a_rhs.g) &&
-			       NearlyEqual(a_lhs.b, a_rhs.b);
-		}
-
-		[[nodiscard]] bool SameLightState(const AppliedLightState& a_lhs, const AppliedLightState& a_rhs)
-		{
-			return SamePoint(a_lhs.position, a_rhs.position) &&
-			       SameColor(a_lhs.diffuse, a_rhs.diffuse) &&
-			       SameColor(a_lhs.specular, a_rhs.specular) &&
-			       NearlyEqual(a_lhs.intensity, a_rhs.intensity);
-		}
-
-		void ClearOffscreenLightParamsOnly()
-		{
-			// IDA: Interface3D::Renderer::Offscreen_ClearLights also calls
-			// ShadowSceneNode::RemoveAllLights(). For normal preview light refresh,
-			// only reset the renderer-owned light-param array and let DrawModel's
-			// UpdateLights rebuild the isolated offscreen SSN when needed.
-			g_renderer->offscreenLights.clear();
-			g_renderer->needsLightSetupOffscreen = true;
-		}
-
 		void ConfigureLightingImpl()
 		{
 			if (!g_renderer) {
 				return;
 			}
 
-			const auto& config = GetConfig();
-
-			auto effectiveLighting = config.lighting;
-			const auto* sky = RE::Sky::GetSingleton();
-			const auto interiorForcedFakePoint = IsInteriorWithLightingTemplate();
-			if (interiorForcedFakePoint) {
-				effectiveLighting = LightingType::kFakePoint;
-			}
-
-			RE::NiPoint3 appliedPosition = LightPosition(config.light);
-			RE::NiColor appliedDiffuse = LightDiffuse(config.light);
-			RE::NiColor appliedSpecular = LightSpecular(config.light);
-			float appliedIntensity = config.light.intensity;
-
-			switch (effectiveLighting) {
-			case LightingType::kWorldDirectional:
-				if (sky && sky->sun && sky->sun->light) {
-					const auto* sunLight = reinterpret_cast<const RE::NiLight*>(sky->sun->light.get());
-					RE::NiPoint3 sunDirection;
-					if (sunLight && GetSunDirection(*sunLight, sunDirection)) {
-						appliedPosition = sunDirection * LightPositionRadius(config.light);
-					}
-				}
-				break;
-			case LightingType::kFakePointAdaptiveTime:
-			{
-				const auto blend = sky ? NightLightingBlend(sky->currentGameHour) : 0.0F;
-				appliedPosition = LerpPoint(LightPosition(config.light), LightPosition(config.nightLight), blend);
-				appliedDiffuse = LerpColor(LightDiffuse(config.light), LightDiffuse(config.nightLight), blend);
-				appliedSpecular = LerpColor(LightSpecular(config.light), LightSpecular(config.nightLight), blend);
-				appliedIntensity = Lerp(config.light.intensity, config.nightLight.intensity, blend);
-				break;
-			}
-			case LightingType::kFakePoint:
-			default:
-				break;
-			}
-
-			const AppliedLightState state{
-				.position = appliedPosition,
-				.diffuse = appliedDiffuse,
-				.specular = appliedSpecular,
-				.intensity = appliedIntensity
-			};
-			if (g_hasAppliedLightState && SameLightState(g_appliedLightState, state)) {
-				return;
-			}
-
-			ClearOffscreenLightParamsOnly();
-			AddFakePointLight(state.position, state.diffuse, state.specular, state.intensity);
-			g_appliedLightState = state;
-			g_hasAppliedLightState = true;
-			REX::INFO(
-				"Interface3D offscreen light configured: renderer={:X}, offscreenSSN={:X}, lights={}, pos=({}, {}, {}), intensity={}",
-				Ptr(g_renderer),
-				Ptr(g_renderer->offscreenSSN.get()),
-				g_renderer->offscreenLights.size(),
-				state.position.x,
-				state.position.y,
-				state.position.z,
-				state.intensity);
+			Lights::ConfigureOffscreenLights(*g_renderer, GetConfig().lights);
 		}
 
 		void ApplyOffscreenFramingImpl(RE::NiAVObject& a_object)
@@ -866,7 +671,7 @@ namespace TF3DHud::Renderer
 		g_displayClipApplied = false;
 		g_rendererConfigured = false;
 		g_visible = false;
-		g_hasAppliedLightState = false;
+		Lights::ResetCache();
 	}
 
 	void ClearPreviewRoot(const bool a_disableRenderer)

@@ -5,17 +5,94 @@
 #include <algorithm>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace TF3DHud
 {
 	namespace
 	{
 		Config g_config;
-		constexpr float kMaxVanillaInterfaceSpecular = 4096.0F;
+		constexpr std::string_view kLightSectionPrefix{ "Light_" };
+		constexpr float kMaxDiffuse = 4.0F;
+		constexpr float kMaxDistance = 4096.0F;
+		constexpr float kMaxIntensity = 10.0F;
 
 		[[nodiscard]] std::filesystem::path ConfigPath()
 		{
 			return std::filesystem::path("Data") / "F4SE" / "Plugins" / "TF3DHud.ini";
+		}
+
+		[[nodiscard]] float ClampDiffuse(const float a_value)
+		{
+			return std::clamp(a_value, 0.0F, kMaxDiffuse);
+		}
+
+		[[nodiscard]] float ClampDistance(const float a_value)
+		{
+			return std::clamp(a_value, 0.0F, kMaxDistance);
+		}
+
+		[[nodiscard]] float ClampIntensity(const float a_value)
+		{
+			return std::clamp(a_value, 0.0F, kMaxIntensity);
+		}
+
+		[[nodiscard]] float ClampTimeOfDay(const float a_value)
+		{
+			return std::clamp(a_value, 0.0F, 24.0F);
+		}
+
+		void ClampFixedLight(FixedLightSettings& a_settings)
+		{
+			a_settings.diffuse.r = ClampDiffuse(a_settings.diffuse.r);
+			a_settings.diffuse.g = ClampDiffuse(a_settings.diffuse.g);
+			a_settings.diffuse.b = ClampDiffuse(a_settings.diffuse.b);
+			a_settings.distance = ClampDistance(a_settings.distance);
+			a_settings.intensity = ClampIntensity(a_settings.intensity);
+		}
+
+		void ClampTimeOfDayLight(TimeOfDayLightSettings& a_settings)
+		{
+			a_settings.startTimeOfDay = ClampTimeOfDay(a_settings.startTimeOfDay);
+			a_settings.endTimeOfDay = ClampTimeOfDay(a_settings.endTimeOfDay);
+			ClampFixedLight(a_settings.start);
+			ClampFixedLight(a_settings.end);
+		}
+
+		[[nodiscard]] const char* TypeName(const LightType a_type)
+		{
+			switch (a_type) {
+			case LightType::kDirectional:
+				return "Directional";
+			case LightType::kFixed:
+				return "Fixed";
+			case LightType::kTimeOfDay:
+				return "ToD";
+			}
+			return "Directional";
+		}
+
+		void WriteFixedLight(CSimpleIniA& a_ini, const char* a_section, const FixedLightSettings& a_settings, const char* a_prefix)
+		{
+			const std::string prefix{ a_prefix };
+			a_ini.SetDoubleValue(a_section, (prefix + "PositionX").c_str(), a_settings.position.x);
+			a_ini.SetDoubleValue(a_section, (prefix + "PositionY").c_str(), a_settings.position.y);
+			a_ini.SetDoubleValue(a_section, (prefix + "PositionZ").c_str(), a_settings.position.z);
+			a_ini.SetDoubleValue(a_section, (prefix + "DiffuseR").c_str(), a_settings.diffuse.r);
+			a_ini.SetDoubleValue(a_section, (prefix + "DiffuseG").c_str(), a_settings.diffuse.g);
+			a_ini.SetDoubleValue(a_section, (prefix + "DiffuseB").c_str(), a_settings.diffuse.b);
+			a_ini.SetDoubleValue(a_section, (prefix + "Distance").c_str(), a_settings.distance);
+			a_ini.SetDoubleValue(a_section, (prefix + "Intensity").c_str(), a_settings.intensity);
+		}
+
+		void WriteDefaultLightSections(CSimpleIniA& a_ini)
+		{
+			for (const auto& light : Lights::DefaultLights()) {
+				const auto section = std::string{ kLightSectionPrefix } + light.name;
+				a_ini.SetValue(section.c_str(), "Type", TypeName(light.type));
+				a_ini.SetBoolValue(section.c_str(), "UseInInterior", light.useInInterior);
+				WriteFixedLight(a_ini, section.c_str(), light.fixed, "");
+			}
 		}
 
 		void WriteDefaults(CSimpleIniA& a_ini)
@@ -28,34 +105,85 @@ namespace TF3DHud
 			a_ini.SetDoubleValue("View", "ModelScale", g_config.modelScale);
 			a_ini.SetDoubleValue("View", "YawDegrees", g_config.yawDegrees);
 			a_ini.SetLongValue("View", "Anchor", g_config.anchor);
-			a_ini.SetLongValue("View", "LightingType", std::to_underlying(g_config.lighting));
 			a_ini.SetDoubleValue("ClipRect", "Left", g_config.clipRect.left);
 			a_ini.SetDoubleValue("ClipRect", "Top", g_config.clipRect.top);
 			a_ini.SetDoubleValue("ClipRect", "Right", g_config.clipRect.right);
 			a_ini.SetDoubleValue("ClipRect", "Bottom", g_config.clipRect.bottom);
 			a_ini.SetBoolValue("Render", "HideInPowerArmor", g_config.hideInPowerArmor);
-			a_ini.SetDoubleValue("Lighting", "PositionX", g_config.light.positionX);
-			a_ini.SetDoubleValue("Lighting", "PositionY", g_config.light.positionY);
-			a_ini.SetDoubleValue("Lighting", "PositionZ", g_config.light.positionZ);
-			a_ini.SetDoubleValue("Lighting", "DiffuseR", g_config.light.diffuseR);
-			a_ini.SetDoubleValue("Lighting", "DiffuseG", g_config.light.diffuseG);
-			a_ini.SetDoubleValue("Lighting", "DiffuseB", g_config.light.diffuseB);
-			a_ini.SetDoubleValue("Lighting", "SpecularR", g_config.light.specularR);
-			a_ini.SetDoubleValue("Lighting", "SpecularG", g_config.light.specularG);
-			a_ini.SetDoubleValue("Lighting", "SpecularB", g_config.light.specularB);
-			a_ini.SetDoubleValue("Lighting", "Intensity", g_config.light.intensity);
-
-			a_ini.SetDoubleValue("NightLighting", "PositionX", g_config.nightLight.positionX);
-			a_ini.SetDoubleValue("NightLighting", "PositionY", g_config.nightLight.positionY);
-			a_ini.SetDoubleValue("NightLighting", "PositionZ", g_config.nightLight.positionZ);
-			a_ini.SetDoubleValue("NightLighting", "DiffuseR", g_config.nightLight.diffuseR);
-			a_ini.SetDoubleValue("NightLighting", "DiffuseG", g_config.nightLight.diffuseG);
-			a_ini.SetDoubleValue("NightLighting", "DiffuseB", g_config.nightLight.diffuseB);
-			a_ini.SetDoubleValue("NightLighting", "SpecularR", g_config.nightLight.specularR);
-			a_ini.SetDoubleValue("NightLighting", "SpecularG", g_config.nightLight.specularG);
-			a_ini.SetDoubleValue("NightLighting", "SpecularB", g_config.nightLight.specularB);
-			a_ini.SetDoubleValue("NightLighting", "Intensity", g_config.nightLight.intensity);
+			WriteDefaultLightSections(a_ini);
 			a_ini.SetValue("UI", "MenuKey", "0xDE");
+		}
+
+		[[nodiscard]] LightType ReadLightType(CSimpleIniA& a_ini, const char* a_section, const LightType a_default)
+		{
+			const auto* value = a_ini.GetValue(a_section, "Type", nullptr);
+			if (!value || value[0] == '\0') {
+				return a_default;
+			}
+
+			const std::string_view type{ value };
+			if (type == "Directional" || type == "directional" || type == "0") {
+				return LightType::kDirectional;
+			}
+			if (type == "Fixed" || type == "fixed" || type == "1") {
+				return LightType::kFixed;
+			}
+			if (type == "ToD" || type == "TOD" || type == "tod" || type == "TimeOfDay" || type == "2") {
+				return LightType::kTimeOfDay;
+			}
+
+			REX::WARN("Invalid light type '{}'; using Directional", value);
+			return a_default;
+		}
+
+		void ReadFixedLight(CSimpleIniA& a_ini, const char* a_section, FixedLightSettings& a_settings, const char* a_prefix)
+		{
+			const std::string prefix{ a_prefix };
+			a_settings.position.x = static_cast<float>(a_ini.GetDoubleValue(a_section, (prefix + "PositionX").c_str(), a_settings.position.x));
+			a_settings.position.y = static_cast<float>(a_ini.GetDoubleValue(a_section, (prefix + "PositionY").c_str(), a_settings.position.y));
+			a_settings.position.z = static_cast<float>(a_ini.GetDoubleValue(a_section, (prefix + "PositionZ").c_str(), a_settings.position.z));
+			a_settings.diffuse.r = static_cast<float>(a_ini.GetDoubleValue(a_section, (prefix + "DiffuseR").c_str(), a_settings.diffuse.r));
+			a_settings.diffuse.g = static_cast<float>(a_ini.GetDoubleValue(a_section, (prefix + "DiffuseG").c_str(), a_settings.diffuse.g));
+			a_settings.diffuse.b = static_cast<float>(a_ini.GetDoubleValue(a_section, (prefix + "DiffuseB").c_str(), a_settings.diffuse.b));
+			a_settings.distance = static_cast<float>(a_ini.GetDoubleValue(a_section, (prefix + "Distance").c_str(), a_settings.distance));
+			a_settings.intensity = static_cast<float>(a_ini.GetDoubleValue(a_section, (prefix + "Intensity").c_str(), a_settings.intensity));
+			ClampFixedLight(a_settings);
+		}
+
+		[[nodiscard]] LightSettings ReadLight(CSimpleIniA& a_ini, const char* a_section)
+		{
+			LightSettings light;
+			light.name = std::string{ a_section }.substr(kLightSectionPrefix.size());
+			light.type = ReadLightType(a_ini, a_section, light.type);
+			light.useInInterior = a_ini.GetBoolValue(a_section, "UseInInterior", light.useInInterior);
+			ReadFixedLight(a_ini, a_section, light.fixed, "");
+
+			light.timeOfDay.startTimeOfDay = static_cast<float>(a_ini.GetDoubleValue(a_section, "StartToD", light.timeOfDay.startTimeOfDay));
+			light.timeOfDay.endTimeOfDay = static_cast<float>(a_ini.GetDoubleValue(a_section, "EndToD", light.timeOfDay.endTimeOfDay));
+			ReadFixedLight(a_ini, a_section, light.timeOfDay.start, "Start");
+			ReadFixedLight(a_ini, a_section, light.timeOfDay.end, "End");
+			ClampTimeOfDayLight(light.timeOfDay);
+			return light;
+		}
+
+		[[nodiscard]] std::vector<LightSettings> ReadLights(CSimpleIniA& a_ini)
+		{
+			CSimpleIniA::TNamesDepend sections;
+			a_ini.GetAllSections(sections);
+
+			std::vector<LightSettings> lights;
+			for (const auto& section : sections) {
+				const std::string_view name{ section.pItem };
+				if (!name.starts_with(kLightSectionPrefix) || name.size() == kLightSectionPrefix.size()) {
+					continue;
+				}
+				lights.push_back(ReadLight(a_ini, section.pItem));
+			}
+
+			if (lights.empty()) {
+				lights = Lights::DefaultLights();
+			}
+			return lights;
 		}
 
 		[[nodiscard]] std::uint32_t ReadVirtualKey(CSimpleIniA& a_ini, const char* a_section, const char* a_key, const std::uint32_t a_default)
@@ -75,28 +203,6 @@ namespace TF3DHud
 
 			REX::WARN("Invalid virtual key {}.{}='{}'; using 0x{:02X}", a_section, a_key, value, a_default);
 			return a_default;
-		}
-
-		void ReadLightSettings(CSimpleIniA& a_ini, const char* a_section, LightSettings& a_settings)
-		{
-			a_settings.positionX = static_cast<float>(a_ini.GetDoubleValue(a_section, "PositionX", a_settings.positionX));
-			a_settings.positionY = static_cast<float>(a_ini.GetDoubleValue(a_section, "PositionY", a_settings.positionY));
-			a_settings.positionZ = static_cast<float>(a_ini.GetDoubleValue(a_section, "PositionZ", a_settings.positionZ));
-			a_settings.diffuseR = static_cast<float>(a_ini.GetDoubleValue(a_section, "DiffuseR", a_settings.diffuseR));
-			a_settings.diffuseG = static_cast<float>(a_ini.GetDoubleValue(a_section, "DiffuseG", a_settings.diffuseG));
-			a_settings.diffuseB = static_cast<float>(a_ini.GetDoubleValue(a_section, "DiffuseB", a_settings.diffuseB));
-			a_settings.specularR = static_cast<float>(a_ini.GetDoubleValue(a_section, "SpecularR", a_settings.specularR));
-			a_settings.specularG = static_cast<float>(a_ini.GetDoubleValue(a_section, "SpecularG", a_settings.specularG));
-			a_settings.specularB = static_cast<float>(a_ini.GetDoubleValue(a_section, "SpecularB", a_settings.specularB));
-			a_settings.intensity = static_cast<float>(a_ini.GetDoubleValue(a_section, "Intensity", a_settings.intensity));
-
-			a_settings.diffuseR = std::clamp(a_settings.diffuseR, 0.0F, 4.0F);
-			a_settings.diffuseG = std::clamp(a_settings.diffuseG, 0.0F, 4.0F);
-			a_settings.diffuseB = std::clamp(a_settings.diffuseB, 0.0F, 4.0F);
-			a_settings.specularR = std::clamp(a_settings.specularR, 0.0F, kMaxVanillaInterfaceSpecular);
-			a_settings.specularG = std::clamp(a_settings.specularG, 0.0F, kMaxVanillaInterfaceSpecular);
-			a_settings.specularB = std::clamp(a_settings.specularB, 0.0F, kMaxVanillaInterfaceSpecular);
-			a_settings.intensity = std::clamp(a_settings.intensity, 0.0F, 10.0F);
 		}
 	}
 
@@ -139,24 +245,19 @@ namespace TF3DHud
 		g_config.modelScale = static_cast<float>(ini.GetDoubleValue("View", "ModelScale", g_config.modelScale));
 		g_config.yawDegrees = static_cast<float>(ini.GetDoubleValue("View", "YawDegrees", g_config.yawDegrees));
 		g_config.anchor = static_cast<std::int32_t>(ini.GetLongValue("View", "Anchor", g_config.anchor));
-		g_config.lighting = static_cast<LightingType>(std::clamp<long>(
-			ini.GetLongValue("View", "LightingType", std::to_underlying(g_config.lighting)),
-			std::to_underlying(LightingType::kWorldDirectional),
-			std::to_underlying(LightingType::kFakePointAdaptiveTime)));
 		g_config.clipRect.left = static_cast<float>(ini.GetDoubleValue("ClipRect", "Left", g_config.clipRect.left));
 		g_config.clipRect.top = static_cast<float>(ini.GetDoubleValue("ClipRect", "Top", g_config.clipRect.top));
 		g_config.clipRect.right = static_cast<float>(ini.GetDoubleValue("ClipRect", "Right", g_config.clipRect.right));
 		g_config.clipRect.bottom = static_cast<float>(ini.GetDoubleValue("ClipRect", "Bottom", g_config.clipRect.bottom));
 		g_config.hideInPowerArmor = ini.GetBoolValue("Render", "HideInPowerArmor", g_config.hideInPowerArmor);
 		g_config.uiMenuKey = ReadVirtualKey(ini, "UI", "MenuKey", g_config.uiMenuKey);
-		ReadLightSettings(ini, "Lighting", g_config.light);
-		ReadLightSettings(ini, "NightLighting", g_config.nightLight);
+		g_config.lights = ReadLights(ini);
 		g_config.fov = std::clamp(g_config.fov, 10.0F, 120.0F);
 		g_config.modelScale = std::clamp(g_config.modelScale, 0.01F, 10.0F);
 		g_config.anchor = std::clamp(g_config.anchor, 1, 9);
 
 		REX::INFO(
-			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, lighting={}, clipRect=({}, {}, {}, {}), hideInPowerArmor={}, uiMenuKey=0x{:02X}, lightPos=({}, {}, {}), lightColor=({}, {}, {}), lightSpec=({}, {}, {}), lightIntensity={}, nightLightPos=({}, {}, {}), nightLightColor=({}, {}, {}), nightLightSpec=({}, {}, {}), nightLightIntensity={}",
+			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, clipRect=({}, {}, {}, {}), hideInPowerArmor={}, uiMenuKey=0x{:02X}, lights={}",
 			g_config.enabled,
 			g_config.fov,
 			g_config.placementX,
@@ -165,32 +266,12 @@ namespace TF3DHud
 			g_config.modelScale,
 			g_config.yawDegrees,
 			g_config.anchor,
-			std::to_underlying(g_config.lighting),
 			g_config.clipRect.left,
 			g_config.clipRect.top,
 			g_config.clipRect.right,
 			g_config.clipRect.bottom,
 			g_config.hideInPowerArmor,
 			g_config.uiMenuKey,
-			g_config.light.positionX,
-			g_config.light.positionY,
-			g_config.light.positionZ,
-			g_config.light.diffuseR,
-			g_config.light.diffuseG,
-			g_config.light.diffuseB,
-			g_config.light.specularR,
-			g_config.light.specularG,
-			g_config.light.specularB,
-			g_config.light.intensity,
-			g_config.nightLight.positionX,
-			g_config.nightLight.positionY,
-			g_config.nightLight.positionZ,
-			g_config.nightLight.diffuseR,
-			g_config.nightLight.diffuseG,
-			g_config.nightLight.diffuseB,
-			g_config.nightLight.specularR,
-			g_config.nightLight.specularG,
-			g_config.nightLight.specularB,
-			g_config.nightLight.intensity);
+			g_config.lights.size());
 	}
 }
