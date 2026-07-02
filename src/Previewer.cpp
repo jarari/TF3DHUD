@@ -23,6 +23,7 @@
 #include "RE/N/NiNode.h"
 #include "RE/N/NiUpdateData.h"
 #include "RE/P/PlayerCharacter.h"
+#include "RE/P/PlayerControls.h"
 #include "RE/T/TESNPC.h"
 #include "RE/T/TESModel.h"
 #include "RE/T/TESObjectARMA.h"
@@ -413,6 +414,22 @@ namespace TF3DHud
 			return true;
 		}
 
+		[[nodiscard]] bool IsQuickContainerActive()
+		{
+			const auto controls = RE::PlayerControls::GetSingleton();
+			if (!controls) {
+				return false;
+			}
+
+			for (const auto handler : controls->handlers) {
+				if (handler && handler->inQuickContainer) {
+					return true;
+				}
+			}
+
+			return false;
+		}
+
 		void LogDiagnostic(std::string a_message)
 		{
 			if (a_message == g_lastDiagnostic) {
@@ -455,10 +472,12 @@ namespace TF3DHud
 			}
 
 			const auto itemMenuMode = ui->itemMenuMode.load_unchecked();
-			if (ui->menuMode != 0 || itemMenuMode != 0 || ui->freezeFrameMenuBG != 0 || ui->freezeFramePause != 0) {
+			const auto quickContainerActive = IsQuickContainerActive();
+			if (ui->menuMode != 0 || (itemMenuMode != 0 && !quickContainerActive) || ui->freezeFrameMenuBG != 0 || ui->freezeFramePause != 0) {
 				a_reason =
 					"blocked by menu/freeze-frame state menuMode=" + std::to_string(ui->menuMode) +
 					", itemMenuMode=" + std::to_string(itemMenuMode) +
+					", quickContainerActive=" + std::to_string(quickContainerActive) +
 					", freezeFrameMenuBG=" + std::to_string(ui->freezeFrameMenuBG) +
 					", freezeFramePause=" + std::to_string(ui->freezeFramePause);
 				return false;

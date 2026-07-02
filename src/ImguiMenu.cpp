@@ -819,6 +819,8 @@ namespace TF3DHud::Imgui
 				LightSettings light;
 				light.name = MakeUniqueLightName(config, "Directional");
 				light.type = LightType::kDirectional;
+				light.fixed.position = {};
+				light.fixed.intensity = 1.0F;
 				config.lights.push_back(light);
 				Previewer::ApplyConfigChanges();
 			}
@@ -827,7 +829,8 @@ namespace TF3DHud::Imgui
 			for (std::size_t index = 0; index < config.lights.size(); ++index) {
 				auto& light = config.lights[index];
 				ImGui::PushID(static_cast<int>(index));
-				const bool expanded = ImGui::TreeNode(light.name.empty() ? "(unnamed)" : light.name.c_str());
+				const auto treeLabel = (light.name.empty() ? std::string{ "(unnamed)" } : light.name) + "###Light";
+				const bool expanded = ImGui::TreeNode(treeLabel.c_str());
 				if (expanded) {
 					if (ImGui::Button("Delete")) {
 						deleteIndex = index;
