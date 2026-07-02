@@ -540,6 +540,50 @@ namespace TF3DHud
 			return true;
 		}
 
+		std::uint32_t InitializePreviewCloth(
+			RE::TESObjectREFR& a_reference,
+			RE::NiAVObject& a_object,
+			RE::NiAVObject& a_previewRoot,
+			const char* a_modelPath)
+		{
+			if (!a_modelPath || a_modelPath[0] == '\0') {
+				return 0;
+			}
+
+			const RE::BSFixedString clothExtraName{ "CED" };
+			const auto previewRootTransform = a_previewRoot.GetWorldTransform();
+			auto* clothWorld = GetHclClothWorld(a_reference);
+			std::uint32_t initialized = 0;
+
+			ForEachAVObject(std::addressof(a_object), [&](RE::NiAVObject& a_candidate) {
+				if (!a_candidate.GetExtraData(clothExtraName)) {
+					return;
+				}
+
+				auto* runtimeClothExtra = g_createClothFor3D(
+					a_candidate,
+					a_modelPath,
+					previewRootTransform,
+					std::addressof(a_previewRoot));
+				if (!runtimeClothExtra) {
+					REX::WARN(
+						"preview cloth init failed: object={:X}, name='{}', model='{}'",
+						reinterpret_cast<std::uintptr_t>(std::addressof(a_candidate)),
+						a_candidate.GetName(),
+						a_modelPath);
+					return;
+				}
+
+				g_setClothSettleOnTransitionToSim(runtimeClothExtra, true);
+				if (clothWorld) {
+					g_setClothWorld(runtimeClothExtra, clothWorld);
+				}
+				++initialized;
+			});
+
+			return initialized;
+		}
+
 		void InitializePreviewHeadPartCloth(
 			RE::TESNPC& a_npc,
 			RE::TESObjectREFR& a_reference,
@@ -964,6 +1008,31 @@ namespace TF3DHud
 			return nullptr;
 		}
 
+		[[nodiscard]] bool TryGetPreviewHeadWorld(RE::NiAVObject& a_previewRoot, RE::NiPoint3& a_out)
+		{
+			auto* flattened = g_previewFlattenedBoneTree;
+			if (!flattened) {
+				flattened = FindFlattenedBoneTree(std::addressof(a_previewRoot));
+				g_previewFlattenedBoneTree = flattened;
+			}
+			if (!flattened) {
+				return false;
+			}
+
+			if (auto* headObject = flattened->GetObjectByName(RE::BSFixedString("HEAD"))) {
+				a_out = headObject->world.translate;
+				return true;
+			}
+
+			auto* head = FindFlattenedBoneByName(*flattened, "HEAD");
+			if (!head) {
+				return false;
+			}
+
+			a_out = head->node ? head->node->world.translate : head->world.translate;
+			return true;
+		}
+
 		bool ApplyHeadCenteredFraming(RE::NiAVObject& a_previewRoot)
 		{
 			auto* flattened = g_previewFlattenedBoneTree;
@@ -1009,6 +1078,24 @@ namespace TF3DHud
 			a_previewRoot.Update(updateData);
 
 			return true;
+		}
+
+		void ApplyHeadFollowTranslation(RE::NiAVObject& a_previewRoot)
+		{
+			RE::NiPoint3 headWorld;
+			if (!TryGetPreviewHeadWorld(a_previewRoot, headWorld)) {
+				return;
+			}
+
+			const auto& config = GetConfig();
+			auto transform = a_previewRoot.GetLocalTransform();
+			transform.translate.x += -headWorld.x;
+			transform.translate.y += config.cameraDistance - headWorld.y;
+			transform.translate.z += -headWorld.z;
+			a_previewRoot.SetLocalTransform(transform);
+
+			RE::NiUpdateData updateData;
+			a_previewRoot.Update(updateData);
 		}
 
 		RE::NiPointer<RE::NiAVObject> LoadPreviewRaceSkeleton(RE::PlayerCharacter& a_player)
@@ -2300,7 +2387,10 @@ namespace TF3DHud
 			a_previewRoot.Update(updateData);
 		}
 
-		[[nodiscard]] bool SyncEquipmentsFromBiped(RE::NiAVObject& a_previewRoot, const RE::BipedAnim& a_sourceBiped)
+		[[nodiscard]] bool SyncEquipmentsFromBiped(
+			RE::PlayerCharacter& a_player,
+			RE::NiAVObject& a_previewRoot,
+			const RE::BipedAnim& a_sourceBiped)
 		{
 			auto* previewRootNode = a_previewRoot.IsNode();
 			if (!previewRootNode) {
@@ -2320,8 +2410,8 @@ namespace TF3DHud
 			std::unordered_set<RE::NiAVObject*> seenSourceObjects;
 			std::uint32_t attachedObjects = 0;
 
-			auto mirrorObject = [&](const RE::BIPED_OBJECT a_slot, RE::NiAVObject* a_sourceClone) {
-				auto* sourceClone = a_sourceClone;
+			auto mirrorObject = [&](const RE::BIPED_OBJECT a_slot, const RE::BIPOBJECT& a_sourceObject) {
+				auto* sourceClone = a_sourceObject.partClone.get();
 				if (!sourceClone || !seenSourceObjects.insert(sourceClone).second) {
 					return;
 				}
@@ -2343,6 +2433,11 @@ namespace TF3DHud
 
 				RE::bhkWorld::RemoveObjects(previewClone.get(), true, true);
 				PreparePreviewTree(*previewClone);
+				(void)InitializePreviewCloth(
+					a_player,
+					*previewClone,
+					a_previewRoot,
+					a_sourceObject.part ? a_sourceObject.part->GetModel() : nullptr);
 				ForEachGeometry(previewClone.get(), [&](RE::BSGeometry& a_geometry) {
 					if (auto* skin = a_geometry.skinInstance.get()) {
 						ResolveNullSkinBonesFromFlattenedTree(
@@ -2389,7 +2484,7 @@ namespace TF3DHud
 					break;
 				}
 				const auto& sourceObject = a_sourceBiped.object[i];
-				mirrorObject(slot, sourceObject.partClone.get());
+				mirrorObject(slot, sourceObject);
 			}
 
 			RefreshPreviewBoneLookup(a_previewRoot);
@@ -2672,7 +2767,7 @@ namespace TF3DHud
 			RE::bhkWorld::RemoveObjects(previewRoot.get(), true, true);
 			StripControllerChains(*previewRoot);
 			PreparePreviewTree(*previewRoot);
-			if (!SyncEquipmentsFromBiped(*previewRoot, a_biped)) {
+			if (!SyncEquipmentsFromBiped(a_player, *previewRoot, a_biped)) {
 				g_previewRoot.reset();
 				g_previewFlattenedBoneTree = nullptr;
 				g_bipedSignature = 0;
@@ -2702,6 +2797,7 @@ namespace TF3DHud
 			g_visualSignature = a_visualSignature;
 
 			Renderer::AttachPreviewRoot(*g_previewRoot);
+			Animations::ResetInitialState();
 			Morph::MarkSecondaryDirty();
 
 			return true;
@@ -2807,6 +2903,7 @@ namespace TF3DHud
 			if (g_previewRoot) {
 				(void)SyncPreviewAttachmentParentsFromBiped(*g_previewRoot, *biped);
 				Animations::Update(*player, *g_previewRoot, a_deltaTime);
+				ApplyHeadFollowTranslation(*g_previewRoot);
 				UpdatePostAnimationBipedSignature(*biped);
 			}
 
