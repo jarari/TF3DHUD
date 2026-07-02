@@ -26,18 +26,27 @@ namespace TF3DHud::Renderer
 		constexpr auto kDisplayMeshPath = "Interface/GunModMenu/ModMenuRenderMesh.nif";
 		constexpr auto kDisplayMeshGeometry = "ModMenuRenderMesh:0";
 		constexpr auto kPi = 3.14159265358979323846F;
-		constexpr auto kPreviewCameraAspect = 16.0F / 9.0F;
+		constexpr auto kFallbackCameraAspect = 16.0F / 9.0F;
 		constexpr float kDisplayRootY = 375.0F;
+		constexpr float kDisplayMeshPlaneY = -0.0000013113022F;
 		constexpr float kVanillaDisplayLeft = -148.125F;
 		constexpr float kVanillaDisplayTop = 79.875F;
 		constexpr float kVanillaDisplayRight = 148.125F;
 		constexpr float kVanillaDisplayBottom = -79.875F;
-		constexpr std::int32_t kFullFrameDisplayRenderTarget = 63;
+		constexpr std::int32_t kFullFrameDisplayRenderTarget = -1;
 		using ForceUpgradeTextures_t = void(RE::NiAVObject*, bool, bool);
 
 		REL::Relocation<ForceUpgradeTextures_t*> g_forceUpgradeTextures{ REL::ID{ 1417022, 2229490 } };
 
 		struct DisplayBounds
+		{
+			float left;
+			float top;
+			float right;
+			float bottom;
+		};
+
+		struct ScreenPlaneBounds
 		{
 			float left;
 			float top;
@@ -55,43 +64,6 @@ namespace TF3DHud::Renderer
 
 		bool EnsureDisplayRoot();
 
-		[[nodiscard]] DisplayBounds GetDisplayBounds()
-		{
-			const auto& clipRect = GetConfig().clipRect;
-			const bool hasCustomBounds =
-				clipRect.left > 0.0F ||
-				clipRect.top > 0.0F ||
-				clipRect.right > 0.0F ||
-				clipRect.bottom > 0.0F;
-
-			if (hasCustomBounds) {
-				const DisplayBounds centeredBounds{
-					-std::max(clipRect.left, 0.0F),
-					std::max(clipRect.top, 0.0F),
-					std::max(clipRect.right, 0.0F),
-					-std::max(clipRect.bottom, 0.0F)
-				};
-
-				if (centeredBounds.right > centeredBounds.left && centeredBounds.top > centeredBounds.bottom) {
-					return centeredBounds;
-				}
-
-				REX::WARN(
-					"ignored invalid ClipRect centered extents: left={}, top={}, right={}, bottom={}",
-					clipRect.left,
-					clipRect.top,
-					clipRect.right,
-					clipRect.bottom);
-			}
-
-			return {
-				kVanillaDisplayLeft,
-				kVanillaDisplayTop,
-				kVanillaDisplayRight,
-				kVanillaDisplayBottom
-			};
-		}
-
 		[[nodiscard]] bool SameDisplayBounds(const DisplayBounds& a_lhs, const DisplayBounds& a_rhs)
 		{
 			constexpr float epsilon = 0.0001F;
@@ -100,14 +72,6 @@ namespace TF3DHud::Renderer
 			       std::abs(a_lhs.right - a_rhs.right) <= epsilon &&
 			       std::abs(a_lhs.bottom - a_rhs.bottom) <= epsilon;
 		}
-
-		struct ScreenPlaneBounds
-		{
-			float left;
-			float top;
-			float right;
-			float bottom;
-		};
 
 		[[nodiscard]] RE::NiCamera* GetDisplayPlacementCamera()
 		{
@@ -126,12 +90,13 @@ namespace TF3DHud::Renderer
 
 		[[nodiscard]] ScreenPlaneBounds GetScreenPlaneBounds()
 		{
+			constexpr auto displayPlaneY = kDisplayRootY + kDisplayMeshPlaneY;
 			if (const auto* camera = GetDisplayPlacementCamera()) {
 				return {
-					camera->viewFrustum.left * kDisplayRootY,
-					camera->viewFrustum.top * kDisplayRootY,
-					camera->viewFrustum.right * kDisplayRootY,
-					camera->viewFrustum.bottom * kDisplayRootY
+					camera->viewFrustum.left * displayPlaneY,
+					camera->viewFrustum.top * displayPlaneY,
+					camera->viewFrustum.right * displayPlaneY,
+					camera->viewFrustum.bottom * displayPlaneY
 				};
 			}
 
@@ -140,6 +105,37 @@ namespace TF3DHud::Renderer
 				kVanillaDisplayTop,
 				kVanillaDisplayRight,
 				kVanillaDisplayBottom
+			};
+		}
+
+		[[nodiscard]] DisplayBounds GetDisplayBounds(const ScreenPlaneBounds& a_fullBounds)
+		{
+			const auto& clipRect = GetConfig().clipRect;
+			const bool hasCustomHorizontal = clipRect.left != 0.0F || clipRect.right != 0.0F;
+			const bool hasCustomVertical = clipRect.top != 0.0F || clipRect.bottom != 0.0F;
+			const DisplayBounds bounds{
+				hasCustomHorizontal ? -std::max(clipRect.left, 0.0F) : a_fullBounds.left,
+				hasCustomVertical ? std::max(clipRect.top, 0.0F) : a_fullBounds.top,
+				hasCustomHorizontal ? std::max(clipRect.right, 0.0F) : a_fullBounds.right,
+				hasCustomVertical ? -std::max(clipRect.bottom, 0.0F) : a_fullBounds.bottom
+			};
+
+			if (bounds.right > bounds.left && bounds.top > bounds.bottom) {
+				return bounds;
+			}
+
+			REX::WARN(
+				"ignored invalid ClipRect centered extents: left={}, top={}, right={}, bottom={}",
+				clipRect.left,
+				clipRect.top,
+				clipRect.right,
+				clipRect.bottom);
+
+			return {
+				a_fullBounds.left,
+				a_fullBounds.top,
+				a_fullBounds.right,
+				a_fullBounds.bottom
 			};
 		}
 
@@ -189,14 +185,14 @@ namespace TF3DHud::Renderer
 			std::memcpy(a_target, std::addressof(half), sizeof(half));
 		}
 
-		[[nodiscard]] float NormalizeDisplayX(const float a_x)
+		[[nodiscard]] float NormalizeDisplayX(const float a_x, const ScreenPlaneBounds& a_fullBounds)
 		{
-			return (a_x - kVanillaDisplayLeft) / (kVanillaDisplayRight - kVanillaDisplayLeft);
+			return (a_x - a_fullBounds.left) / (a_fullBounds.right - a_fullBounds.left);
 		}
 
-		[[nodiscard]] float NormalizeDisplayZ(const float a_z)
+		[[nodiscard]] float NormalizeDisplayZ(const float a_z, const ScreenPlaneBounds& a_fullBounds)
 		{
-			return (a_z - kVanillaDisplayTop) / (kVanillaDisplayBottom - kVanillaDisplayTop);
+			return (a_z - a_fullBounds.top) / (a_fullBounds.bottom - a_fullBounds.top);
 		}
 
 		RE::NiPointer<RE::NiAVObject> CloneDisplayObject(RE::NiAVObject& a_source)
@@ -239,19 +235,35 @@ namespace TF3DHud::Renderer
 			return reinterpret_cast<std::uintptr_t>(a_ptr);
 		}
 
-		void ApplyCameraFOV(RE::NiCamera* a_camera, const float a_configFOV)
+		[[nodiscard]] float GetRenderWindowAspect()
+		{
+			const auto* rendererData = RE::BSGraphics::GetRendererData();
+			const auto& window = rendererData->renderWindow[0];
+			if (window.windowWidth > 0 && window.windowHeight > 0) {
+				return static_cast<float>(window.windowWidth) / static_cast<float>(window.windowHeight);
+			}
+			return kFallbackCameraAspect;
+		}
+
+		void ApplyCameraFOV(RE::NiCamera* a_camera, const float a_configFOV, const float a_aspectOverride = 0.0F)
 		{
 			if (!a_camera) {
 				return;
 			}
 
+			const auto currentWidth = a_camera->viewFrustum.right - a_camera->viewFrustum.left;
 			const auto currentHeight = a_camera->viewFrustum.top - a_camera->viewFrustum.bottom;
 			if (std::abs(currentHeight) <= 0.000001F) {
 				return;
 			}
 
+			const auto aspect = a_aspectOverride > 0.0F ?
+				a_aspectOverride :
+				std::abs(currentWidth) > 0.000001F ?
+				std::abs(currentWidth / currentHeight) :
+				kFallbackCameraAspect;
 			const auto top = std::tan((a_configFOV * kPi / 180.0F) * 0.15F);
-			const auto right = top * kPreviewCameraAspect;
+			const auto right = top * aspect;
 
 			a_camera->viewFrustum.left = -right;
 			a_camera->viewFrustum.right = right;
@@ -272,18 +284,41 @@ namespace TF3DHud::Renderer
 			// IDA: Interface3D::Renderer::SetupCamera computes top = tan(DEG_TO_RAD * fov * 0.15).
 			// Renderer::Create only applies this while constructing new cameras, so reused named renderers
 			// need the frustum refreshed when config is reloaded.
+			const auto nativeAspect = GetRenderWindowAspect();
 			ApplyCameraFOV(g_renderer->pipboyAspect.get(), a_configFOV);
-			ApplyCameraFOV(g_renderer->nativeAspect.get(), a_configFOV);
-			ApplyCameraFOV(g_renderer->nativeAspectLongRange.get(), a_configFOV);
+			ApplyCameraFOV(g_renderer->nativeAspect.get(), a_configFOV, nativeAspect);
+			ApplyCameraFOV(g_renderer->nativeAspectLongRange.get(), a_configFOV, nativeAspect);
 		}
 
-		void ApplyDisplayClipRect()
+		[[nodiscard]] RE::BSGraphics::TriShape* GetDisplayRendererData()
+		{
+			if (!g_displayRoot) {
+				return nullptr;
+			}
+
+			auto* object = g_displayRoot->GetObjectByName(RE::BSFixedString(kDisplayMeshGeometry));
+			auto* triShape = object ? object->IsTriShape() : nullptr;
+			auto* geometry = triShape ? static_cast<RE::BSGeometry*>(triShape) : nullptr;
+			return geometry ? static_cast<RE::BSGraphics::TriShape*>(geometry->rendererData) : nullptr;
+		}
+
+		[[nodiscard]] bool DisplayClipRectCopyPending()
+		{
+			auto* rendererData = GetDisplayRendererData();
+			auto* vertexBuffer = rendererData ? rendererData->vertexBuffer : nullptr;
+			auto* indexBuffer = rendererData ? rendererData->indexBuffer : nullptr;
+			return (vertexBuffer && vertexBuffer->pendingCopy) ||
+			       (indexBuffer && indexBuffer->pendingCopy);
+		}
+
+		void ApplyDisplayClipRectImpl()
 		{
 			if (!g_displayRoot) {
 				return;
 			}
 
-			const auto bounds = GetDisplayBounds();
+			const auto fullBounds = GetScreenPlaneBounds();
+			const auto bounds = GetDisplayBounds(fullBounds);
 			if (g_displayClipApplied && SameDisplayBounds(g_appliedDisplayBounds, bounds)) {
 				return;
 			}
@@ -322,7 +357,6 @@ namespace TF3DHud::Renderer
 				return;
 			}
 
-			constexpr float planeY = -0.0000013113022F;
 			const auto vertexBytes = static_cast<std::size_t>(triShape->numVertices) * stride;
 			std::array<std::byte, 128> vertexDataCopy{};
 			if (vertexBytes > vertexDataCopy.size()) {
@@ -336,16 +370,16 @@ namespace TF3DHud::Renderer
 			std::memcpy(vertexDataCopy.data(), vertexBuffer->data, vertexBytes);
 
 			const std::array<std::array<float, 3>, 4> positions{ {
-				{ bounds.left, planeY, bounds.bottom },
-				{ bounds.right, planeY, bounds.bottom },
-				{ bounds.right, planeY, bounds.top },
-				{ bounds.left, planeY, bounds.top }
+				{ bounds.left, kDisplayMeshPlaneY, bounds.bottom },
+				{ bounds.right, kDisplayMeshPlaneY, bounds.bottom },
+				{ bounds.right, kDisplayMeshPlaneY, bounds.top },
+				{ bounds.left, kDisplayMeshPlaneY, bounds.top }
 			} };
-			const auto uvLeft = std::clamp(NormalizeDisplayX(bounds.left), 0.0F, 1.0F);
+			const auto uvLeft = std::clamp(NormalizeDisplayX(bounds.left, fullBounds), 0.0F, 1.0F);
 			// Vanilla ModMenuRenderMesh.nif uses z=-79.875 -> V=1 and z=+79.875 -> V=0.
-			const auto uvTop = std::clamp(NormalizeDisplayZ(bounds.top), 0.0F, 1.0F);
-			const auto uvRight = std::clamp(NormalizeDisplayX(bounds.right), 0.0F, 1.0F);
-			const auto uvBottom = std::clamp(NormalizeDisplayZ(bounds.bottom), 0.0F, 1.0F);
+			const auto uvTop = std::clamp(NormalizeDisplayZ(bounds.top, fullBounds), 0.0F, 1.0F);
+			const auto uvRight = std::clamp(NormalizeDisplayX(bounds.right, fullBounds), 0.0F, 1.0F);
+			const auto uvBottom = std::clamp(NormalizeDisplayZ(bounds.bottom, fullBounds), 0.0F, 1.0F);
 			const std::array<std::array<float, 2>, 4> uvs{ {
 				{ uvLeft, uvBottom },
 				{ uvRight, uvBottom },
@@ -414,7 +448,7 @@ namespace TF3DHud::Renderer
 			const auto halfX = (bounds.right - bounds.left) * 0.5F;
 			const auto halfZ = std::abs(bounds.top - bounds.bottom) * 0.5F;
 			const auto radius = std::sqrt((halfX * halfX) + (halfZ * halfZ));
-			geometry->modelBound.center = { centerX, planeY, centerZ };
+			geometry->modelBound.center = { centerX, kDisplayMeshPlaneY, centerZ };
 			geometry->modelBound.fRadius = radius;
 
 			RE::NiUpdateData updateData;
@@ -529,7 +563,7 @@ namespace TF3DHud::Renderer
 			g_renderer->customSwapTarget = -1;
 
 			if (EnsureDisplayRoot()) {
-				ApplyDisplayClipRect();
+				ApplyDisplayClipRectImpl();
 				ApplyDisplayPlacement();
 				g_renderer->MainScreen_SetScreenAttached3D(g_displayRoot.get());
 				g_renderer->MainScreen_RegisterGeometryRequiringFullViewport(g_displayRoot.get());
@@ -612,7 +646,7 @@ namespace TF3DHud::Renderer
 			g_privateDisplayRendererData = nullptr;
 			g_displayClipApplied = false;
 			g_displayRoot = LoadDisplayRoot();
-			ApplyDisplayClipRect();
+			ApplyDisplayClipRectImpl();
 			ApplyDisplayPlacement();
 			return static_cast<bool>(g_displayRoot);
 		}
@@ -660,6 +694,28 @@ namespace TF3DHud::Renderer
 		ApplyOffscreenFramingImpl(a_object);
 	}
 
+	void ApplyDisplayLayout()
+	{
+		if (!g_renderer) {
+			return;
+		}
+
+		ApplyRendererFOV(GetConfig().fov);
+		ApplyDisplayPlacement();
+	}
+
+	void ApplyDisplayClipRect()
+	{
+		if (CanApplyDisplayClipRect()) {
+			ApplyDisplayClipRectImpl();
+		}
+	}
+
+	bool CanApplyDisplayClipRect()
+	{
+		return !DisplayClipRectCopyPending();
+	}
+
 	void Reset()
 	{
 		ClearPreviewRoot();
@@ -694,7 +750,7 @@ namespace TF3DHud::Renderer
 		}
 
 		if (EnsureDisplayRoot()) {
-			ApplyDisplayClipRect();
+			ApplyDisplayClipRectImpl();
 			ApplyDisplayPlacement();
 			g_renderer->MainScreen_SetScreenAttached3D(g_displayRoot.get());
 			g_renderer->MainScreen_RegisterGeometryRequiringFullViewport(g_displayRoot.get());

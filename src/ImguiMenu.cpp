@@ -84,6 +84,8 @@ namespace TF3DHud::Imgui
 			float bottom;
 		};
 
+		[[nodiscard]] DisplayBounds GetOverlayScreenPlaneBounds(const Config& a_config);
+
 		[[nodiscard]] DisplayBounds GetOverlayDisplayBounds(const Config& a_config)
 		{
 			const auto screenBounds = GetOverlayScreenPlaneBounds(a_config);

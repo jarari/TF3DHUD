@@ -21,4 +21,7 @@ namespace TF3DHud::Renderer
 	void ClearPreviewRoot(bool a_disableRenderer = true);
 	void AttachPreviewRoot(RE::NiAVObject& a_previewRoot);
 	void ApplyOffscreenFraming(RE::NiAVObject& a_object);
+	void ApplyDisplayLayout();
+	void ApplyDisplayClipRect();
+	bool CanApplyDisplayClipRect();
 }
