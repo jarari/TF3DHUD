@@ -1,5 +1,6 @@
 #pragma once
 
+#include "RE/B/BSFlattenedBoneTree.h"
 #include "RE/B/BSGeometry.h"
 #include "RE/I/IAnimationGraphManagerHolder.h"
 #include "RE/N/NiNode.h"
@@ -76,9 +77,14 @@ namespace TF3DHud
 	}
 
 	bool NamesEqual(std::string_view a_lhs, std::string_view a_rhs);
+	bool IsDescendantOf(RE::NiAVObject& a_object, RE::NiAVObject& a_potentialAncestor);
+	bool ContainsObject(RE::NiAVObject& a_root, RE::NiAVObject& a_target);
 	void CollectNamedNodes(RE::NiAVObject* a_object, std::unordered_map<std::string, RE::NiAVObject*>& a_nodes);
 	RE::NiAVObject* FindNodeByName(
 		const std::unordered_map<std::string, RE::NiAVObject*>& a_nodes,
+		std::string_view a_name);
+	RE::BSFlattenedBoneTree::FlattenedBone* FindFlattenedBoneByName(
+		RE::BSFlattenedBoneTree& a_tree,
 		std::string_view a_name);
 	void CollectFlattenedBoneNodes(
 		RE::BSFlattenedBoneTree* a_tree,

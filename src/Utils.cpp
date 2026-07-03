@@ -3,6 +3,8 @@
 #include "RE/B/BSAnimationGraphManager.h"
 #include "RE/B/BSFlattenedBoneTree.h"
 
+#include <memory>
+
 namespace TF3DHud
 {
 	namespace
@@ -53,6 +55,35 @@ namespace TF3DHud
 		return !a_lhs.empty() && a_lhs == a_rhs;
 	}
 
+	bool IsDescendantOf(RE::NiAVObject& a_object, RE::NiAVObject& a_potentialAncestor)
+	{
+		for (auto* current = std::addressof(a_object); current; current = current->parent) {
+			if (current == std::addressof(a_potentialAncestor)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool ContainsObject(RE::NiAVObject& a_root, RE::NiAVObject& a_target)
+	{
+		if (std::addressof(a_root) == std::addressof(a_target)) {
+			return true;
+		}
+
+		auto* node = a_root.IsNode();
+		if (!node) {
+			return false;
+		}
+
+		for (auto& child : node->children) {
+			if (child && ContainsObject(*child, a_target)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	void CollectNamedNodes(RE::NiAVObject* a_object, std::unordered_map<std::string, RE::NiAVObject*>& a_nodes)
 	{
 		if (!a_object) {
@@ -88,6 +119,24 @@ namespace TF3DHud
 		for (const auto& [name, node] : a_nodes) {
 			if (NamesEqual(name, a_name)) {
 				return node;
+			}
+		}
+		return nullptr;
+	}
+
+	RE::BSFlattenedBoneTree::FlattenedBone* FindFlattenedBoneByName(
+		RE::BSFlattenedBoneTree& a_tree,
+		const std::string_view a_name)
+	{
+		if (!a_tree.bone || a_tree.boneCount <= 0) {
+			return nullptr;
+		}
+
+		for (std::int32_t index = 0; index < a_tree.boneCount; ++index) {
+			auto& bone = a_tree.bone[index];
+			const auto* name = bone.name.c_str();
+			if (name && a_name == name) {
+				return std::addressof(bone);
 			}
 		}
 		return nullptr;

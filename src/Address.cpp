@@ -39,10 +39,12 @@ namespace TF3DHud::Address
 	REL::Relocation<GetGraphVariableInt_t*> GetBShkbGraphVariableInt{ REL::ID(110974) };
 	REL::Relocation<GetNPCHeadPart_t*> GetNPCHeadPart{ REL::ID(946253) };
 	REL::Relocation<GetNumSegments_t*> GetNumSegments{ REL::ID(331465) };
+	REL::Relocation<GetSubSegmentCount_t*> GetSubSegmentCount{ REL::ID(374480) };
 	REL::Relocation<GetProjectForActor_t*> GetProjectForActor{ REL::ID{ 804224, 2236395 } };
 	REL::Relocation<GetReferenceScale_t*> GetReferenceScale{ REL::ID{ 911188, 2200892 } };
 	REL::Relocation<GetSkin_t*> GetSkin{ REL::ID(1042540) };
 	REL::Relocation<GetSubSegmentIndex_t*> GetSubSegmentIndex{ REL::ID(453731) };
+	REL::Relocation<GetUserIndex_t*> GetUserIndex{ REL::ID(985810) };
 	REL::Relocation<InitWornObject_t*> InitWornObject{ REL::ID(1374346) };
 	// IDA OG 1.10.163: BSBehaviorGraphSwapSingleton::InitializeSubGraph at 0x1416F3890.
 	// The AE ID is not present in the local OG->AE mapping CSV yet.
@@ -57,6 +59,10 @@ namespace TF3DHud::Address
 	REL::Relocation<SetClothSettleOnTransitionToSim_t*> SetClothSettleOnTransitionToSim{ REL::ID(638869) };
 	REL::Relocation<SetClothWorld_t*> SetClothWorld{ REL::ID(19064) };
 	REL::Relocation<SetDoTiledLighting_t*> SetDoTiledLighting{ REL::ID{ 716351, 2318370 } };
+	// IDA OG 1.10.163: TESObjectREFR::FixDisplayedHeadParts enables all
+	// RaceHeadSkinned segments before replaying headpart hair hides.
+	REL::Relocation<EnableAllSegments_t*> EnableAllSegments{ REL::ID(246125) };
+	REL::Relocation<SetSegmentDisableCount_t*> SetSegmentDisableCount{ REL::ID(1227683) };
 	REL::Relocation<SetSegmentEnabled_t*> DisableSegment{ REL::ID(1466142) };
 	REL::Relocation<SetSegmentEnabled_t*> EnableSegment{ REL::ID(1134184) };
 	// Ghidra OG 1.10.163: BGSMod::Attachment::Mod::TryAttach3DRecurse at 0x1402F3360.

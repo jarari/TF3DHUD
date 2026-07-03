@@ -152,11 +152,13 @@ namespace TF3DHud::Address
 	using GetGraphVariableInt_t = bool(const RE::BShkbAnimationGraph*, const RE::BSFixedString&, std::int32_t&);
 	using GetNPCHeadPart_t = RE::BGSHeadPart*(RE::TESNPC*, RE::BGSHeadPart::HeadPartType);
 	using GetNumSegments_t = std::uint32_t(const RE::BSGeometrySegmentData*);
+	using GetSubSegmentCount_t = std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t);
 	using GetProjectForActor_t = const char*(RE::Actor*, RE::NiAVObject*);
 	using GetReferenceScale_t = float(const RE::TESObjectREFR*);
 	using GetSkin_t = RE::TESObjectARMO*(RE::TESNPC*);
 	using GetSubSegmentIndex_t =
 		std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t);
+	using GetUserIndex_t = std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t);
 	using InitWornObject_t = bool(RE::TESNPC*, const BorrowedBipedPointer*, const RE::BGSObjectInstance*);
 	using InitializeSubGraph_t = bool(
 		void*,
@@ -193,6 +195,8 @@ namespace TF3DHud::Address
 	using SetClothSettleOnTransitionToSim_t = void(RE::NiExtraData*, bool);
 	using SetClothWorld_t = void(RE::NiExtraData*, void*);
 	using SetDoTiledLighting_t = void(bool);
+	using EnableAllSegments_t = void(RE::BSGeometrySegmentData*);
+	using SetSegmentDisableCount_t = void(RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t, std::uint8_t);
 	using SetSegmentEnabled_t = void(RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t, bool);
 	using TryAttachMod3DRecurse_t =
 		bool(RE::BGSMod::Attachment::Mod*, RE::NiNode*, char*, RE::TBO_InstanceData*);
@@ -244,10 +248,12 @@ namespace TF3DHud::Address
 	extern REL::Relocation<GetGraphVariableInt_t*> GetBShkbGraphVariableInt;
 	extern REL::Relocation<GetNPCHeadPart_t*> GetNPCHeadPart;
 	extern REL::Relocation<GetNumSegments_t*> GetNumSegments;
+	extern REL::Relocation<GetSubSegmentCount_t*> GetSubSegmentCount;
 	extern REL::Relocation<GetProjectForActor_t*> GetProjectForActor;
 	extern REL::Relocation<GetReferenceScale_t*> GetReferenceScale;
 	extern REL::Relocation<GetSkin_t*> GetSkin;
 	extern REL::Relocation<GetSubSegmentIndex_t*> GetSubSegmentIndex;
+	extern REL::Relocation<GetUserIndex_t*> GetUserIndex;
 	extern REL::Relocation<InitWornObject_t*> InitWornObject;
 	extern REL::Relocation<InitializeSubGraph_t*> InitializeSubGraph;
 	extern REL::Relocation<InterpretAction_t*> InterpretAction;
@@ -260,6 +266,8 @@ namespace TF3DHud::Address
 	extern REL::Relocation<SetClothSettleOnTransitionToSim_t*> SetClothSettleOnTransitionToSim;
 	extern REL::Relocation<SetClothWorld_t*> SetClothWorld;
 	extern REL::Relocation<SetDoTiledLighting_t*> SetDoTiledLighting;
+	extern REL::Relocation<EnableAllSegments_t*> EnableAllSegments;
+	extern REL::Relocation<SetSegmentDisableCount_t*> SetSegmentDisableCount;
 	extern REL::Relocation<SetSegmentEnabled_t*> DisableSegment;
 	extern REL::Relocation<SetSegmentEnabled_t*> EnableSegment;
 	extern REL::Relocation<TryAttachMod3DRecurse_t*> TryAttachMod3DRecurse;

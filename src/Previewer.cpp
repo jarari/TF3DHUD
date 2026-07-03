@@ -2,7 +2,10 @@
 #include "Address.h"
 #include "Animations.h"
 #include "Morph.h"
+#include "PreviewHeadParts.h"
 #include "PreviewRebuilder.h"
+#include "PreviewRenderTree.h"
+#include "PreviewVisibility.h"
 #include "Renderer.h"
 #include "Utils.h"
 
@@ -10,31 +13,27 @@
 #include "RE/BSFaceGenAnimationData.h"
 #include "RE/BSSkin.h"
 
-#include "RE/B/BSFadeNode.h"
+#include "PreviewCloth.h"
+#include "PreviewClone.h"
+#include "PreviewFaceBoneDiagnostics.h"
+#include "PreviewFraming.h"
 #include "RE/B/BSFlattenedBoneTree.h"
 #include "RE/B/BSGeometry.h"
-#include "RE/B/BGSHeadPart.h"
 #include "RE/B/BGSMod.h"
 #include "RE/B/BGSObjectInstance.h"
 #include "RE/B/BGSObjectInstanceExtra.h"
-#include "RE/B/BSLightingShaderProperty.h"
 #include "RE/B/BSModelDB.h"
-#include "RE/B/BSShaderMaterial.h"
-#include "RE/B/BSShaderProperty.h"
 #include "RE/B/BipedAnim.h"
 #include "RE/M/MemoryManager.h"
-#include "RE/N/NiCloningProcess.h"
 #include "RE/N/NiExtraData.h"
 #include "RE/N/NiNode.h"
 #include "RE/N/NiUpdateData.h"
 #include "RE/P/PlayerCharacter.h"
-#include "RE/P/PlayerControls.h"
 #include "RE/T/TESNPC.h"
 #include "RE/T/TESForm.h"
 #include "RE/T/TESModel.h"
 #include "RE/T/TESObjectARMA.h"
 #include "RE/T/TESObjectARMO.h"
-#include "RE/T/TESObjectCELL.h"
 #include "RE/T/TESRace.h"
 
 #include <algorithm>
@@ -54,9 +53,6 @@ namespace TF3DHud
 {
 	namespace
 	{
-		constexpr std::uint64_t kNiAVObjectTopFadeNode = 0x4000;
-		constexpr std::uint64_t kNiAVObjectFadeDone = 0x8000;
-
 		using BorrowedBipedPointer = Address::BorrowedBipedPointer;
 		using SkinComplexionContext = Address::SkinComplexionContext;
 
@@ -67,15 +63,6 @@ namespace TF3DHud
 		auto& g_doAdjustSkinComplexion = Address::DoAdjustSkinComplexion;
 		auto& g_convertNodeTree = Address::ConvertNodeTree;
 		auto& g_getActorBodyPart3D = Address::GetActorBodyPart3D;
-		auto& g_getNPCHeadPart = Address::GetNPCHeadPart;
-		auto& g_getDefaultRaceHeadPart = Address::GetDefaultRaceHeadPart;
-		auto& g_getNumSegments = Address::GetNumSegments;
-		auto& g_getSubSegmentIndex = Address::GetSubSegmentIndex;
-		auto& g_enableSegment = Address::EnableSegment;
-		auto& g_disableSegment = Address::DisableSegment;
-		auto& g_createClothFor3D = Address::CreateClothFor3D;
-		auto& g_setClothWorld = Address::SetClothWorld;
-		auto& g_setClothSettleOnTransitionToSim = Address::SetClothSettleOnTransitionToSim;
 		auto& g_fixFaceGenHeadSkinInstances = Address::FixFaceGenHeadSkinInstances;
 		auto& g_resetFaceGenCurrentMorphs = Address::ResetFaceGenCurrentMorphs;
 		auto& g_tryAttachMod3DRecurse = Address::TryAttachMod3DRecurse;
@@ -86,11 +73,20 @@ namespace TF3DHud
 		auto& g_initWornObject = Address::InitWornObject;
 		auto& g_getChargenModelName = Address::GetChargenModelName;
 
+		using PreviewRenderTree::PrepareForInterface3DOffscreen;
+		using PreviewRenderTree::PreparePreviewTree;
+		using PreviewRenderTree::RestorePreviewShaderAlpha;
+		using PreviewRenderTree::SanitizePreviewRenderTree;
+		using PreviewRenderTree::StripControllerChains;
+		using PreviewFaceBoneDiagnostics::FaceBoneAttachStats;
+		using PreviewFaceBoneDiagnostics::FaceBoneCandidateDetail;
+
 		struct PreviewAttachment
 		{
 			RE::BIPED_OBJECT slot{ RE::BIPED_OBJECT::kNone };
 			RE::NiPointer<RE::NiAVObject> object;
 			RE::NiNode* parent{ nullptr };
+			bool preserveOnEquipmentSync{ false };
 		};
 
 		enum class EquipmentSyncResult
@@ -127,6 +123,11 @@ namespace TF3DHud
 		std::string g_lastDiagnostic;
 		std::recursive_mutex g_stateLock;
 
+		void RefreshPreviewBoneLookup(RE::NiAVObject& a_previewRoot);
+		void CollectPreviewSkinTargetNodes(
+			RE::NiAVObject& a_previewRoot,
+			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes);
+
 		[[nodiscard]] RE::BSFaceGenAnimationData* GetLiveFaceAnimationData(const RE::PlayerCharacter& a_player)
 		{
 			auto* process = a_player.currentProcess;
@@ -154,60 +155,6 @@ namespace TF3DHud
 			previewData->morphsDirty = true;
 			previewData->forceMorphUpdate = true;
 			g_previewFaceNode->faceGenFlags &= static_cast<std::uint16_t>(~0x4u);
-		}
-
-		[[nodiscard]] bool IsHudAvailable(std::string& a_reason)
-		{
-			const auto ui = RE::UI::GetSingleton();
-			if (!ui) {
-				a_reason = "UI singleton is null";
-				return false;
-			}
-
-			const auto hudMenu = ui->GetMenu<RE::HUDMenu>();
-			if (!hudMenu) {
-				a_reason = "HUDMenu is null";
-				return false;
-			}
-
-			if (hudMenu->hudShowMenuState != RE::HUDMenu::ShowMenuState::kShown) {
-				a_reason = "HUDMenu is hidden by show state " + std::to_string(std::to_underlying(hudMenu->hudShowMenuState.get()));
-				return false;
-			}
-
-			return true;
-		}
-
-		[[nodiscard]] bool IsFirstPerson(std::string& a_reason)
-		{
-			const auto camera = RE::PlayerCamera::GetSingleton();
-			if (!camera) {
-				a_reason = "PlayerCamera singleton is null";
-				return false;
-			}
-
-			if (!camera->QCameraEquals(RE::CameraState::kFirstPerson)) {
-				a_reason = "camera is not first person";
-				return false;
-			}
-
-			return true;
-		}
-
-		[[nodiscard]] bool IsQuickContainerActive()
-		{
-			const auto controls = RE::PlayerControls::GetSingleton();
-			if (!controls) {
-				return false;
-			}
-
-			for (const auto handler : controls->handlers) {
-				if (handler && handler->inQuickContainer) {
-					return true;
-				}
-			}
-
-			return false;
 		}
 
 		void LogDiagnostic(std::string a_message)
@@ -239,6 +186,13 @@ namespace TF3DHud
 			}
 		}
 
+		void StripClonedGeometry(RE::NiAVObject& a_previewRoot)
+		{
+			for (auto& object : PreviewRenderTree::StripClonedGeometry(a_previewRoot)) {
+				RetirePreviewObject(std::move(object));
+			}
+		}
+
 		void AdvanceRetiredPreviewObjects()
 		{
 			// Keep retired roots across a render boundary; then release them so
@@ -255,94 +209,7 @@ namespace TF3DHud
 			g_retiredPreviewObjects.clear();
 		}
 
-		[[nodiscard]] bool ShouldShow(const RE::PlayerCharacter* a_player, std::string& a_reason)
-		{
-			const auto& config = GetConfig();
-			if (!config.enabled) {
-				a_reason = "disabled by INI";
-				return false;
-			}
-
-			if (!a_player) {
-				a_reason = "PlayerCharacter singleton is null";
-				return false;
-			}
-
-			const auto ui = RE::UI::GetSingleton();
-			if (!ui) {
-				a_reason = "UI singleton is null";
-				return false;
-			}
-
-			const auto itemMenuMode = ui->itemMenuMode.load_unchecked();
-			const auto quickContainerActive = IsQuickContainerActive();
-			if (ui->menuMode != 0 || (itemMenuMode != 0 && !quickContainerActive) || ui->freezeFrameMenuBG != 0 || ui->freezeFramePause != 0) {
-				a_reason =
-					"blocked by menu/freeze-frame state menuMode=" + std::to_string(ui->menuMode) +
-					", itemMenuMode=" + std::to_string(itemMenuMode) +
-					", quickContainerActive=" + std::to_string(quickContainerActive) +
-					", freezeFrameMenuBG=" + std::to_string(ui->freezeFrameMenuBG) +
-					", freezeFramePause=" + std::to_string(ui->freezeFramePause);
-				return false;
-			}
-
-			if (!IsHudAvailable(a_reason) || !IsFirstPerson(a_reason)) {
-				return false;
-			}
-
-			if (config.hideInPowerArmor && RE::PowerArmor::ActorInPowerArmor(*a_player)) {
-				a_reason = "player is in power armor";
-				return false;
-			}
-
-			return true;
-		}
-
-		[[nodiscard]] bool IsPreviewSourceReady(RE::PlayerCharacter& a_player, const RE::BipedAnim& a_biped, std::string& a_reason)
-		{
-			if (!a_biped.GetRoot()) {
-				a_reason = "third-person biped root is null";
-				return false;
-			}
-
-			if (!PreviewRebuilder::GetSourceFaceNode(a_player)) {
-				a_reason = "player face node is not initialized";
-				return false;
-			}
-
-			return true;
-		}
-
-		[[nodiscard]] bool HasPendingBipedModelHandles(const RE::BipedAnim& a_biped, std::int32_t& a_pendingSlot)
-		{
-			for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kTotal); ++i) {
-				const auto& object = a_biped.object[i];
-				// IDA: object[].handleList is retained resource ownership for a
-				// loaded slot, so it can stay non-null forever. bufferedObjects[]
-				// is the transition area LoadBipedParts consumes/clears while a
-				// slot is being replaced.
-				if (object.handleList.head && !object.partClone) {
-					a_pendingSlot = i;
-					return true;
-				}
-
-				const auto& buffered = a_biped.bufferedObjects[i];
-				if (buffered.parent.object ||
-					buffered.parent.instanceData ||
-					buffered.modExtra ||
-					buffered.armorAddon ||
-					buffered.part ||
-					buffered.partClone ||
-					buffered.objectGraphManager ||
-					buffered.hitEffect) {
-					a_pendingSlot = i;
-					return true;
-				}
-			}
-
-			a_pendingSlot = -1;
-			return false;
-		}
+		[[nodiscard]] RE::TESRace* ResolvePreviewRace(RE::PlayerCharacter& a_player, RE::TESNPC& a_npc);
 
 		RE::NiNode* FindPreviewAttachParent(
 			RE::NiAVObject& a_sourceObject,
@@ -369,324 +236,24 @@ namespace TF3DHud
 			});
 		}
 
-		[[nodiscard]] bool IsHairBipedSlot(const RE::BIPED_OBJECT a_slot)
+		void RefreshPreviewHeadPartVisibility(RE::PlayerCharacter& a_player, const RE::BipedAnim& a_sourceBiped)
 		{
-			return a_slot == RE::BIPED_OBJECT::kHairTop ||
-			       a_slot == RE::BIPED_OBJECT::kHairLong ||
-			       a_slot == RE::BIPED_OBJECT::kScalp;
-		}
-
-		[[nodiscard]] void* GetHclClothWorld(RE::TESObjectREFR& a_reference)
-		{
-			auto* cell = a_reference.GetParentCell();
-			auto* havokWorld = cell ? cell->GetbhkWorld() : nullptr;
-			if (!havokWorld) {
-				return nullptr;
-			}
-
-			// IDA: BipedAnim::AttachSkinnedObject and BSFaceGenUtils::AttachHeadHelper
-			// pass TESObjectCELL::GetbhkWorld()+0x148 to BSClothExtraData::SetWorld.
-			return *reinterpret_cast<void**>(reinterpret_cast<std::byte*>(havokWorld) + 0x148);
-		}
-
-		template <class Visitor>
-		void ForEachHairHeadPart(RE::BGSHeadPart* a_headPart, Visitor&& a_visitor)
-		{
-			if (!a_headPart) {
+			if (!g_previewFaceNode) {
 				return;
 			}
 
-			if (*a_headPart->type == RE::BGSHeadPart::HeadPartType::kHair) {
-				a_visitor(*a_headPart);
-			}
-
-			for (auto* extraPart : a_headPart->extraParts) {
-				ForEachHairHeadPart(extraPart, a_visitor);
-			}
-		}
-
-		bool InitializePreviewHeadPartCloth(
-			RE::TESObjectREFR& a_reference,
-			RE::NiAVObject& a_faceNode,
-			RE::NiAVObject& a_previewRoot,
-			RE::BGSHeadPart& a_headPart)
-		{
-			if (*a_headPart.type != RE::BGSHeadPart::HeadPartType::kHair || a_headPart.formEditorID.empty()) {
-				return false;
-			}
-
-			auto* object = a_faceNode.GetObjectByName(a_headPart.formEditorID);
-			if (!object) {
-				return false;
-			}
-
-			const RE::BSFixedString clothExtraName{ "CED" };
-			auto* assetClothExtra = object->GetExtraData(clothExtraName);
-			if (!assetClothExtra) {
-				return false;
-			}
-
-			auto* runtimeClothExtra = g_createClothFor3D(
-				*object,
-				a_headPart.GetModel(),
-				a_previewRoot.GetWorldTransform(),
-				std::addressof(a_previewRoot));
-			if (!runtimeClothExtra) {
-				REX::WARN(
-					"headpart cloth init failed: headPart={:08X}, object={:X}, name='{}', assetClothExtra={:X}",
-					a_headPart.GetFormID(),
-					reinterpret_cast<std::uintptr_t>(object),
-					object->GetName(),
-					reinterpret_cast<std::uintptr_t>(assetClothExtra));
-				return false;
-			}
-
-			g_setClothSettleOnTransitionToSim(runtimeClothExtra, true);
-			auto* clothWorld = GetHclClothWorld(a_reference);
-			if (clothWorld) {
-				g_setClothWorld(runtimeClothExtra, clothWorld);
-			}
-
-			return true;
-		}
-
-		std::uint32_t InitializePreviewCloth(
-			RE::TESObjectREFR& a_reference,
-			RE::NiAVObject& a_object,
-			RE::NiAVObject& a_previewRoot,
-			const char* a_modelPath)
-		{
-			if (!a_modelPath || a_modelPath[0] == '\0') {
-				return 0;
-			}
-
-			const RE::BSFixedString clothExtraName{ "CED" };
-			const auto previewRootTransform = a_previewRoot.GetWorldTransform();
-			auto* clothWorld = GetHclClothWorld(a_reference);
-			std::uint32_t initialized = 0;
-
-			ForEachAVObject(std::addressof(a_object), [&](RE::NiAVObject& a_candidate) {
-				if (!a_candidate.GetExtraData(clothExtraName)) {
-					return;
-				}
-
-				auto* runtimeClothExtra = g_createClothFor3D(
-					a_candidate,
-					a_modelPath,
-					previewRootTransform,
-					std::addressof(a_previewRoot));
-				if (!runtimeClothExtra) {
-					REX::WARN(
-						"preview cloth init failed: object={:X}, name='{}', model='{}'",
-						reinterpret_cast<std::uintptr_t>(std::addressof(a_candidate)),
-						a_candidate.GetName(),
-						a_modelPath);
-					return;
-				}
-
-				g_setClothSettleOnTransitionToSim(runtimeClothExtra, true);
-				if (clothWorld) {
-					g_setClothWorld(runtimeClothExtra, clothWorld);
-				}
-				++initialized;
-			});
-
-			return initialized;
-		}
-
-		void InitializePreviewHeadPartCloth(
-			RE::TESNPC& a_npc,
-			RE::TESObjectREFR& a_reference,
-			RE::NiAVObject& a_faceNode,
-			RE::NiAVObject& a_previewRoot)
-		{
-			if (!a_npc.headParts || a_npc.numHeadParts <= 0) {
+			auto* playerBase = a_player.GetObjectReference();
+			auto* npc = playerBase ? playerBase->As<RE::TESNPC>() : nullptr;
+			if (!npc) {
 				return;
 			}
 
-			for (std::int32_t index = 0; index < a_npc.numHeadParts; ++index) {
-				ForEachHairHeadPart(a_npc.headParts[index], [&](RE::BGSHeadPart& a_headPart) {
-					InitializePreviewHeadPartCloth(a_reference, a_faceNode, a_previewRoot, a_headPart);
-				});
-			}
-		}
-
-		[[nodiscard]] std::uint32_t BuildEquippedBipedMask(const RE::BipedAnim& a_biped)
-		{
-			std::uint32_t mask = 0;
-			for (std::int32_t i = 0; i < 32; ++i) {
-				const auto& object = a_biped.object[i];
-				if (auto* form = object.parent.object) {
-					const auto filledSlots = form->GetFilledSlots();
-					if (filledSlots != static_cast<std::uint32_t>(-1)) {
-						mask |= filledSlots;
-						continue;
-					}
-				}
-
-				if (object.partClone) {
-					const auto fallbackSlot = 1u << static_cast<std::uint32_t>(i);
-					mask |= fallbackSlot;
-				}
-			}
-			return mask;
-		}
-
-		[[nodiscard]] bool IsBipedSlotMasked(const std::uint32_t a_mask, const RE::BIPED_OBJECT a_slot)
-		{
-			const auto slot = std::to_underlying(a_slot);
-			if (slot < 0 || slot >= 32) {
-				return false;
-			}
-			return (a_mask & (1u << static_cast<std::uint32_t>(slot))) != 0;
-		}
-
-		[[nodiscard]] RE::BIPED_OBJECT AddBipedSlot(const RE::BIPED_OBJECT a_slot, const std::int32_t a_delta)
-		{
-			return static_cast<RE::BIPED_OBJECT>(std::to_underlying(a_slot) + a_delta);
-		}
-
-		struct HeadPartVisibilityStats
-		{
-			std::uint32_t segmentEdits{ 0 };
-			std::uint32_t objectCulls{ 0 };
-		};
-
-		[[nodiscard]] bool ApplyBipedSlotSegmentVisibility(
-			RE::NiAVObject& a_object,
-			const RE::BIPED_OBJECT a_slot,
-			const bool a_hide,
-			HeadPartVisibilityStats& a_stats)
-		{
-			auto* geometry = a_object.IsGeometry();
-			bool editedSegment = false;
-			RE::BSGeometrySegmentData* segmentData = nullptr;
-			std::uint32_t segmentCount = 0;
-			const auto subsegmentID = static_cast<std::uint32_t>(std::to_underlying(a_slot) + 30);
-			if (geometry) {
-				segmentData = geometry->GetSegmentData();
-				if (segmentData) {
-					segmentCount = g_getNumSegments(segmentData);
-					for (std::uint32_t segment = 0; segment < segmentCount; ++segment) {
-						const auto subsegment = g_getSubSegmentIndex(segmentData, segment, subsegmentID);
-						if (subsegment == 0xFF) {
-							continue;
-						}
-
-						editedSegment = true;
-						++a_stats.segmentEdits;
-						if (a_hide) {
-							g_disableSegment(segmentData, segment, subsegment, false);
-						} else {
-							g_enableSegment(segmentData, segment, subsegment, false);
-						}
-					}
-				}
-			}
-
-			return editedSegment;
-		}
-
-		void ApplyHeadPartObjectVisibility(
-			RE::NiAVObject& a_object,
-			const RE::BIPED_OBJECT a_slot,
-			const bool a_hide,
-			HeadPartVisibilityStats& a_stats)
-		{
-			const bool editedSegment = ApplyBipedSlotSegmentVisibility(a_object, a_slot, a_hide, a_stats);
-			if (!editedSegment) {
-				a_object.SetAppCulled(a_hide);
-				++a_stats.objectCulls;
-			}
-		}
-
-		void ApplyHeadPartVisibilityRecursive(
-			RE::NiAVObject& a_faceNode,
-			RE::BGSHeadPart* a_headPart,
-			const RE::BIPED_OBJECT a_slot,
-			const bool a_hide,
-			HeadPartVisibilityStats& a_stats)
-		{
-			if (!a_headPart || a_headPart->formEditorID.empty()) {
+			auto* previewRace = ResolvePreviewRace(a_player, *npc);
+			if (!previewRace) {
 				return;
 			}
 
-			if (auto* object = a_faceNode.GetObjectByName(a_headPart->formEditorID)) {
-				ApplyHeadPartObjectVisibility(*object, a_slot, a_hide, a_stats);
-			}
-
-			for (auto* extraPart : a_headPart->extraParts) {
-				ApplyHeadPartVisibilityRecursive(a_faceNode, extraPart, a_slot, a_hide, a_stats);
-			}
-		}
-
-		[[nodiscard]] RE::BGSHeadPart* GetDisplayedHeadPart(
-			RE::TESNPC& a_npc,
-			const RE::TESRace& a_race,
-			const RE::BGSHeadPart::HeadPartType a_type)
-		{
-			if (auto* headPart = g_getNPCHeadPart(std::addressof(a_npc), a_type)) {
-				return headPart;
-			}
-			return g_getDefaultRaceHeadPart(std::addressof(a_race), a_npc.GetSex(), a_type);
-		}
-
-		void ApplyFaceGenBipedSegmentVisibility(
-			RE::NiAVObject& a_faceNode,
-			const std::uint32_t a_equippedMask,
-			HeadPartVisibilityStats& a_stats)
-		{
-			ForEachAVObject(std::addressof(a_faceNode), [&](RE::NiAVObject& a_object) {
-				for (std::int32_t slot = 0; slot < std::to_underlying(RE::BIPED_OBJECT::kEditorTotal); ++slot) {
-					const auto bipedSlot = static_cast<RE::BIPED_OBJECT>(slot);
-					const bool hide = IsBipedSlotMasked(a_equippedMask, bipedSlot);
-					(void)ApplyBipedSlotSegmentVisibility(a_object, bipedSlot, hide, a_stats);
-				}
-			});
-		}
-
-		void ApplyFaceGenHeadObjectVisibility(
-			RE::NiAVObject& a_faceNode,
-			const RE::TESRace& a_race,
-			const std::uint32_t a_equippedMask,
-			HeadPartVisibilityStats& a_stats)
-		{
-			auto* headObject = a_faceNode.GetObjectByName(RE::BSFixedString("RaceHeadSkinned"));
-			if (!headObject) {
-				return;
-			}
-
-			headObject->SetAppCulled(IsBipedSlotMasked(a_equippedMask, a_race.data.headObject));
-			++a_stats.objectCulls;
-		}
-
-		void ApplyHeadPartBipedVisibility(
-			RE::TESNPC& a_npc,
-			RE::NiAVObject& a_faceNode,
-			const RE::BipedAnim& a_sourceBiped)
-		{
-			auto* race = a_npc.originalRace;
-			if (!race) {
-				return;
-			}
-
-			const auto equippedMask = BuildEquippedBipedMask(a_sourceBiped);
-			auto* hairPart = GetDisplayedHeadPart(a_npc, *race, RE::BGSHeadPart::HeadPartType::kHair);
-			auto* facialHairPart = GetDisplayedHeadPart(a_npc, *race, RE::BGSHeadPart::HeadPartType::kFacialHair);
-
-			const auto hairSlot = race->data.hairObject;
-			const auto hairLongSlot = AddBipedSlot(hairSlot, 1);
-			const auto beardSlot = race->data.beardObject;
-			const bool hideHairTop = IsBipedSlotMasked(equippedMask, hairSlot);
-			const bool hideHairLong = IsBipedSlotMasked(equippedMask, hairLongSlot);
-			const bool hideFacialHair = IsBipedSlotMasked(equippedMask, beardSlot);
-
-			HeadPartVisibilityStats stats;
-			ApplyFaceGenBipedSegmentVisibility(a_faceNode, equippedMask, stats);
-			ApplyFaceGenHeadObjectVisibility(a_faceNode, *race, equippedMask, stats);
-			ApplyHeadPartVisibilityRecursive(a_faceNode, hairPart, hairSlot, hideHairTop, stats);
-			ApplyHeadPartVisibilityRecursive(a_faceNode, hairPart, hairLongSlot, hideHairLong, stats);
-			ApplyHeadPartVisibilityRecursive(a_faceNode, facialHairPart, beardSlot, hideFacialHair, stats);
+			PreviewHeadParts::ApplyBipedVisibility(*npc, *previewRace, *g_previewFaceNode, a_player, a_sourceBiped);
 		}
 
 		void CollectSourceBipedSkinInstances(
@@ -696,103 +263,6 @@ namespace TF3DHud
 			for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kTotal); ++i) {
 				CollectSkinInstances(a_biped.object[i].partClone.get(), a_skins);
 			}
-		}
-
-		class ScopedSourceControllerDetach
-		{
-		public:
-			explicit ScopedSourceControllerDetach(RE::NiAVObject& a_root)
-			{
-				ForEachAVObject(std::addressof(a_root), [&](RE::NiAVObject& a_object) {
-					if (!a_object.controllers) {
-						return;
-					}
-
-					detached_.push_back({
-						.object = std::addressof(a_object),
-						.controllers = a_object.controllers,
-					});
-					a_object.controllers.reset();
-				});
-			}
-
-			~ScopedSourceControllerDetach()
-			{
-				for (auto& detached : detached_) {
-					if (detached.object) {
-						detached.object->controllers = detached.controllers;
-					}
-				}
-			}
-
-			ScopedSourceControllerDetach(const ScopedSourceControllerDetach&) = delete;
-			ScopedSourceControllerDetach(ScopedSourceControllerDetach&&) = delete;
-			ScopedSourceControllerDetach& operator=(const ScopedSourceControllerDetach&) = delete;
-			ScopedSourceControllerDetach& operator=(ScopedSourceControllerDetach&&) = delete;
-
-		private:
-			struct DetachedController
-			{
-				RE::NiAVObject* object{ nullptr };
-				RE::NiPointer<RE::NiTimeController> controllers;
-			};
-
-			std::vector<DetachedController> detached_;
-		};
-
-		void SeedSkinCloneMappings(
-			RE::NiCloningProcess& a_cloneProcess,
-			RE::NiAVObject& a_source,
-			RE::NiAVObject* a_previewRoot,
-			const std::unordered_map<std::string, RE::NiAVObject*>* a_previewNodes)
-		{
-			if (!a_previewRoot || !a_previewNodes || a_previewNodes->empty()) {
-				return;
-			}
-
-			ForEachGeometry(std::addressof(a_source), [&](RE::BSGeometry& a_geometry) {
-				auto* skin = a_geometry.skinInstance.get();
-				if (!skin || skin->bones.size() > RE::BSSkin::kMaxExpectedBones) {
-					return;
-				}
-
-				if (skin->rootNode) {
-					a_cloneProcess.cloneMap.emplace(skin->rootNode, a_previewRoot);
-				}
-
-				for (std::uint32_t index = 0; index < skin->bones.size(); ++index) {
-					auto* sourceBone = skin->bones[index];
-					if (!sourceBone) {
-						continue;
-					}
-
-					auto* previewBone = FindNodeByName(*a_previewNodes, sourceBone->GetName());
-					if (!previewBone) {
-						continue;
-					}
-
-					a_cloneProcess.cloneMap.emplace(sourceBone, previewBone);
-				}
-			});
-		}
-
-		RE::NiPointer<RE::NiAVObject> ClonePreviewObject(
-			RE::NiAVObject& a_source,
-			RE::NiAVObject* a_previewRoot = nullptr,
-			const std::unordered_map<std::string, RE::NiAVObject*>* a_previewNodes = nullptr)
-		{
-			RE::NiCloningProcess cloneProcess;
-			cloneProcess.appendChar = '$';
-			cloneProcess.copyType = RE::NiCloningProcess::CopyType::kCopyExact;
-			cloneProcess.scale = { 1.0F, 1.0F, 1.0F };
-
-			SeedSkinCloneMappings(cloneProcess, a_source, a_previewRoot, a_previewNodes);
-
-			ScopedSourceControllerDetach detachControllers(a_source);
-			auto* clone = a_source.CreateClone(cloneProcess);
-			a_source.ProcessClone(cloneProcess);
-			auto* clonedObject = clone ? static_cast<RE::NiAVObject*>(clone) : nullptr;
-			return clonedObject;
 		}
 
 		[[nodiscard]] const char* GetRaceSkeletonModelPath(RE::TESRace& a_race, const std::uint32_t a_sex)
@@ -900,114 +370,6 @@ namespace TF3DHud
 			return true;
 		}
 
-		[[nodiscard]] RE::BSFlattenedBoneTree::FlattenedBone* FindFlattenedBoneByName(
-			RE::BSFlattenedBoneTree& a_tree,
-			const std::string_view a_name)
-		{
-			if (!a_tree.bone || a_tree.boneCount <= 0) {
-				return nullptr;
-			}
-
-			for (std::int32_t index = 0; index < a_tree.boneCount; ++index) {
-				auto& bone = a_tree.bone[index];
-				const auto* name = bone.name.c_str();
-				if (name && a_name == name) {
-					return std::addressof(bone);
-				}
-			}
-			return nullptr;
-		}
-
-		[[nodiscard]] bool TryGetPreviewHeadWorld(RE::NiAVObject& a_previewRoot, RE::NiPoint3& a_out)
-		{
-			auto* flattened = g_previewFlattenedBoneTree;
-			if (!flattened) {
-				flattened = FindFlattenedBoneTree(std::addressof(a_previewRoot));
-				g_previewFlattenedBoneTree = flattened;
-			}
-			if (!flattened) {
-				return false;
-			}
-
-			if (auto* headObject = flattened->GetObjectByName(RE::BSFixedString("HEAD"))) {
-				a_out = headObject->world.translate;
-				return true;
-			}
-
-			auto* head = FindFlattenedBoneByName(*flattened, "HEAD");
-			if (!head) {
-				return false;
-			}
-
-			a_out = head->node ? head->node->world.translate : head->world.translate;
-			return true;
-		}
-
-		bool ApplyHeadCenteredFraming(RE::NiAVObject& a_previewRoot)
-		{
-			auto* flattened = g_previewFlattenedBoneTree;
-			if (!flattened) {
-				flattened = FindFlattenedBoneTree(std::addressof(a_previewRoot));
-				g_previewFlattenedBoneTree = flattened;
-			}
-
-			if (!flattened) {
-				Renderer::ApplyOffscreenFraming(a_previewRoot);
-				REX::WARN("head-centered framing fell back to bounds: no cached BSFlattenedBoneTree");
-				return false;
-			}
-
-			auto* headObject = flattened->GetObjectByName(RE::BSFixedString("HEAD"));
-			auto* head = headObject ? nullptr : FindFlattenedBoneByName(*flattened, "HEAD");
-			if (!headObject && !head) {
-				Renderer::ApplyOffscreenFraming(a_previewRoot);
-				REX::WARN(
-					"head-centered framing fell back to bounds: HEAD bone not found in flattenedTree='{}', bones={}",
-					flattened->GetName(),
-					flattened->boneCount);
-				return false;
-			}
-
-			const auto& config = GetConfig();
-			RE::NiTransform transform = RE::NiTransform::IDENTITY;
-			transform.scale = config.modelScale;
-			transform.rotate.FromEulerAnglesXYZ(0.0F, 0.0F, config.yawDegrees * 3.14159265358979323846F / 180.0F);
-			a_previewRoot.SetLocalTransform(transform);
-
-			RE::NiUpdateData updateData;
-			a_previewRoot.Update(updateData);
-
-			const auto headWorld = headObject ? headObject->world.translate : (head->node ? head->node->world.translate : head->world.translate);
-			auto centeredTransform = a_previewRoot.GetLocalTransform();
-			centeredTransform.translate = {
-				-headWorld.x,
-				-headWorld.y + config.cameraDistance,
-				-headWorld.z
-			};
-			a_previewRoot.SetLocalTransform(centeredTransform);
-			a_previewRoot.Update(updateData);
-
-			return true;
-		}
-
-		void ApplyHeadFollowTranslation(RE::NiAVObject& a_previewRoot)
-		{
-			RE::NiPoint3 headWorld;
-			if (!TryGetPreviewHeadWorld(a_previewRoot, headWorld)) {
-				return;
-			}
-
-			const auto& config = GetConfig();
-			auto transform = a_previewRoot.GetLocalTransform();
-			transform.translate.x += -headWorld.x;
-			transform.translate.y += config.cameraDistance - headWorld.y;
-			transform.translate.z += -headWorld.z;
-			a_previewRoot.SetLocalTransform(transform);
-
-			RE::NiUpdateData updateData;
-			a_previewRoot.Update(updateData);
-		}
-
 		RE::NiPointer<RE::NiAVObject> LoadPreviewRaceSkeleton(RE::PlayerCharacter& a_player)
 		{
 			auto* race = a_player.GetVisualsRace();
@@ -1047,7 +409,7 @@ namespace TF3DHud
 				return nullptr;
 			}
 
-			auto previewRoot = ClonePreviewObject(*loadedRoot);
+			auto previewRoot = PreviewClone::CloneObject(*loadedRoot);
 			if (!previewRoot) {
 				REX::WARN("preview race skeleton clone failed: path='{}'", skeletonPath);
 				LogDiagnostic("preview race skeleton clone failed");
@@ -1083,7 +445,7 @@ namespace TF3DHud
 				return nullptr;
 			}
 
-			auto previewRoot = ClonePreviewObject(*loadedRoot);
+			auto previewRoot = PreviewClone::CloneObject(*loadedRoot);
 			if (!previewRoot) {
 				REX::WARN("preview model clone failed: path='{}'", a_path);
 				return nullptr;
@@ -1092,195 +454,6 @@ namespace TF3DHud
 			return previewRoot;
 		}
 
-
-		void RepairShaderFadeNodes(RE::NiAVObject& a_object, RE::BSFadeNode* a_currentFadeNode);
-
-		void MakePreviewFadeNodeVisible(RE::BSFadeNode& a_fadeNode)
-		{
-			// IDA: BSLightingShaderProperty::GetRenderPasses clears deferred passes
-			// when fadeNode lacks 0x8000 and currentFade <= 0.0. BSFadeNode::OnVisible
-			// also fast-paths visible nodes when 0x8000, NiAVObject fade, and currentFade
-			// are all set.
-			a_fadeNode.flags.flags |= kNiAVObjectFadeDone;
-			a_fadeNode.fadeAmount = 1.0F;
-			a_fadeNode.currentFade = 1.0F;
-			a_fadeNode.currentDecalFade = 1.0F;
-			a_fadeNode.previousMaxA = 1.0F;
-		}
-
-		void PrepareForInterface3DOffscreen(RE::NiAVObject& a_root)
-		{
-			// The preview tree is assembled from separately loaded/cloned subtrees.
-			// Repair shader fade-node ownership once after final attachment so no
-			// geometry keeps a stale fade node from the source or attachment root.
-			RepairShaderFadeNodes(a_root, nullptr);
-
-			bool updated = false;
-			ForEachAVObject(std::addressof(a_root), [&](RE::NiAVObject& a_object) {
-				auto* fadeNode = a_object.IsFadeNode();
-				if (!fadeNode) {
-					return;
-				}
-
-				if ((fadeNode->flags.flags & kNiAVObjectFadeDone) == 0 ||
-					fadeNode->fadeAmount != 1.0F ||
-					fadeNode->currentFade != 1.0F ||
-					fadeNode->currentDecalFade != 1.0F) {
-					updated = true;
-				}
-				MakePreviewFadeNodeVisible(*fadeNode);
-
-				if ((a_object.flags.flags & kNiAVObjectTopFadeNode) != 0) {
-					a_object.flags.flags &= ~kNiAVObjectTopFadeNode;
-					updated = true;
-				}
-			});
-
-			if (updated) {
-				RE::NiUpdateData updateData;
-				a_root.Update(updateData);
-			}
-		}
-
-		void RepairShaderFadeNodes(RE::NiAVObject& a_object, RE::BSFadeNode* a_currentFadeNode)
-		{
-			if (auto* fadeNode = a_object.IsFadeNode()) {
-				a_currentFadeNode = fadeNode;
-			}
-
-			if (a_currentFadeNode) {
-				if (auto* geometry = a_object.IsGeometry()) {
-					for (auto& property : geometry->properties) {
-						auto* shaderProperty = netimmerse_cast<RE::BSShaderProperty*>(property.get());
-						if (shaderProperty) {
-							shaderProperty->fadeNode = a_currentFadeNode;
-						}
-					}
-				}
-			}
-
-			auto* node = a_object.IsNode();
-			if (!node) {
-				return;
-			}
-
-			for (auto& child : node->children) {
-				if (child) {
-					RepairShaderFadeNodes(*child, a_currentFadeNode);
-				}
-			}
-		}
-
-		void PreparePreviewTree(RE::NiAVObject& a_previewRoot)
-		{
-			ForEachAVObject(std::addressof(a_previewRoot), [&](RE::NiAVObject& a_object) {
-				if (a_object.GetAppCulled()) {
-					a_object.SetAppCulled(false);
-				}
-				a_object.fadeAmount = 1.0F;
-				if (auto* fadeNode = a_object.IsFadeNode()) {
-					MakePreviewFadeNodeVisible(*fadeNode);
-				}
-			});
-
-			RepairShaderFadeNodes(a_previewRoot, nullptr);
-		}
-
-		std::uint32_t StripControllerChains(RE::NiAVObject& a_root)
-		{
-			std::uint32_t strippedControllers = 0;
-			ForEachAVObject(std::addressof(a_root), [&](RE::NiAVObject& a_object) {
-				if (a_object.controllers) {
-					a_object.controllers.reset();
-					++strippedControllers;
-				}
-			});
-
-			return strippedControllers;
-		}
-
-		[[nodiscard]] RE::BSShaderProperty* GetGeometryShaderProperty(RE::BSGeometry& a_geometry)
-		{
-			auto* shaderProperty0 = netimmerse_cast<RE::BSShaderProperty*>(a_geometry.properties[0].get());
-			auto* shaderProperty1 = netimmerse_cast<RE::BSShaderProperty*>(a_geometry.properties[1].get());
-			return shaderProperty1 ? shaderProperty1 : shaderProperty0;
-		}
-
-		[[nodiscard]] bool IsPreviewNeckGoreGeometry(const std::string_view a_name)
-		{
-			return a_name == "FemaleNeckGore" || a_name == "MaleNeckGore" || a_name == "NeckGore";
-		}
-
-		void SanitizePreviewRenderTree(RE::NiAVObject& a_previewRoot)
-		{
-			bool updated = false;
-			ForEachGeometry(std::addressof(a_previewRoot), [&](RE::BSGeometry& a_geometry) {
-				const std::string_view geometryName(a_geometry.GetName());
-				const auto* shaderProperty = GetGeometryShaderProperty(a_geometry);
-				const bool missingShaderPath = !shaderProperty || !shaderProperty->material;
-				const bool neckGore = IsPreviewNeckGoreGeometry(geometryName);
-
-				if (missingShaderPath) {
-					a_geometry.SetAppCulled(true);
-					a_geometry.fadeAmount = 0.0F;
-					updated = true;
-				}
-				if (neckGore) {
-					a_geometry.SetAppCulled(true);
-					a_geometry.fadeAmount = 0.0F;
-					updated = true;
-				}
-			});
-
-			if (!updated) {
-				return;
-			}
-
-			RE::NiUpdateData updateData;
-			a_previewRoot.Update(updateData);
-		}
-
-		void RestorePreviewShaderAlpha(RE::NiAVObject& a_previewRoot)
-		{
-			ForEachGeometry(std::addressof(a_previewRoot), [&](RE::BSGeometry& a_geometry) {
-				for (auto& property : a_geometry.properties) {
-					auto* lightingProperty = netimmerse_cast<RE::BSLightingShaderProperty*>(property.get());
-					if (!lightingProperty) {
-						continue;
-					}
-
-					if (lightingProperty->alpha <= 0.0F) {
-						lightingProperty->alpha = 1.0F;
-					}
-				}
-			});
-		}
-
-		void StripClonedGeometry(RE::NiAVObject& a_previewRoot)
-		{
-			std::vector<std::pair<RE::NiNode*, RE::NiPointer<RE::NiAVObject>>> detachedObjects;
-
-			ForEachAVObject(std::addressof(a_previewRoot), [&](RE::NiAVObject& a_object) {
-				if (!a_object.IsGeometry()) {
-					return;
-				}
-
-				auto* parent = a_object.parent;
-				if (!parent) {
-					return;
-				}
-
-				detachedObjects.emplace_back(parent, RE::NiPointer<RE::NiAVObject>(std::addressof(a_object)));
-			});
-
-			for (auto& [parent, object] : detachedObjects) {
-				if (parent && object) {
-					parent->DetachChild(object.get());
-					RetirePreviewObject(std::move(object));
-				}
-			}
-
-		}
 
 		void PrepareAttachmentSkinComplexion(
 			RE::NiAVObject& a_attachmentRoot,
@@ -1360,143 +533,6 @@ namespace TF3DHud
 
 			model = std::addressof(a_addon.bipedModelFacebones[0]);
 			return model->GetModel() && model->GetModel()[0] != '\0' ? model : nullptr;
-		}
-
-		[[nodiscard]] const char* SafeCString(const char* a_value)
-		{
-			return a_value ? a_value : "";
-		}
-
-		[[nodiscard]] std::uint32_t FilledSlotsForLog(const RE::TESForm* a_form)
-		{
-			if (!a_form) {
-				return 0;
-			}
-
-			const auto slots = a_form->GetFilledSlots();
-			return slots == static_cast<std::uint32_t>(-1) ? 0 : slots;
-		}
-
-		struct FaceBoneAttachStats
-		{
-			std::uint32_t candidates{ 0 };
-			std::uint32_t noFacebonesModel{ 0 };
-			std::uint32_t duplicatePath{ 0 };
-			std::uint32_t loadFailed{ 0 };
-			std::uint32_t prunedEmpty{ 0 };
-			std::uint32_t attached{ 0 };
-			std::uint32_t converted{ 0 };
-			std::uint32_t reattached{ 0 };
-			std::uint32_t prunedDuplicates{ 0 };
-			std::uint32_t movedUnknownNodes{ 0 };
-			std::uint32_t skeletonCandidates{ 0 };
-			std::uint32_t skeletonAttached{ 0 };
-			std::uint32_t skeletonLoadFailed{ 0 };
-			std::uint32_t skeletonPrunedEmpty{ 0 };
-		};
-
-		struct FaceBoneCandidateDetail
-		{
-			std::string source;
-			std::int32_t slot{ -1 };
-			std::uintptr_t parentPtr{ 0 };
-			std::uint32_t parentFormID{ 0 };
-			std::string parentType;
-			std::string parentEditorID;
-			std::uint32_t parentSlots{ 0 };
-			std::uintptr_t addonPtr{ 0 };
-			std::uint32_t addonFormID{ 0 };
-			std::string addonEditorID;
-			std::uint32_t addonSlots{ 0 };
-			std::string partModel;
-			std::string maleFacebones;
-			std::string femaleFacebones;
-			std::string selectedFacebones;
-			std::string result;
-			std::uint32_t pruned{ 0 };
-		};
-
-		[[nodiscard]] FaceBoneCandidateDetail MakeFaceBoneCandidateDetail(
-			const char* a_source,
-			const std::int32_t a_slot,
-			const RE::BIPOBJECT& a_object,
-			const char* a_selectedFacebones,
-			std::string a_result,
-			const std::uint32_t a_pruned)
-		{
-			auto* parent = a_object.parent.object;
-			auto* addon = a_object.armorAddon;
-
-			FaceBoneCandidateDetail detail;
-			detail.source = SafeCString(a_source);
-			detail.slot = a_slot;
-			detail.parentPtr = reinterpret_cast<std::uintptr_t>(parent);
-			detail.parentFormID = parent ? parent->GetFormID() : 0;
-			detail.parentType = parent ? SafeCString(parent->GetFormTypeString()) : "";
-			detail.parentEditorID = parent ? SafeCString(parent->GetFormEditorID()) : "";
-			detail.parentSlots = FilledSlotsForLog(parent);
-			detail.addonPtr = reinterpret_cast<std::uintptr_t>(addon);
-			detail.addonFormID = addon ? addon->GetFormID() : 0;
-			detail.addonEditorID = addon ? SafeCString(addon->GetFormEditorID()) : "";
-			detail.addonSlots = addon ? addon->bipedModelData.bipedObjectSlots : 0;
-			detail.partModel = a_object.part ? SafeCString(a_object.part->GetModel()) : "";
-			detail.maleFacebones = addon ? SafeCString(addon->bipedModelFacebones[0].GetModel()) : "";
-			detail.femaleFacebones = addon ? SafeCString(addon->bipedModelFacebones[1].GetModel()) : "";
-			detail.selectedFacebones = SafeCString(a_selectedFacebones);
-			detail.result = std::move(a_result);
-			detail.pruned = a_pruned;
-			return detail;
-		}
-
-		void LogFaceBoneAttachFailure(
-			const RE::BipedAnim& a_biped,
-			const RE::NiAVObject& a_actorRoot,
-			const RE::SEX a_sex,
-			const std::size_t a_previewNodeCount,
-			const FaceBoneAttachStats& a_stats,
-			const std::vector<FaceBoneCandidateDetail>& a_details)
-		{
-			REX::WARN(
-				"preview facebone scan failed: biped={:X}, actorRoot={:X}, sex={}, previewNodes={}, candidates={}, noFacebonesModel={}, duplicatePath={}, loadFailed={}, prunedEmpty={}, prunedDuplicates={}, movedUnknownNodes={}, converted={}, reattached={}, skeletonCandidates={}, skeletonAttached={}, skeletonLoadFailed={}, skeletonPrunedEmpty={}",
-				reinterpret_cast<std::uintptr_t>(std::addressof(a_biped)),
-				reinterpret_cast<std::uintptr_t>(std::addressof(a_actorRoot)),
-				std::to_underlying(a_sex),
-				a_previewNodeCount,
-				a_stats.candidates,
-				a_stats.noFacebonesModel,
-				a_stats.duplicatePath,
-				a_stats.loadFailed,
-				a_stats.prunedEmpty,
-				a_stats.prunedDuplicates,
-				a_stats.movedUnknownNodes,
-				a_stats.converted,
-				a_stats.reattached,
-				a_stats.skeletonCandidates,
-				a_stats.skeletonAttached,
-				a_stats.skeletonLoadFailed,
-				a_stats.skeletonPrunedEmpty);
-
-			for (const auto& detail : a_details) {
-				REX::WARN(
-					"preview facebone candidate: source={}, slot={}, parent={:X}/{:08X}/{} '{}', parentSlots={:08X}, addon={:X}/{:08X} '{}', addonSlots={:08X}, part='{}', facebonesMale='{}', facebonesFemale='{}', selected='{}', result={}, pruned={}",
-					detail.source,
-					detail.slot,
-					detail.parentPtr,
-					detail.parentFormID,
-					detail.parentType,
-					detail.parentEditorID,
-					detail.parentSlots,
-					detail.addonPtr,
-					detail.addonFormID,
-					detail.addonEditorID,
-					detail.addonSlots,
-					detail.partModel,
-					detail.maleFacebones,
-					detail.femaleFacebones,
-					detail.selectedFacebones,
-					detail.result,
-					detail.pruned);
-			}
 		}
 
 		[[nodiscard]] RE::TESRace* ResolvePreviewRace(RE::PlayerCharacter& a_player, RE::TESNPC& a_npc)
@@ -1613,35 +649,6 @@ namespace TF3DHud
 			stats.objectAddons = CountBipedArmorAddons(a_previewBiped.Get().object);
 			stats.bufferedAddons = CountBipedArmorAddons(a_previewBiped.Get().bufferedObjects);
 			return stats;
-		}
-
-		bool IsDescendantOf(RE::NiAVObject& a_object, RE::NiAVObject& a_potentialAncestor)
-		{
-			for (auto* current = std::addressof(a_object); current; current = current->parent) {
-				if (current == std::addressof(a_potentialAncestor)) {
-					return true;
-				}
-			}
-			return false;
-		}
-
-		bool ContainsObject(RE::NiAVObject& a_root, RE::NiAVObject& a_target)
-		{
-			if (std::addressof(a_root) == std::addressof(a_target)) {
-				return true;
-			}
-
-			auto* node = a_root.IsNode();
-			if (!node) {
-				return false;
-			}
-
-			for (auto& child : node->children) {
-				if (child && ContainsObject(*child, a_target)) {
-					return true;
-				}
-			}
-			return false;
 		}
 
 		[[nodiscard]] RE::NiAVObject* GetTopRoot(RE::NiAVObject* a_object)
@@ -1880,7 +887,7 @@ namespace TF3DHud
 					continue;
 				}
 
-				auto previewClone = ClonePreviewObject(*candidate, std::addressof(a_previewRoot), std::addressof(a_previewNodes));
+				auto previewClone = PreviewClone::CloneObject(*candidate, std::addressof(a_previewRoot), std::addressof(a_previewNodes));
 				if (!previewClone) {
 					continue;
 				}
@@ -1905,7 +912,7 @@ namespace TF3DHud
 					continue;
 				}
 
-				auto previewClone = ClonePreviewObject(*external.sourceBone, std::addressof(a_previewRoot), std::addressof(a_previewNodes));
+				auto previewClone = PreviewClone::CloneObject(*external.sourceBone, std::addressof(a_previewRoot), std::addressof(a_previewNodes));
 				if (!previewClone) {
 					continue;
 				}
@@ -2060,67 +1067,11 @@ namespace TF3DHud
 			return false;
 		}
 
-		[[nodiscard]] bool SyncPreviewAttachmentParentsFromBiped(
-			RE::NiAVObject& a_previewRoot,
-			const RE::BipedAnim& a_sourceBiped)
-		{
-			if (g_previewAttachments.empty()) {
-				return false;
-			}
-
-			std::unordered_map<std::string, RE::NiAVObject*> previewNodes;
-			CollectPreviewSkinTargetNodes(a_previewRoot, previewNodes);
-			if (previewNodes.empty()) {
-				return false;
-			}
-
-			bool changed = false;
-			for (auto& attachment : g_previewAttachments) {
-				if (!attachment.object) {
-					continue;
-				}
-
-				const auto slotIndex = std::to_underlying(attachment.slot);
-				if (slotIndex < 0 || slotIndex >= std::to_underlying(RE::BIPED_OBJECT::kTotal)) {
-					continue;
-				}
-
-				auto* sourceClone = a_sourceBiped.object[slotIndex].partClone.get();
-				if (!sourceClone) {
-					continue;
-				}
-
-				auto* parent = FindPreviewAttachParent(*sourceClone, a_previewRoot, previewNodes);
-				if (!parent || parent == attachment.parent) {
-					continue;
-				}
-
-				if (attachment.parent) {
-					attachment.parent->DetachChild(attachment.object.get());
-				}
-				parent->AttachChild(attachment.object.get(), false);
-				attachment.parent = parent;
-				changed = true;
-
-				REX::INFO(
-					"Preview attachment reparented: slot={}, object='{}', parent='{}'",
-					slotIndex,
-					attachment.object->GetName().c_str(),
-					parent->GetName().c_str());
-			}
-
-			if (changed) {
-				RE::NiUpdateData updateData;
-				a_previewRoot.Update(updateData);
-			}
-			return changed;
-		}
-
 		void RetirePreviewAttachments(const bool a_detach, const bool a_preserveFaceAttachments = false)
 		{
 			std::vector<PreviewAttachment> preservedAttachments;
 			for (auto& attachment : g_previewAttachments) {
-				if (a_preserveFaceAttachments && attachment.slot == RE::BIPED_OBJECT::kFaceGenHead) {
+				if (a_preserveFaceAttachments && attachment.preserveOnEquipmentSync) {
 					preservedAttachments.push_back(std::move(attachment));
 					continue;
 				}
@@ -2191,7 +1142,7 @@ namespace TF3DHud
 
 			if (const auto accepted = g_rebuilder.TryResolveEquipmentSignature(
 					currentSignature,
-					HasPendingBipedModelHandles(a_biped, pendingSlot))) {
+					PreviewVisibility::HasPendingBipedModelHandles(a_biped, pendingSlot))) {
 				a_signature = *accepted;
 				return true;
 			}
@@ -2347,7 +1298,7 @@ namespace TF3DHud
 				std::unordered_set<RE::BSSkin::Instance*> sourceSkins;
 				CollectSkinInstances(sourceClone, sourceSkins);
 
-				auto previewClone = ClonePreviewObject(*sourceClone, std::addressof(a_previewRoot), std::addressof(previewNodes));
+				auto previewClone = PreviewClone::CloneObject(*sourceClone, std::addressof(a_previewRoot), std::addressof(previewNodes));
 				if (!previewClone) {
 					return;
 				}
@@ -2365,7 +1316,7 @@ namespace TF3DHud
 				RE::bhkWorld::RemoveObjects(previewClone.get(), true, true);
 				StripControllerChains(*previewClone);
 				PreparePreviewTree(*previewClone);
-				(void)InitializePreviewCloth(
+				(void)PreviewCloth::Initialize(
 					a_player,
 					*previewClone,
 					a_previewRoot,
@@ -2403,6 +1354,7 @@ namespace TF3DHud
 					.object = previewClone,
 					.parent = parent,
 				});
+				CollectNamedNodes(g_previewAttachments.back().object.get(), previewNodes);
 				if (modReplay.attached > 0) {
 					REX::INFO(
 						"Preview equipment replayed object-instance mod visuals: slot={}, attached={}",
@@ -2414,12 +1366,6 @@ namespace TF3DHud
 
 			for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kTotal); ++i) {
 				const auto slot = static_cast<RE::BIPED_OBJECT>(i);
-				switch (slot) {
-				case RE::BIPED_OBJECT::kFaceGenHead:
-					continue;
-				default:
-					break;
-				}
 				const auto& sourceObject = a_sourceBiped.object[i];
 				mirrorObject(slot, sourceObject);
 			}
@@ -2504,6 +1450,7 @@ namespace TF3DHud
 						.slot = RE::BIPED_OBJECT::kFaceGenHead,
 						.object = faceBones,
 						.parent = actorRootNode,
+						.preserveOnEquipmentSync = true,
 					});
 					CollectNamedNodes(faceBones.get(), previewNodes);
 				} else {
@@ -2550,7 +1497,7 @@ namespace TF3DHud
 					++stats.candidates;
 					if (!modelPath || modelPath[0] == '\0') {
 						++stats.noFacebonesModel;
-						details.push_back(MakeFaceBoneCandidateDetail(
+						details.push_back(PreviewFaceBoneDiagnostics::MakeCandidateDetail(
 							a_sourceName,
 							i,
 							sourceObject,
@@ -2561,7 +1508,7 @@ namespace TF3DHud
 					}
 					if (!loadedPaths.insert(modelPath).second) {
 						++stats.duplicatePath;
-						details.push_back(MakeFaceBoneCandidateDetail(
+						details.push_back(PreviewFaceBoneDiagnostics::MakeCandidateDetail(
 							a_sourceName,
 							i,
 							sourceObject,
@@ -2578,7 +1525,7 @@ namespace TF3DHud
 						} else {
 							++stats.prunedEmpty;
 						}
-						details.push_back(MakeFaceBoneCandidateDetail(
+						details.push_back(PreviewFaceBoneDiagnostics::MakeCandidateDetail(
 							a_sourceName,
 							i,
 							sourceObject,
@@ -2601,7 +1548,7 @@ namespace TF3DHud
 					stats.converted,
 					stats.prunedDuplicates);
 			} else {
-				LogFaceBoneAttachFailure(
+				PreviewFaceBoneDiagnostics::LogAttachFailure(
 					a_sourceBiped,
 					*actorRootNode,
 					a_sex,
@@ -2638,8 +1585,15 @@ namespace TF3DHud
 
 			RE::bhkWorld::RemoveObjects(faceNode.get(), true, true);
 			PreparePreviewTree(*faceNode);
-			InitializePreviewHeadPartCloth(*npc, a_player, *faceNode, a_previewRoot);
-			ApplyHeadPartBipedVisibility(*npc, *faceNode, a_sourceBiped);
+			PreviewCloth::InitializeHeadParts(*npc, a_player, *faceNode, a_previewRoot);
+
+			auto* previewRace = ResolvePreviewRace(a_player, *npc);
+			if (!previewRace) {
+				LogDiagnostic("preview head creation failed: preview race is null");
+				return false;
+			}
+
+			PreviewHeadParts::ApplyBipedVisibility(*npc, *previewRace, *faceNode, a_player, a_sourceBiped);
 
 			auto* actorRootNode = GetPreviewActor3DRootNode(a_previewRoot);
 			if (!actorRootNode) {
@@ -2650,12 +1604,6 @@ namespace TF3DHud
 			PreviewBipedData previewBiped(a_player, *actorRootNode);
 			if (!previewBiped) {
 				LogDiagnostic("preview head creation failed: preview biped allocation failed");
-				return false;
-			}
-
-			auto* previewRace = ResolvePreviewRace(a_player, *npc);
-			if (!previewRace) {
-				LogDiagnostic("preview head creation failed: preview race is null");
 				return false;
 			}
 
@@ -2725,14 +1673,15 @@ namespace TF3DHud
 			RE::bhkWorld::RemoveObjects(previewRoot.get(), true, true);
 			StripControllerChains(*previewRoot);
 			PreparePreviewTree(*previewRoot);
-			if (!EquipmentSyncSucceeded(SyncEquipmentsFromBiped(a_player, *previewRoot, a_biped, false))) {
-				restorePreviousPreviewMetadata();
-				return false;
-			}
 			if (!EnsurePreviewHead(a_player, *previewRoot, a_biped)) {
 				restorePreviousPreviewMetadata();
 				return false;
 			}
+			if (!EquipmentSyncSucceeded(SyncEquipmentsFromBiped(a_player, *previewRoot, a_biped, true))) {
+				restorePreviousPreviewMetadata();
+				return false;
+			}
+			RefreshPreviewHeadPartVisibility(a_player, a_biped);
 			if (auto* playerBase = a_player.GetObjectReference(); playerBase) {
 				if (auto* npc = playerBase->As<RE::TESNPC>(); npc) {
 					ApplyPreviewBodyTint(*npc, *previewRoot);
@@ -2741,7 +1690,7 @@ namespace TF3DHud
 			RebindPreviewSkinInstances(*previewRoot, a_biped);
 
 			SanitizePreviewRenderTree(*previewRoot);
-			ApplyHeadCenteredFraming(*previewRoot);
+			PreviewFraming::ApplyHeadCentered(*previewRoot, g_previewFlattenedBoneTree);
 			PrepareForInterface3DOffscreen(*previewRoot);
 
 			// Do not detach children from the old root here. DrawModel can have
@@ -2778,7 +1727,7 @@ namespace TF3DHud
 			}
 
 			std::int32_t pendingSlot = -1;
-			if (HasPendingBipedModelHandles(a_biped, pendingSlot)) {
+			if (PreviewVisibility::HasPendingBipedModelHandles(a_biped, pendingSlot)) {
 				return false;
 			}
 
@@ -2786,6 +1735,7 @@ namespace TF3DHud
 			if (!EquipmentSyncSucceeded(result)) {
 				return false;
 			}
+			RefreshPreviewHeadPartVisibility(a_player, a_biped);
 
 			if (auto* playerBase = a_player.GetObjectReference(); playerBase) {
 				if (auto* npc = playerBase->As<RE::TESNPC>(); npc) {
@@ -2795,7 +1745,7 @@ namespace TF3DHud
 
 			RebindPreviewSkinInstances(*g_previewRoot, a_biped);
 			SanitizePreviewRenderTree(*g_previewRoot);
-			ApplyHeadCenteredFraming(*g_previewRoot);
+			PreviewFraming::ApplyHeadCentered(*g_previewRoot, g_previewFlattenedBoneTree);
 			PrepareForInterface3DOffscreen(*g_previewRoot);
 
 			g_rebuilder.CommitEquipmentLayer(
@@ -2822,7 +1772,7 @@ namespace TF3DHud
 
 			auto player = RE::PlayerCharacter::GetSingleton();
 			std::string reason;
-			if (!ShouldShow(player, reason)) {
+			if (!PreviewVisibility::ShouldShow(player, reason)) {
 				LogDiagnostic("hidden: " + reason);
 				HideRendererAndResetAnimation();
 				return;
@@ -2846,7 +1796,7 @@ namespace TF3DHud
 			}
 
 			std::string sourceReason;
-			if (!IsPreviewSourceReady(*player, *biped, sourceReason)) {
+			if (!PreviewVisibility::IsPreviewSourceReady(*player, *biped, sourceReason)) {
 				LogDiagnostic("preview render postponed: " + sourceReason);
 				HideRendererAndResetAnimation();
 				return;
@@ -2879,7 +1829,7 @@ namespace TF3DHud
 			}
 
 			std::string reason;
-			if (!ShouldShow(player, reason)) {
+			if (!PreviewVisibility::ShouldShow(player, reason)) {
 				LogDiagnostic("hidden: " + reason);
 				HideRendererAndResetAnimation();
 				g_renderStateDirty = false;
@@ -2897,7 +1847,7 @@ namespace TF3DHud
 			}
 
 			std::string sourceReason;
-			if (!IsPreviewSourceReady(*player, *biped, sourceReason)) {
+			if (!PreviewVisibility::IsPreviewSourceReady(*player, *biped, sourceReason)) {
 				LogDiagnostic("preview render postponed: " + sourceReason);
 				HideRendererAndResetAnimation();
 				g_renderStateDirty = false;
@@ -2913,7 +1863,7 @@ namespace TF3DHud
 
 			auto tryRebuildPreview = [&](std::uint64_t a_bipedSignature, std::uint64_t a_visualSignature) {
 				std::int32_t pendingSlot = -1;
-				if (HasPendingBipedModelHandles(*biped, pendingSlot)) {
+				if (PreviewVisibility::HasPendingBipedModelHandles(*biped, pendingSlot)) {
 					return false;
 				}
 
@@ -2954,7 +1904,7 @@ namespace TF3DHud
 			}
 
 			if (g_pendingFramingUpdate) {
-				ApplyHeadCenteredFraming(*g_previewRoot);
+				PreviewFraming::ApplyHeadCentered(*g_previewRoot, g_previewFlattenedBoneTree);
 				g_pendingFramingUpdate = false;
 			}
 
@@ -2999,13 +1949,12 @@ namespace TF3DHud
 			}
 			(void)Morph::Update(*player, *g_previewRoot, g_previewFlattenedBoneTree);
 
-			(void)SyncPreviewAttachmentParentsFromBiped(*g_previewRoot, *biped);
 			if (g_rebuilder.ConsumeBehaviorGraphRefreshRequest()) {
 				Animations::ResetGraph();
 			}
 			Animations::Update(*player, *g_previewRoot, renderDelta);
 			SyncPreviewFacialExpression(*player);
-			ApplyHeadFollowTranslation(*g_previewRoot);
+			PreviewFraming::ApplyHeadFollowTranslation(*g_previewRoot, g_previewFlattenedBoneTree);
 
 			if (g_pendingRendererAttach) {
 				Renderer::AttachPreviewRoot(*g_previewRoot);
