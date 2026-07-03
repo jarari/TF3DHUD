@@ -16,12 +16,17 @@
 #include "RE/B/BSFixedString.h"
 #include "RE/B/BSTimer.h"
 #include "RE/B/BSTEvent.h"
+#include "RE/H/HUDMenu.h"
+#include "RE/I/IMenu.h"
 #include "RE/I/Interface3D.h"
 #include "RE/P/PlayerCharacter.h"
 #include "RE/T/TESEquipEvent.h"
 #include "RE/T/TESForm.h"
+#include "RE/U/UI.h"
 
 #include <cstdint>
+#include <string_view>
+#include <vector>
 
 namespace TF3DHud
 {
@@ -59,6 +64,7 @@ namespace TF3DHud
 		RenderSceneDeferred_t* g_renderSceneDeferred{ nullptr };
 		RenderPrepassesAndMenus_t* g_renderPrepassesAndMenus{ nullptr };
 		bool g_equipWatcherRegistered{ false };
+		std::vector<Scaleform::Ptr<RE::IMenu>> g_renderDeferredMenuRefs;
 
 		class EquipWatcher :
 			public RE::BSTEventSink<RE::TESEquipEvent>
@@ -108,6 +114,39 @@ namespace TF3DHud
 			REX::INFO("Registered TESEquipEvent watcher");
 		}
 
+		void RetainHUDMenuStackEntriesUntilNextFrame()
+		{
+			if (!g_renderDeferredMenuRefs.empty()) {
+				return;
+			}
+
+			auto* const ui = RE::UI::GetSingleton();
+			if (!ui) {
+				return;
+			}
+
+			// IDA: Interface3D::Renderer::RenderAll holds RenderersRWLock for read while
+			// RenderPrepassesAndMenus renders menus. If EnumerateMenuStack's temporary
+			// Release destroys HUDMenu there, PowerArmorGeometry::~PowerArmorGeometry can
+			// call Interface3D::Renderer::Create/Release and self-deadlock on that lock.
+			for (const auto& menu : ui->menuStack) {
+				auto* const rawMenu = menu.get();
+				if (!rawMenu) {
+					continue;
+				}
+
+				const auto* const menuName = rawMenu->menuName.c_str();
+				if (menuName && std::string_view{ menuName } == RE::HUDMenu::MENU_NAME) {
+					g_renderDeferredMenuRefs.emplace_back(rawMenu);
+				}
+			}
+		}
+
+		void ReleaseMenuRefsDeferredFromRender()
+		{
+			g_renderDeferredMenuRefs.clear();
+		}
+
 		[[nodiscard]] bool IsTF3DHudOffscreenRender(RE::ShadowSceneNode* a_shadowSceneNode)
 		{
 			const auto* renderer = Renderer::Get();
@@ -119,6 +158,8 @@ namespace TF3DHud
 			if (g_runActorUpdates) {
 				g_runActorUpdates(a_processLists, a_deltaTime, a_instant);
 			}
+
+			ReleaseMenuRefsDeferredFromRender();
 
 			const auto* const timer = RE::BSTimer::GetSingleton();
 			Previewer::Update(timer ? timer->delta : a_deltaTime);
@@ -188,6 +229,10 @@ namespace TF3DHud
 
 		void HookedRenderPrepassesAndMenus(RE::Interface3D::Renderer* a_renderer)
 		{
+			if (Renderer::Get()) {
+				RetainHUDMenuStackEntriesUntilNextFrame();
+			}
+
 			if (a_renderer && a_renderer == Renderer::Get()) {
 				Previewer::CommitRenderState();
 			}
