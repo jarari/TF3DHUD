@@ -1,12 +1,14 @@
 #include "Previewer.h"
+#include "Address.h"
 #include "Animations.h"
 #include "Morph.h"
 #include "PreviewRebuilder.h"
 #include "Renderer.h"
 #include "Utils.h"
 
-#include "BSSkin.h"
 #include "Config.h"
+#include "RE/BSFaceGenAnimationData.h"
+#include "RE/BSSkin.h"
 
 #include "RE/B/BSFadeNode.h"
 #include "RE/B/BSFlattenedBoneTree.h"
@@ -45,72 +47,6 @@
 #include <utility>
 #include <vector>
 
-namespace RE
-{
-	struct BSFaceGenExpression
-	{
-		float expression[54];
-	};
-	static_assert(sizeof(BSFaceGenExpression) == 0xD8);
-
-	namespace FaceEmotionalIdles
-	{
-		struct InstanceData
-		{
-			std::uint32_t pad00;
-			std::uint32_t handle;
-			std::uint32_t pad08;
-			float blinkTimer;
-			float lidFollowEyes;
-			std::uint64_t pad18;
-			std::uint64_t pad20;
-			std::uint32_t unk28;
-			std::uint32_t pad2C;
-			BSFixedString archeType;
-		};
-		static_assert(sizeof(InstanceData) == 0x38);
-	}
-
-	class BSFaceGenAnimationData :
-		public NiExtraData
-	{
-	public:
-		BSFaceGenExpression currentExpression;
-		BSFaceGenExpression modifierExpression;
-		BSFaceGenExpression baseExpression;
-		std::array<std::byte, 0x38> emotionalIdleData;
-		bool morphsDirty;
-		bool forceMorphUpdate;
-		std::uint8_t pad2DA;
-		bool disableMorphUpdate;
-		std::uint32_t morphUpdateState;
-		std::uint32_t unk2E0;
-		std::uint32_t pad2E4;
-	};
-	static_assert(sizeof(BSFaceGenAnimationData) == 0x2E8);
-	static_assert(offsetof(BSFaceGenAnimationData, currentExpression) == 0x18);
-	static_assert(offsetof(BSFaceGenAnimationData, modifierExpression) == 0xF0);
-	static_assert(offsetof(BSFaceGenAnimationData, baseExpression) == 0x1C8);
-	static_assert(offsetof(BSFaceGenAnimationData, emotionalIdleData) == 0x2A0);
-	static_assert(offsetof(BSFaceGenAnimationData, morphsDirty) == 0x2D8);
-	static_assert(offsetof(BSFaceGenAnimationData, forceMorphUpdate) == 0x2D9);
-	static_assert(offsetof(BSFaceGenAnimationData, disableMorphUpdate) == 0x2DB);
-	static_assert(offsetof(BSFaceGenAnimationData, morphUpdateState) == 0x2DC);
-	static_assert(offsetof(BSFaceGenAnimationData, unk2E0) == 0x2E0);
-
-	class BSFaceGenNiNode :
-		public NiNode
-	{
-	public:
-		std::array<std::byte, 0x30> faceGenData;
-		BSFaceGenAnimationData* animationData;
-		float updateTime;
-		std::uint16_t faceGenFlags;
-	};
-	static_assert(offsetof(BSFaceGenNiNode, animationData) == 0x170);
-	static_assert(offsetof(BSFaceGenNiNode, faceGenFlags) == 0x17C);
-}
-
 namespace TF3DHud
 {
 	namespace
@@ -118,77 +54,33 @@ namespace TF3DHud
 		constexpr std::uint64_t kNiAVObjectTopFadeNode = 0x4000;
 		constexpr std::uint64_t kNiAVObjectFadeDone = 0x8000;
 
-		using CreateHeadForNPC_t = bool(RE::TESNPC*, RE::NiPointer<RE::BSFaceGenNiNode>&, bool, bool, void*);
-		using CalculateBodyTintColor_t =
-			void(RE::TESNPC*, RE::NiColorA&, RE::BGSCharacterTint::Entry*, bool, bool);
-		using UpdateBodyTintColorsOnScene_t = void(RE::NiAVObject*, const RE::NiColorA&);
-		using ConvertNodeTree_t = RE::NiAVObject*(RE::NiAVObject*);
-		using GetActorBodyPart3D_t =
-			RE::NiAVObject*(RE::Actor*, RE::NiAVObject*, const std::uint32_t*, bool, bool);
-		using GetNPCHeadPart_t = RE::BGSHeadPart*(RE::TESNPC*, RE::BGSHeadPart::HeadPartType);
-		using GetDefaultRaceHeadPart_t =
-			RE::BGSHeadPart*(const RE::TESRace*, RE::SEX, RE::BGSHeadPart::HeadPartType);
-		using GetNumSegments_t = std::uint32_t(const RE::BSGeometrySegmentData*);
-		using GetSubSegmentIndex_t =
-			std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t);
-		using SetSegmentEnabled_t = void(RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t, bool);
-		using CreateClothFor3D_t =
-			RE::NiExtraData*(RE::NiAVObject&, const char*, const RE::NiTransform&, RE::NiAVObject*);
-		using SetClothWorld_t = void(RE::NiExtraData*, void*);
-		using SetClothSettleOnTransitionToSim_t = void(RE::NiExtraData*, bool);
-		using FixFaceGenHeadSkinInstances_t = void(RE::BSFaceGenNiNode*, RE::NiAVObject*, bool);
-		using ResetFaceGenCurrentMorphs_t = int(RE::BSFaceGenAnimationData*, float);
+		using BorrowedBipedPointer = Address::BorrowedBipedPointer;
+		using SkinComplexionContext = Address::SkinComplexionContext;
 
-		struct BorrowedBipedPointer
-		{
-			RE::BipedAnim* biped{ nullptr };
-		};
-		static_assert(sizeof(BorrowedBipedPointer) == sizeof(void*));
-
-		using BipedAnimCtor_t = RE::BipedAnim*(RE::BipedAnim*, RE::TESObjectREFR*, bool);
-		using BipedAnimDtor_t = void(RE::BipedAnim*);
-		using GetSkin_t = RE::TESObjectARMO*(RE::TESNPC*);
-		using AddArmorToBiped_t =
-			void(const RE::BGSObjectInstance*, RE::TESRace*, const BorrowedBipedPointer*, RE::SEX, std::uint16_t);
-		using InitWornObject_t = bool(RE::TESNPC*, const BorrowedBipedPointer*, const RE::BGSObjectInstance*);
-		using GetChargenModelName_t = void(char*, std::uint32_t, const char*, bool);
-
-		struct SkinComplexionContext
-		{
-			RE::BIPED_OBJECT slot{ RE::BIPED_OBJECT::kNone };
-			std::uint32_t pad{ 0 };
-			RE::BIPOBJECT* objects{ nullptr };
-			RE::ObjectRefHandle actorRef{};
-			std::uint32_t pad2{ 0 };
-		};
-		static_assert(offsetof(SkinComplexionContext, objects) == 0x8);
-		static_assert(offsetof(SkinComplexionContext, actorRef) == 0x10);
-		using DoAdjustSkinComplexion_t = std::uint64_t(SkinComplexionContext*, RE::NiAVObject*);
-
-		REL::Relocation<void (*)(RE::NiAVObject*)> g_createBoneMap{ REL::ID(1131947) };
-		REL::Relocation<CreateHeadForNPC_t*> g_createHeadForNPC{ REL::ID(1455012) };
-		REL::Relocation<CalculateBodyTintColor_t*> g_calculateBodyTintColor{ REL::ID(134537) };
-		REL::Relocation<UpdateBodyTintColorsOnScene_t*> g_updateBodyTintColorsOnScene{ REL::ID(49935) };
-		REL::Relocation<DoAdjustSkinComplexion_t*> g_doAdjustSkinComplexion{ REL::ID(1295935) };
-		REL::Relocation<ConvertNodeTree_t*> g_convertNodeTree{ REL::ID(633230) };
-		REL::Relocation<GetActorBodyPart3D_t*> g_getActorBodyPart3D{ REL::ID(157573) };
-		REL::Relocation<GetNPCHeadPart_t*> g_getNPCHeadPart{ REL::ID(946253) };
-		REL::Relocation<GetDefaultRaceHeadPart_t*> g_getDefaultRaceHeadPart{ REL::ID(1120148) };
-		REL::Relocation<GetNumSegments_t*> g_getNumSegments{ REL::ID(331465) };
-		REL::Relocation<GetSubSegmentIndex_t*> g_getSubSegmentIndex{ REL::ID(453731) };
-		REL::Relocation<SetSegmentEnabled_t*> g_enableSegment{ REL::ID(1134184) };
-		REL::Relocation<SetSegmentEnabled_t*> g_disableSegment{ REL::ID(1466142) };
-		REL::Relocation<CreateClothFor3D_t*> g_createClothFor3D{ REL::ID(1322043) };
-		REL::Relocation<SetClothWorld_t*> g_setClothWorld{ REL::ID(19064) };
-		REL::Relocation<SetClothSettleOnTransitionToSim_t*> g_setClothSettleOnTransitionToSim{ REL::ID(638869) };
-		REL::Relocation<FixFaceGenHeadSkinInstances_t*> g_fixFaceGenHeadSkinInstances{ REL::ID(1131949) };
-		REL::Relocation<ResetFaceGenCurrentMorphs_t*> g_resetFaceGenCurrentMorphs{ REL::ID(1174798) };
-		REL::Relocation<BipedAnimCtor_t*> g_bipedAnimCtor{ REL::ID(724121) };
-		REL::Relocation<BipedAnimDtor_t*> g_bipedAnimDtor{ REL::ID(1494601) };
-		REL::Relocation<GetSkin_t*> g_getSkin{ REL::ID(1042540) };
-		REL::Relocation<AddArmorToBiped_t*> g_addArmorToBiped{ REL::ID(724793) };
-		REL::Relocation<InitWornObject_t*> g_initWornObject{ REL::ID(1374346) };
-		REL::Relocation<GetChargenModelName_t*> g_getChargenModelName{ REL::ID(1493791) };
+		auto& g_createBoneMap = Address::CreateBoneMap;
+		auto& g_createHeadForNPC = Address::CreateHeadForNPC;
+		auto& g_calculateBodyTintColor = Address::CalculateBodyTintColor;
+		auto& g_updateBodyTintColorsOnScene = Address::UpdateBodyTintColorsOnScene;
+		auto& g_doAdjustSkinComplexion = Address::DoAdjustSkinComplexion;
+		auto& g_convertNodeTree = Address::ConvertNodeTree;
+		auto& g_getActorBodyPart3D = Address::GetActorBodyPart3D;
+		auto& g_getNPCHeadPart = Address::GetNPCHeadPart;
+		auto& g_getDefaultRaceHeadPart = Address::GetDefaultRaceHeadPart;
+		auto& g_getNumSegments = Address::GetNumSegments;
+		auto& g_getSubSegmentIndex = Address::GetSubSegmentIndex;
+		auto& g_enableSegment = Address::EnableSegment;
+		auto& g_disableSegment = Address::DisableSegment;
+		auto& g_createClothFor3D = Address::CreateClothFor3D;
+		auto& g_setClothWorld = Address::SetClothWorld;
+		auto& g_setClothSettleOnTransitionToSim = Address::SetClothSettleOnTransitionToSim;
+		auto& g_fixFaceGenHeadSkinInstances = Address::FixFaceGenHeadSkinInstances;
+		auto& g_resetFaceGenCurrentMorphs = Address::ResetFaceGenCurrentMorphs;
+		auto& g_bipedAnimCtor = Address::BipedAnimCtor;
+		auto& g_bipedAnimDtor = Address::BipedAnimDtor;
+		auto& g_getSkin = Address::GetSkin;
+		auto& g_addArmorToBiped = Address::AddArmorToBiped;
+		auto& g_initWornObject = Address::InitWornObject;
+		auto& g_getChargenModelName = Address::GetChargenModelName;
 
 		struct PreviewAttachment
 		{

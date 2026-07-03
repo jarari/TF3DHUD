@@ -1,6 +1,12 @@
 #include "Animations.h"
 
+#include "Address.h"
 #include "Utils.h"
+
+#include "RE/AnimationSpeedContour.h"
+#include "RE/BSAnimationGraphChannel.h"
+#include "RE/BSAnimationUpdateData.h"
+#include "RE/BShkbAnimationGraph.h"
 
 #include "RE/A/Actor.h"
 #include "RE/A/ActionInput.h"
@@ -48,52 +54,6 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
-namespace RE
-{
-	class BSAnimationGraphChannel :
-		public BSIntrusiveRefCounted
-	{
-	public:
-		virtual ~BSAnimationGraphChannel() = default;
-		virtual void PollChannelUpdate(bool a_shouldApplyAdjustments) = 0;
-		virtual void Reset() = 0;
-
-		BSFixedString variableName;  // 10
-		std::uint32_t unk18{ 0 };    // 18
-	};
-	static_assert(offsetof(BSAnimationGraphChannel, variableName) == 0x10);
-
-	class BShkbAnimationGraph :
-		public BSIntrusiveRefCounted
-	{
-	public:
-		virtual ~BShkbAnimationGraph() = default;
-	};
-	static_assert(sizeof(BShkbAnimationGraph) == 0x10);
-
-	class AnimationSpeedContour :
-		public BSIntrusiveRefCounted
-	{
-	public:
-		virtual ~AnimationSpeedContour() = default;
-	};
-
-	namespace AnimationSpeedInformationTypes
-	{
-		struct RequestedSpeed
-		{
-			float value;
-		};
-		static_assert(sizeof(RequestedSpeed) == 0x4);
-
-		struct GraphSpeedInput
-		{
-			float speed;
-		};
-		static_assert(sizeof(GraphSpeedInput) == 0x4);
-	}
-}
 
 namespace TF3DHud::Animations
 {
@@ -310,130 +270,43 @@ namespace TF3DHud::Animations
 			return ContainsEngineFixedString(a_channel.variableName, kPreviewSuppressedAnimationChannels);
 		}
 
-		using BShkbAnimationGraphCtor_t =
-			RE::BShkbAnimationGraph*(RE::BShkbAnimationGraph*, RE::Actor*, bool);
-		using NotifyAnimationGraphImpl_t = bool(RE::IAnimationGraphManagerHolder*, const RE::BSFixedString&);
-		using GetGraphVariableBool_t = bool(const RE::BShkbAnimationGraph*, const RE::BSFixedString&, bool&);
-		using GetGraphVariableFloat_t = bool(const RE::BShkbAnimationGraph*, const RE::BSFixedString&, float&);
-		using GetGraphVariableInt_t = bool(const RE::BShkbAnimationGraph*, const RE::BSFixedString&, std::int32_t&);
-		using ActorAnimationGraphManagerCallback_t =
-			void(RE::IAnimationGraphManagerHolder*, const RE::BSTSmartPointer<RE::BSAnimationGraphManager>&);
-		using CreateAnimationGraphManager_t = bool(RE::IAnimationGraphManagerHolder*, const char*);
-		struct BSAnimationUpdateData
-		{
-			float deltaTime{ 0.0F };
-			std::uint32_t pad04{ 0 };
-			void* unk08{ nullptr };
-			void* postUpdateFunctor{ nullptr };
-			std::uint32_t flags18{ 0x01000000 };
-			std::uint16_t flags1C{ 0x0101 };
-			std::uint16_t pad1E{ 0 };
-		};
-		static_assert(offsetof(BSAnimationUpdateData, flags18) == 0x18);
-		static_assert(offsetof(BSAnimationUpdateData, flags1C) == 0x1C);
-		static_assert(sizeof(BSAnimationUpdateData) == 0x20);
-		using UpdateAnimationGraphManager_t = bool(RE::IAnimationGraphManagerHolder*, const BSAnimationUpdateData&);
-		using UpdateAnimationGraphManagerFloat_t = bool(RE::IAnimationGraphManagerHolder*, float);
-		using GetProjectForActor_t = const char*(RE::Actor*, RE::NiAVObject*);
-		using SetAnimationGraphTarget_t = bool(RE::IAnimationGraphManagerHolder*, RE::NiAVObject*, bool);
-		using ActorBoolCallback_t = bool(const RE::Actor*);
-		using ActorFloatCallback_t = float(const RE::Actor*);
-		using GetReferenceScale_t = float(const RE::TESObjectREFR*);
-		using UseSpeedContoursForMovementCalculations_t = bool(const RE::Actor*, std::uint32_t);
-		using GetActiveContourFromHolder_t = bool(
-			const RE::IAnimationGraphManagerHolder*,
-			RE::BSTSmartPointer<RE::AnimationSpeedContour>&,
-			bool*);
-		using GetGraphSpeedForRequestedSpeedAndDirection_t = std::uint32_t(
-			const RE::AnimationSpeedContour*,
-			const RE::AnimationSpeedInformationTypes::RequestedSpeed&,
-			float,
-			const void*,
-			RE::AnimationSpeedInformationTypes::GraphSpeedInput&,
-			void*);
-		using DestroyAdjustmentArena_t = void(void*);
-		enum class SyncPointType : std::uint32_t
-		{
-			kLeft = 0,
-			kRight = 1,
-			kSecondLeft = 2,
-			kSecondRight = 3,
-		};
-		using CalculateSpeedAdjustToSyncAnimationCycles_t = bool(
-			float,
-			float,
-			const RE::BGSAnimationSystemUtils::ActiveSyncInfo&,
-			float,
-			const SyncPointType&,
-			float&);
+		using SyncPointType = Address::SyncPointType;
 		using SubgraphPreloadArena = RE::BSTObjectArena<RE::BSFixedString, RE::BSTObjectArenaScrapAlloc, 32>;
-		using RetrieveSubGraphData_t = bool(
-			void*,
-			std::uint32_t,
-			const RE::SubgraphIdentifier*,
-			RE::BSFixedString*,
-			SubgraphPreloadArena*);
-		using InitializeSubGraph_t = bool(
-			void*,
-			RE::BShkbAnimationGraph*,
-			const RE::BSFixedString*,
-			SubgraphPreloadArena*,
-			SubgraphPreloadArena*,
-			const std::int32_t*,
-			RE::SubgraphHandle*);
-		using ActivateAnimationGraphManager_t = bool(RE::BSAnimationGraphManager*);
-		using GetCellPriority_t = std::int32_t(RE::TES*, const RE::TESObjectCELL*, RE::NiPoint3*);
-		using GetDefaultAction_t = RE::BGSAction*(void);
-		using TESActionDataCtor_t = void*(
-			void*,
-			RE::ActionInput::ACTIONPRIORITY,
-			RE::TESObjectREFR*,
-			RE::BGSAction*,
-			RE::TESObjectREFR*,
-			RE::ActionInput::Data);
-		using TESActionDataDtor_t = void(void*);
-		using InterpretAction_t = bool(void*);
 
-		REL::Relocation<BShkbAnimationGraphCtor_t*> g_constructBShkbAnimationGraph{ REL::ID{ 1074981, 2256827 } };
-		REL::Relocation<NotifyAnimationGraphImpl_t*> g_notifyAnimationGraphImpl{ REL::ID{ 1379025, 2214561 } };
-		REL::Relocation<GetGraphVariableBool_t*> g_getBShkbGraphVariableBool{ REL::ID(815875) };
-		REL::Relocation<GetGraphVariableFloat_t*> g_getBShkbGraphVariableFloat{ REL::ID(1254547) };
-		REL::Relocation<GetGraphVariableInt_t*> g_getBShkbGraphVariableInt{ REL::ID(110974) };
-		REL::Relocation<ActorAnimationGraphManagerCallback_t*> g_actorPreUpdateAnimationGraphManager{ REL::ID{ 442032, 2230545 } };
-		REL::Relocation<ActorAnimationGraphManagerCallback_t*> g_actorPreLoadAnimationGraphManager{ REL::ID{ 1053762, 2230546 } };
-		REL::Relocation<ActorAnimationGraphManagerCallback_t*> g_actorPostLoadAnimationGraphManager{ REL::ID{ 348865, 2230547 } };
-		REL::Relocation<CreateAnimationGraphManager_t*> g_createAnimationGraphManager{ REL::ID{ 532453, 2214553 } };
-		REL::Relocation<UpdateAnimationGraphManager_t*> g_updateAnimationGraphManager{ REL::ID{ 1492656, 2214536 } };
-		REL::Relocation<UpdateAnimationGraphManagerFloat_t*> g_updateAnimationGraphManagerFloat{ REL::ID(973903) };
-		REL::Relocation<GetProjectForActor_t*> g_getProjectForActor{ REL::ID{ 804224, 2236395 } };
-		REL::Relocation<SetAnimationGraphTarget_t*> g_setAnimationGraphTarget{ REL::ID{ 1340816, 2214556 } };
-		REL::Relocation<ActorBoolCallback_t*> g_getFreezeGraphLocomotionChannel{ REL::ID{ 458107, 2230387 } };
-		REL::Relocation<ActorFloatCallback_t*> g_getActorDirection{ REL::ID{ 279535, 2230411 } };
-		REL::Relocation<GetReferenceScale_t*> g_getReferenceScale{ REL::ID{ 911188, 2200892 } };
-		REL::Relocation<UseSpeedContoursForMovementCalculations_t*> g_useSpeedContoursForMovementCalculations{
-			REL::ID{ 272153, 2236396 }
-		};
-		REL::Relocation<GetActiveContourFromHolder_t*> g_getActiveContourFromHolder{ REL::ID(1388221) };
-		REL::Relocation<GetGraphSpeedForRequestedSpeedAndDirection_t*> g_getGraphSpeedForRequestedSpeedAndDirection{
-			REL::ID(289793)
-		};
-		REL::Relocation<DestroyAdjustmentArena_t*> g_destroyAdjustmentArena{ REL::ID(1000046) };
-		REL::Relocation<CalculateSpeedAdjustToSyncAnimationCycles_t*> g_calculateSpeedAdjustToSyncAnimationCycles{
-			REL::ID{ 552450, 2214290 }
-		};
-		REL::Relocation<RetrieveSubGraphData_t*> g_retrieveSubGraphData{ REL::ID{ 1291992, 2188860 } };
-		// IDA OG 1.10.163: BSBehaviorGraphSwapSingleton::InitializeSubGraph at 0x1416F3890.
-		// The AE ID is not present in the local OG->AE mapping CSV yet.
-		REL::Relocation<InitializeSubGraph_t*> g_initializeSubGraph{ REL::ID(649876) };
-		REL::Relocation<void**> g_behaviorGraphSwapSingleton{ REL::ID(153510) };
-		REL::Relocation<void**> g_animationSubGraphDataSingleton{ REL::ID(1363506) };
-		REL::Relocation<ActivateAnimationGraphManager_t*> g_activateAnimationGraphManager{ REL::ID(950096) };
-		REL::Relocation<GetCellPriority_t*> g_getCellPriority{ REL::ID{ 665767, 2192052 } };
-		REL::Relocation<GetDefaultAction_t*> g_getDefaultObjectForActionInitializeToBaseState{ REL::ID(639576) };
-		REL::Relocation<GetDefaultAction_t*> g_getDefaultObjectForActionInstantInitializeToBaseState{ REL::ID{ 1517112, 2214310 } };
-		REL::Relocation<TESActionDataCtor_t*> g_constructTESActionData{ REL::ID(1307135) };
-		REL::Relocation<TESActionDataDtor_t*> g_destroyTESActionData{ REL::ID(229573) };
-		REL::Relocation<InterpretAction_t*> g_interpretAction{ REL::ID{ 10433, 2229530 } };
+		auto& g_constructBShkbAnimationGraph = Address::ConstructBShkbAnimationGraph;
+		auto& g_notifyAnimationGraphImpl = Address::NotifyAnimationGraphImpl;
+		auto& g_getBShkbGraphVariableBool = Address::GetBShkbGraphVariableBool;
+		auto& g_getBShkbGraphVariableFloat = Address::GetBShkbGraphVariableFloat;
+		auto& g_getBShkbGraphVariableInt = Address::GetBShkbGraphVariableInt;
+		auto& g_actorPreUpdateAnimationGraphManager = Address::ActorPreUpdateAnimationGraphManager;
+		auto& g_actorPreLoadAnimationGraphManager = Address::ActorPreLoadAnimationGraphManager;
+		auto& g_actorPostLoadAnimationGraphManager = Address::ActorPostLoadAnimationGraphManager;
+		auto& g_createAnimationGraphManager = Address::CreateAnimationGraphManager;
+		auto& g_updateAnimationGraphManager = Address::UpdateAnimationGraphManager;
+		auto& g_updateAnimationGraphManagerFloat = Address::UpdateAnimationGraphManagerFloat;
+		auto& g_getProjectForActor = Address::GetProjectForActor;
+		auto& g_setAnimationGraphTarget = Address::SetAnimationGraphTarget;
+		auto& g_getFreezeGraphLocomotionChannel = Address::GetFreezeGraphLocomotionChannel;
+		auto& g_getActorDirection = Address::GetActorDirection;
+		auto& g_getReferenceScale = Address::GetReferenceScale;
+		auto& g_useSpeedContoursForMovementCalculations = Address::UseSpeedContoursForMovementCalculations;
+		auto& g_getActiveContourFromHolder = Address::GetActiveContourFromHolder;
+		auto& g_getGraphSpeedForRequestedSpeedAndDirection = Address::GetGraphSpeedForRequestedSpeedAndDirection;
+		auto& g_destroyAdjustmentArena = Address::DestroyAdjustmentArena;
+		auto& g_calculateSpeedAdjustToSyncAnimationCycles = Address::CalculateSpeedAdjustToSyncAnimationCycles;
+		auto& g_retrieveSubGraphData = Address::RetrieveSubGraphData;
+		auto& g_initializeSubGraph = Address::InitializeSubGraph;
+		auto& g_behaviorGraphSwapSingleton = Address::BehaviorGraphSwapSingleton;
+		auto& g_animationSubGraphDataSingleton = Address::AnimationSubGraphDataSingleton;
+		auto& g_activateAnimationGraphManager = Address::ActivateAnimationGraphManager;
+		auto& g_getCellPriority = Address::GetCellPriority;
+		auto& g_getDefaultObjectForActionInitializeToBaseState =
+			Address::GetDefaultObjectForActionInitializeToBaseState;
+		auto& g_getDefaultObjectForActionInstantInitializeToBaseState =
+			Address::GetDefaultObjectForActionInstantInitializeToBaseState;
+		auto& g_constructTESActionData = Address::ConstructTESActionData;
+		auto& g_destroyTESActionData = Address::DestroyTESActionData;
+		auto& g_interpretAction = Address::InterpretAction;
 
 		template <class T, class Allocator>
 		[[nodiscard]] const T* GetEngineSmallArrayStorage(const RE::BSTArray<T, Allocator>& a_source)
@@ -1837,7 +1710,7 @@ namespace TF3DHud::Animations
 				// IDA: InitializeActorInstant performs a tiny graph update after
 				// the initialize action so the state machine consumes the event
 				// immediately.
-				BSAnimationUpdateData updateData;
+				RE::BSAnimationUpdateData updateData;
 				updateData.deltaTime = 0.0001F;
 				updateData.flags18 = 0xFFFF;
 				updateData.flags1C = 1;

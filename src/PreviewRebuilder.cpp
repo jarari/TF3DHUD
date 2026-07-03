@@ -1,3 +1,4 @@
+#include "Address.h"
 #include "PreviewRebuilder.h"
 
 #include "Utils.h"
@@ -32,8 +33,7 @@ namespace TF3DHud::PreviewRebuilder
 			return static_cast<std::uint32_t>(a_flag);
 		}
 
-		using GetSkin_t = RE::TESObjectARMO*(RE::TESNPC*);
-		REL::Relocation<GetSkin_t*> g_getSkin{ REL::ID(1042540) };
+		auto& g_getSkin = Address::GetSkin;
 
 		void HashInteger(std::uint64_t& a_hash, const std::uintptr_t a_value)
 		{

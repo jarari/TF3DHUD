@@ -1,5 +1,6 @@
 #include "Renderer.h"
 
+#include "Address.h"
 #include "Config.h"
 #include "Lights.h"
 
@@ -33,9 +34,7 @@ namespace TF3DHud::Renderer
 		constexpr float kVanillaDisplayTop = 79.875F;
 		constexpr float kVanillaDisplayRight = 148.125F;
 		constexpr float kVanillaDisplayBottom = -79.875F;
-		using ForceUpgradeTextures_t = void(RE::NiAVObject*, bool, bool);
-
-		REL::Relocation<ForceUpgradeTextures_t*> g_forceUpgradeTextures{ REL::ID{ 1417022, 2229490 } };
+		auto& g_forceUpgradeTextures = Address::ForceUpgradeTextures;
 
 		struct DisplayBounds
 		{

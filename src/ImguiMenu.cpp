@@ -1,5 +1,6 @@
 #include "ImguiMenu.h"
 
+#include "Address.h"
 #include "Animations.h"
 #include "Config.h"
 #include "Previewer.h"
@@ -47,10 +48,7 @@ namespace TF3DHud::Imgui
 		using Present_t = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
 		using ClipCursor_t = BOOL(WINAPI*)(const RECT*);
 
-		REL::Relocation<std::uintptr_t> g_d3d11CreateDeviceAndSwapChainCall{ REL::ID{ 224250, 4492363 } };
-		REL::Relocation<std::uintptr_t> g_clipCursor{ REL::ID{ 641385, 4823626 } };
-		constexpr std::uintptr_t kD3D11CreateDeviceAndSwapChainCallOffsetOG = 0x419;
-		constexpr std::uintptr_t kD3D11CreateDeviceAndSwapChainCallOffsetAE = 0x410;
+		auto& g_clipCursor = Address::ClipCursor;
 
 		D3D11CreateDeviceAndSwapChain_t g_originalD3D11CreateDeviceAndSwapChain{ nullptr };
 		Present_t g_originalPresent{ nullptr };
@@ -1218,12 +1216,7 @@ namespace TF3DHud::Imgui
 	void InstallHooks()
 	{
 		if (!g_d3dHookInstalled) {
-			auto d3d11Call = g_d3d11CreateDeviceAndSwapChainCall.address();
-			d3d11Call += REX::FModule::IsRuntimeOG() ?
-				kD3D11CreateDeviceAndSwapChainCallOffsetOG :
-				kD3D11CreateDeviceAndSwapChainCallOffsetAE;
-
-			REL::Relocation<std::uintptr_t> callSite{ d3d11Call };
+			REL::Relocation<std::uintptr_t> callSite{ Address::D3D11CreateDeviceAndSwapChainCall.address() };
 			g_originalD3D11CreateDeviceAndSwapChain =
 				reinterpret_cast<D3D11CreateDeviceAndSwapChain_t>(
 					callSite.write_call<5>(reinterpret_cast<std::uintptr_t>(&HookedD3D11CreateDeviceAndSwapChain)));

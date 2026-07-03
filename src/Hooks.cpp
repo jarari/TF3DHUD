@@ -1,5 +1,6 @@
 #include "Hooks.h"
 
+#include "Address.h"
 #include "Animations.h"
 #include "Config.h"
 #include "Events.h"
@@ -8,6 +9,7 @@
 #include "Renderer.h"
 #include "Utils.h"
 
+#include "RE/EquipEventSource.h"
 #include "RE/A/AIProcess.h"
 #include "RE/A/Actor.h"
 #include "RE/B/BSAnimationGraphManager.h"
@@ -21,64 +23,39 @@
 
 #include <cstdint>
 
-namespace RE
-{
-	class EquipEventSource :
-		public BSTEventSource<TESEquipEvent>
-	{
-	public:
-		[[nodiscard]] static EquipEventSource* GetSingleton()
-		{
-			REL::Relocation<EquipEventSource*> singleton{ REL::ID{ 485633, 2691240, 4798533 } };
-			return singleton.get();
-		}
-	};
-}
-
 namespace TF3DHud
 {
 	namespace
 	{
-		using RunActorUpdates_t = void(RE::ProcessLists*, float, bool);
-		using ProcessGraphEvent_t = std::uint32_t(RE::BSAnimationGraphManager*, const RE::BSFixedString&);
-		using Update3DModel_t = void(RE::AIProcess*, RE::Actor*, bool);
-		using GetAll3DUpdateFlags_t = std::uint16_t(RE::AIProcess*);
-		using QUpdateEditorDeadActorModel_t = bool(RE::AIProcess*);
-		using RenderSceneDeferred_t = void(
-			RE::NiCamera*,
-			RE::BSShaderAccumulator*,
-			RE::BSCullingProcess*,
-			RE::ShadowSceneNode*,
-			std::int32_t,
-			std::int32_t,
-			bool,
-			bool);
-		using RenderPrepassesAndMenus_t = void(RE::Interface3D::Renderer*);
-		using SetDoTiledLighting_t = void(bool);
-		using QTiledLighting_t = bool();
+		using RunActorUpdates_t = Address::RunActorUpdates_t;
+		using ProcessGraphEvent_t = Address::ProcessGraphEvent_t;
+		using Update3DModel_t = Address::Update3DModel_t;
+		using RenderSceneDeferred_t = Address::RenderSceneDeferred_t;
+		using RenderPrepassesAndMenus_t = Address::RenderPrepassesAndMenus_t;
 
-		REL::Relocation<std::uintptr_t> g_runActorUpdatesCall{ REL::ID(556439), 0x17 };
-		REL::Relocation<std::uintptr_t> g_processGraphEventTarget{ REL::ID(1199489) };
+		const auto& g_runActorUpdatesCall = Address::RunActorUpdatesCall;
+		auto& g_processGraphEventTarget = Address::ProcessGraphEventTarget;
 		// BodyShapeManager hooks AIProcess::Update3dModel at this function entry and
 		// preserves the first 5-byte instruction (`mov [rsp+0x18], rbp`). Use the same
 		// post-original signal point so skeleton-adjustment/morph follow-up work has
 		// entered the engine's 3D update path before our 300-frame stable audit starts.
-		REL::Relocation<std::uintptr_t> g_update3DModelTarget{ REL::ID{ 986782, 2231882 } };
-		REL::Relocation<GetAll3DUpdateFlags_t*> g_getAll3DUpdateFlags{ REL::ID{ 582098, 2232393 } };
-		REL::Relocation<QUpdateEditorDeadActorModel_t*> g_qUpdateEditorDeadActorModel{ REL::ID{ 16281, 2231571 } };
+		auto& g_update3DModelTarget = Address::Update3DModelTarget;
+		auto& g_getAll3DUpdateFlags = Address::GetAll3DUpdateFlags;
+		auto& g_qUpdateEditorDeadActorModel = Address::QUpdateEditorDeadActorModel;
 		RunActorUpdates_t* g_runActorUpdates{ nullptr };
 		ProcessGraphEvent_t* g_processGraphEvent{ nullptr };
 		Update3DModel_t* g_update3DModel{ nullptr };
 		// IDA: Interface3D::Renderer::DrawModel calls BSShaderUtil::RenderSceneDeferred
 		// at +0x51A. BSDFCompositeShader's pixel shader ID reads DrawWorld::QTiledLighting()
 		// and toggles bit 0x10000, selecting the tiled composite variant that samples t11/t12.
-		REL::Relocation<std::uintptr_t> g_interface3DDrawModelRenderSceneDeferredCall{ REL::ID{ 917134, 2222570 }, 0x51A };
+		const auto& g_interface3DDrawModelRenderSceneDeferredCall =
+			Address::Interface3DDrawModelRenderSceneDeferredCall;
 		// IDA/Ghidra: Interface3D::Renderer::RenderAll calls RenderPrepassesAndMenus
 		// immediately before RenderMain for the selected renderer. Hook this entry so
 		// preview scenegraph commits happen at the DrawWorld/Interface3D boundary.
-		REL::Relocation<std::uintptr_t> g_renderPrepassesAndMenusTarget{ REL::ID(1189309) };
-		REL::Relocation<SetDoTiledLighting_t*> g_setDoTiledLighting{ REL::ID{ 716351, 2318370 } };
-		REL::Relocation<QTiledLighting_t*> g_qTiledLighting{ REL::ID{ 1154650, 2318371 } };
+		auto& g_renderPrepassesAndMenusTarget = Address::RenderPrepassesAndMenusTarget;
+		auto& g_setDoTiledLighting = Address::SetDoTiledLighting;
+		auto& g_qTiledLighting = Address::QTiledLighting;
 		RenderSceneDeferred_t* g_renderSceneDeferred{ nullptr };
 		RenderPrepassesAndMenus_t* g_renderPrepassesAndMenus{ nullptr };
 		bool g_equipWatcherRegistered{ false };
@@ -120,7 +97,7 @@ namespace TF3DHud
 				return;
 			}
 
-			auto* source = RE::EquipEventSource::GetSingleton();
+			auto* source = Address::EquipEventSourceSingleton.get();
 			if (!source) {
 				REX::WARN("could not acquire TESEquipEvent source");
 				return;
