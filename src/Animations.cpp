@@ -288,7 +288,6 @@ namespace TF3DHud::Animations
 		auto& g_getProjectForActor = Address::GetProjectForActor;
 		auto& g_setAnimationGraphTarget = Address::SetAnimationGraphTarget;
 		auto& g_getFreezeGraphLocomotionChannel = Address::GetFreezeGraphLocomotionChannel;
-		auto& g_getActorDirection = Address::GetActorDirection;
 		auto& g_getReferenceScale = Address::GetReferenceScale;
 		auto& g_useSpeedContoursForMovementCalculations = Address::UseSpeedContoursForMovementCalculations;
 		auto& g_getActiveContourFromHolder = Address::GetActiveContourFromHolder;
@@ -1140,10 +1139,11 @@ namespace TF3DHud::Animations
 				nextAdjustments.MarkEngineOwnedPages();
 				RE::AnimationSpeedInformationTypes::RequestedSpeed requestedSpeed{ a_speed };
 				RE::AnimationSpeedInformationTypes::GraphSpeedInput graphSpeed{};
+				constexpr float kNeutralPreviewDirection = 0.0F;
 				const auto response = g_getGraphSpeedForRequestedSpeedAndDirection(
 					std::addressof(a_contour),
 					requestedSpeed,
-					g_getActorDirection(sourceActor_),
+					kNeutralPreviewDirection,
 					static_cast<const void*>(std::addressof(lastAdjustments)),
 					graphSpeed,
 					static_cast<void*>(std::addressof(nextAdjustments)));
