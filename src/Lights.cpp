@@ -283,11 +283,6 @@ namespace TF3DHud::Lights
 
 		g_appliedLights = std::move(resolvedLights);
 		g_hasAppliedLights = true;
-		REX::INFO(
-			"Interface3D offscreen lights configured: renderer={:X}, offscreenSSN={:X}, lights={}",
-			reinterpret_cast<std::uintptr_t>(&a_renderer),
-			reinterpret_cast<std::uintptr_t>(a_renderer.offscreenSSN.get()),
-			a_renderer.offscreenLights.size());
 	}
 
 	void ResetCache()

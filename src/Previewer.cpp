@@ -2024,7 +2024,6 @@ namespace TF3DHud
 			auto player = RE::PlayerCharacter::GetSingleton();
 			std::string reason;
 			if (!PreviewVisibility::ShouldShow(player, reason)) {
-				LogDiagnostic("hidden: " + reason);
 				HideRendererAndResetAnimation();
 				return;
 			}
@@ -2081,7 +2080,6 @@ namespace TF3DHud
 
 			std::string reason;
 			if (!PreviewVisibility::ShouldShow(player, reason)) {
-				LogDiagnostic("hidden: " + reason);
 				HideRendererAndResetAnimation();
 				g_renderStateDirty = false;
 				g_pendingRenderDelta = 0.0F;
