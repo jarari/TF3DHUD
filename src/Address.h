@@ -12,6 +12,7 @@
 #include "RE/B/BGSAction.h"
 #include "RE/B/BGSAnimationSystemUtils.h"
 #include "RE/B/BGSHeadPart.h"
+#include "RE/B/BGSMod.h"
 #include "RE/B/BGSObjectInstance.h"
 #include "RE/B/BSAnimationGraphManager.h"
 #include "RE/B/BSFixedString.h"
@@ -193,6 +194,8 @@ namespace TF3DHud::Address
 	using SetClothWorld_t = void(RE::NiExtraData*, void*);
 	using SetDoTiledLighting_t = void(bool);
 	using SetSegmentEnabled_t = void(RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t, bool);
+	using TryAttachMod3DRecurse_t =
+		bool(RE::BGSMod::Attachment::Mod*, RE::NiNode*, char*, RE::TBO_InstanceData*);
 	using TESActionDataCtor_t = void*(
 		void*,
 		RE::ActionInput::ACTIONPRIORITY,
@@ -259,6 +262,7 @@ namespace TF3DHud::Address
 	extern REL::Relocation<SetDoTiledLighting_t*> SetDoTiledLighting;
 	extern REL::Relocation<SetSegmentEnabled_t*> DisableSegment;
 	extern REL::Relocation<SetSegmentEnabled_t*> EnableSegment;
+	extern REL::Relocation<TryAttachMod3DRecurse_t*> TryAttachMod3DRecurse;
 	extern REL::Relocation<TESActionDataCtor_t*> ConstructTESActionData;
 	extern REL::Relocation<TESActionDataDtor_t*> DestroyTESActionData;
 	extern REL::Relocation<UpdateAnimationGraphManager_t*> UpdateAnimationGraphManager;

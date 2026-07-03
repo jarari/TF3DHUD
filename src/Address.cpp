@@ -59,6 +59,9 @@ namespace TF3DHud::Address
 	REL::Relocation<SetDoTiledLighting_t*> SetDoTiledLighting{ REL::ID{ 716351, 2318370 } };
 	REL::Relocation<SetSegmentEnabled_t*> DisableSegment{ REL::ID(1466142) };
 	REL::Relocation<SetSegmentEnabled_t*> EnableSegment{ REL::ID(1134184) };
+	// Ghidra OG 1.10.163: BGSMod::Attachment::Mod::TryAttach3DRecurse at 0x1402F3360.
+	// Used by PowerArmor::SyncFurnitureVisualsToInventory when replaying OMOD-driven PA visuals.
+	REL::Relocation<TryAttachMod3DRecurse_t*> TryAttachMod3DRecurse{ REL::ID(832528) };
 	REL::Relocation<TESActionDataCtor_t*> ConstructTESActionData{ REL::ID(1307135) };
 	REL::Relocation<TESActionDataDtor_t*> DestroyTESActionData{ REL::ID(229573) };
 	REL::Relocation<UpdateAnimationGraphManager_t*> UpdateAnimationGraphManager{ REL::ID{ 1492656, 2214536 } };

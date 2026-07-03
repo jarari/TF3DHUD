@@ -13,8 +13,10 @@
 #include "RE/B/BSFadeNode.h"
 #include "RE/B/BSFlattenedBoneTree.h"
 #include "RE/B/BSGeometry.h"
-#include "RE/B/BGSObjectInstance.h"
 #include "RE/B/BGSHeadPart.h"
+#include "RE/B/BGSMod.h"
+#include "RE/B/BGSObjectInstance.h"
+#include "RE/B/BGSObjectInstanceExtra.h"
 #include "RE/B/BSLightingShaderProperty.h"
 #include "RE/B/BSModelDB.h"
 #include "RE/B/BSShaderMaterial.h"
@@ -28,6 +30,7 @@
 #include "RE/P/PlayerCharacter.h"
 #include "RE/P/PlayerControls.h"
 #include "RE/T/TESNPC.h"
+#include "RE/T/TESForm.h"
 #include "RE/T/TESModel.h"
 #include "RE/T/TESObjectARMA.h"
 #include "RE/T/TESObjectARMO.h"
@@ -75,6 +78,7 @@ namespace TF3DHud
 		auto& g_setClothSettleOnTransitionToSim = Address::SetClothSettleOnTransitionToSim;
 		auto& g_fixFaceGenHeadSkinInstances = Address::FixFaceGenHeadSkinInstances;
 		auto& g_resetFaceGenCurrentMorphs = Address::ResetFaceGenCurrentMorphs;
+		auto& g_tryAttachMod3DRecurse = Address::TryAttachMod3DRecurse;
 		auto& g_bipedAnimCtor = Address::BipedAnimCtor;
 		auto& g_bipedAnimDtor = Address::BipedAnimDtor;
 		auto& g_getSkin = Address::GetSkin;
@@ -1298,6 +1302,54 @@ namespace TF3DHud
 			});
 		}
 
+		struct Mod3DReplayResult
+		{
+			std::uint32_t attached{ 0 };
+		};
+
+		[[nodiscard]] Mod3DReplayResult ReplayObjectInstanceMod3D(
+			const RE::BIPOBJECT& a_sourceObject,
+			RE::NiAVObject& a_previewAttachment)
+		{
+			Mod3DReplayResult result;
+			auto* modExtra = a_sourceObject.modExtra;
+			if (!modExtra || !modExtra->values) {
+				return result;
+			}
+
+			auto* targetNode = a_previewAttachment.IsNode();
+			if (!targetNode) {
+				return result;
+			}
+
+			const auto indexData = modExtra->GetIndexData();
+			if (indexData.empty()) {
+				return result;
+			}
+
+			auto* instanceData = a_sourceObject.parent.instanceData.get();
+			for (const auto& entry : indexData) {
+				if (entry.disabled) {
+					continue;
+				}
+
+				auto* mod = RE::TESForm::GetFormByID<RE::BGSMod::Attachment::Mod>(entry.objectID);
+				if (!mod) {
+					continue;
+				}
+
+				// Ghidra OG 1.10.163: PowerArmor::SyncFurnitureVisualsToInventory
+				// replays object-instance OMOD visuals through
+				// BGSMod::Attachment::Mod::TryAttach3DRecurse, which loads the
+				// mod model and connects it by BSConnectPoint.
+				if (g_tryAttachMod3DRecurse(mod, targetNode, nullptr, instanceData)) {
+					++result.attached;
+				}
+			}
+
+			return result;
+		}
+
 		[[nodiscard]] RE::BGSModelMaterialSwap* SelectArmorAddonFacebonesModel(RE::TESObjectARMA& a_addon, const RE::SEX a_sex)
 		{
 			const auto sex = a_sex == RE::SEX::kFemale ? 1u : 0u;
@@ -2307,7 +2359,11 @@ namespace TF3DHud
 					return;
 				}
 
+				parent->AttachChild(previewClone.get(), false);
+				const auto modReplay = ReplayObjectInstanceMod3D(a_sourceObject, *previewClone);
+
 				RE::bhkWorld::RemoveObjects(previewClone.get(), true, true);
+				StripControllerChains(*previewClone);
 				PreparePreviewTree(*previewClone);
 				(void)InitializePreviewCloth(
 					a_player,
@@ -2342,12 +2398,17 @@ namespace TF3DHud
 					a_slot,
 					a_sourceBiped);
 
-				parent->AttachChild(previewClone.get(), false);
 				g_previewAttachments.push_back({
 					.slot = a_slot,
 					.object = previewClone,
 					.parent = parent,
 				});
+				if (modReplay.attached > 0) {
+					REX::INFO(
+						"Preview equipment replayed object-instance mod visuals: slot={}, attached={}",
+						std::to_underlying(a_slot),
+						modReplay.attached);
+				}
 				++attachedObjects;
 			};
 
