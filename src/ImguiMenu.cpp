@@ -236,7 +236,7 @@ namespace TF3DHud::Imgui
 		bool DrawEditButton(const char* a_id)
 		{
 			ImGui::SameLine();
-			if (ImGui::Button("(E)")) {
+			if (ImGui::Button("E")) {
 				g_editingValueId = a_id;
 				g_focusEditInput = true;
 				return true;
@@ -585,6 +585,38 @@ namespace TF3DHud::Imgui
 				}
 				ImGui::PopID();
 			}
+		}
+
+		void DrawSpeedChannelState(const Animations::DebugSnapshot& a_snapshot)
+		{
+			const auto& speed = a_snapshot.speedChannel;
+			ImGui::Text(
+				"Speed channel constructed=%s reset=%s polled=%s polls=%u applyAdjustments=%s",
+				speed.constructed ? "true" : "false",
+				speed.reset ? "true" : "false",
+				speed.polled ? "true" : "false",
+				speed.pollCount,
+				speed.applyAdjustments ? "true" : "false");
+			ImGui::Text(
+				"Speed desired=%.3f scale=%.3f raw=%.3f contour=%.3f last=%.3f graph=%s %.3f",
+				speed.desiredSpeed,
+				speed.scale,
+				speed.rawSpeed,
+				speed.graphSpeed,
+				speed.lastSpeed,
+				speed.previewGraphSpeedHas ? "yes" : "no",
+				speed.previewGraphSpeed);
+			ImGui::Text(
+				"Freeze preview=%s actor=%s contours=%s actorGate=%s resolved=%s state=%s response=%u adjustments=%u applied=%s",
+				speed.previewFreeze ? "true" : "false",
+				speed.actorFreeze ? "true" : "false",
+				speed.useContours ? "true" : "false",
+				speed.actorAllowsContours ? "true" : "false",
+				speed.contourResolved ? "true" : "false",
+				speed.contourState ? "true" : "false",
+				speed.contourResponse,
+				speed.adjustmentCount,
+				speed.contourApplied ? "true" : "false");
 		}
 
 		void DrawActiveNodesTable(const Animations::DebugSnapshot& a_snapshot)
@@ -964,6 +996,7 @@ namespace TF3DHud::Imgui
 				snapshot.previewSync.totalTime,
 				snapshot.previewSync.speed,
 				snapshot.previewSync.syncPointCount);
+			DrawSpeedChannelState(snapshot);
 			ImGui::Separator();
 
 			DrawSubgraphState(snapshot);

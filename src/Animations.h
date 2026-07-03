@@ -53,6 +53,31 @@ namespace TF3DHud::Animations
 		bool active{ false };
 	};
 
+	struct SpeedChannelDebugInfo
+	{
+		float desiredSpeed{ 0.0F };
+		float scale{ 1.0F };
+		float rawSpeed{ 0.0F };
+		float graphSpeed{ 0.0F };
+		float lastSpeed{ 0.0F };
+		float previewGraphSpeed{ 0.0F };
+		std::uint32_t contourResponse{ 0 };
+		std::uint32_t adjustmentCount{ 0 };
+		std::uint32_t pollCount{ 0 };
+		bool constructed{ false };
+		bool reset{ false };
+		bool polled{ false };
+		bool applyAdjustments{ false };
+		bool previewFreeze{ false };
+		bool actorFreeze{ false };
+		bool useContours{ false };
+		bool actorAllowsContours{ false };
+		bool contourResolved{ false };
+		bool contourState{ false };
+		bool contourApplied{ false };
+		bool previewGraphSpeedHas{ false };
+	};
+
 	struct SubgraphFileDebugInfo
 	{
 		std::array<char, kMaxSubgraphDebugPath> path{};
@@ -109,6 +134,7 @@ namespace TF3DHud::Animations
 		std::uint32_t subgraphSwapUseCountTotal{ 0 };
 		ActiveSyncDebugInfo liveSync;
 		ActiveSyncDebugInfo previewSync;
+		SpeedChannelDebugInfo speedChannel;
 		std::uint32_t defaultSubgraphHandleCount{ 0 };
 		std::uint32_t defaultSubgraphHandleShown{ 0 };
 		std::uint32_t defaultSubgraphIdCount{ 0 };

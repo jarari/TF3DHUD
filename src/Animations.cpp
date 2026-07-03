@@ -4,6 +4,7 @@
 
 #include "RE/A/Actor.h"
 #include "RE/A/ActionInput.h"
+#include "RE/A/AnimationSpeedInformationTypes.h"
 #include "RE/B/BSAnimationGraphManager.h"
 #include "RE/B/BSAnimationGraphEvent.h"
 #include "RE/B/BSFlattenedBoneTree.h"
@@ -55,6 +56,8 @@ namespace RE
 	{
 	public:
 		virtual ~BSAnimationGraphChannel() = default;
+		virtual void PollChannelUpdate(bool a_shouldApplyAdjustments) = 0;
+		virtual void Reset() = 0;
 
 		BSFixedString variableName;  // 10
 		std::uint32_t unk18{ 0 };    // 18
@@ -68,6 +71,28 @@ namespace RE
 		virtual ~BShkbAnimationGraph() = default;
 	};
 	static_assert(sizeof(BShkbAnimationGraph) == 0x10);
+
+	class AnimationSpeedContour :
+		public BSIntrusiveRefCounted
+	{
+	public:
+		virtual ~AnimationSpeedContour() = default;
+	};
+
+	namespace AnimationSpeedInformationTypes
+	{
+		struct RequestedSpeed
+		{
+			float value;
+		};
+		static_assert(sizeof(RequestedSpeed) == 0x4);
+
+		struct GraphSpeedInput
+		{
+			float speed;
+		};
+		static_assert(sizeof(GraphSpeedInput) == 0x4);
+	}
 }
 
 namespace TF3DHud::Animations
@@ -148,29 +173,6 @@ namespace TF3DHud::Animations
 			"walkRunBlendStart",
 		});
 
-		constexpr auto kWalkRunDiagnosticEvents = std::to_array<std::string_view>({
-			"moveStart",
-			"moveStop",
-			"moveStartSlave",
-			"moveStopSlave",
-			"walkStart",
-			"runStart",
-			"walkRunBlendStart",
-			"sprintStart",
-			"sprintStop",
-			"Walk",
-			"Jog",
-			"Run",
-		});
-
-		constexpr auto kWalkRunDiagnosticNodeTerms = std::to_array<std::string_view>({
-			"walk",
-			"run",
-			"jog",
-			"locomotion",
-			"combat",
-		});
-
 		constexpr auto kIntGraphVariableWhitelist = std::to_array<std::string_view>({
 			"iSyncJumpState",
 			"iSyncWeaponDrawState",
@@ -204,7 +206,6 @@ namespace TF3DHud::Animations
 			"weaponSpeedMult",
 			"reloadSpeedMult",
 			"sightedSpeedMult",
-			"Speed",
 			"SpeedSmoothed",
 			"WalkSpeedMult",
 			"fSpeedWalk",
@@ -219,6 +220,7 @@ namespace TF3DHud::Animations
 		});
 
 		constexpr auto kPreviewSuppressedAnimationChannels = std::to_array<std::string_view>({
+			"Speed",
 			"Direction",
 			"DirectionSmoothed",
 			"Pitch",
@@ -242,7 +244,6 @@ namespace TF3DHud::Animations
 		});
 
 		constexpr auto kPreviewEnabledBoolGraphVariables = std::to_array<std::string_view>({
-			"bFreezeSpeedUpdate",
 			"DisableCharacterPitch",
 			"bFreezeRotationUpdate",
 		});
@@ -304,35 +305,6 @@ namespace TF3DHud::Animations
 			return ContainsEngineFixedString(RE::BSFixedString(a_event), kLiveMirrorEventWhitelist);
 		}
 
-		[[nodiscard]] bool IsWalkRunDiagnosticEvent(const char* a_event)
-		{
-			if (!a_event || a_event[0] == '\0') {
-				return false;
-			}
-
-			return ContainsEngineFixedString(RE::BSFixedString(a_event), kWalkRunDiagnosticEvents);
-		}
-
-		[[nodiscard]] bool ContainsAsciiInsensitive(const std::string_view a_text, const std::string_view a_term)
-		{
-			return std::search(
-					   a_text.begin(),
-					   a_text.end(),
-					   a_term.begin(),
-					   a_term.end(),
-					   [](const char a_lhs, const char a_rhs) {
-						   return std::tolower(static_cast<unsigned char>(a_lhs)) ==
-								  std::tolower(static_cast<unsigned char>(a_rhs));
-					   }) != a_text.end();
-		}
-
-		[[nodiscard]] bool IsWalkRunDiagnosticNodeText(const std::string_view a_text)
-		{
-			return std::any_of(kWalkRunDiagnosticNodeTerms.begin(), kWalkRunDiagnosticNodeTerms.end(), [&](const auto term) {
-				return ContainsAsciiInsensitive(a_text, term);
-			});
-		}
-
 		[[nodiscard]] bool IsSuppressedAnimationChannel(const RE::BSAnimationGraphChannel& a_channel)
 		{
 			return ContainsEngineFixedString(a_channel.variableName, kPreviewSuppressedAnimationChannels);
@@ -364,6 +336,22 @@ namespace TF3DHud::Animations
 		using UpdateAnimationGraphManagerFloat_t = bool(RE::IAnimationGraphManagerHolder*, float);
 		using GetProjectForActor_t = const char*(RE::Actor*, RE::NiAVObject*);
 		using SetAnimationGraphTarget_t = bool(RE::IAnimationGraphManagerHolder*, RE::NiAVObject*, bool);
+		using ActorBoolCallback_t = bool(const RE::Actor*);
+		using ActorFloatCallback_t = float(const RE::Actor*);
+		using GetReferenceScale_t = float(const RE::TESObjectREFR*);
+		using UseSpeedContoursForMovementCalculations_t = bool(const RE::Actor*, std::uint32_t);
+		using GetActiveContourFromHolder_t = bool(
+			const RE::IAnimationGraphManagerHolder*,
+			RE::BSTSmartPointer<RE::AnimationSpeedContour>&,
+			bool*);
+		using GetGraphSpeedForRequestedSpeedAndDirection_t = std::uint32_t(
+			const RE::AnimationSpeedContour*,
+			const RE::AnimationSpeedInformationTypes::RequestedSpeed&,
+			float,
+			const void*,
+			RE::AnimationSpeedInformationTypes::GraphSpeedInput&,
+			void*);
+		using DestroyAdjustmentArena_t = void(void*);
 		enum class SyncPointType : std::uint32_t
 		{
 			kLeft = 0,
@@ -419,6 +407,17 @@ namespace TF3DHud::Animations
 		REL::Relocation<UpdateAnimationGraphManagerFloat_t*> g_updateAnimationGraphManagerFloat{ REL::ID(973903) };
 		REL::Relocation<GetProjectForActor_t*> g_getProjectForActor{ REL::ID{ 804224, 2236395 } };
 		REL::Relocation<SetAnimationGraphTarget_t*> g_setAnimationGraphTarget{ REL::ID{ 1340816, 2214556 } };
+		REL::Relocation<ActorBoolCallback_t*> g_getFreezeGraphLocomotionChannel{ REL::ID{ 458107, 2230387 } };
+		REL::Relocation<ActorFloatCallback_t*> g_getActorDirection{ REL::ID{ 279535, 2230411 } };
+		REL::Relocation<GetReferenceScale_t*> g_getReferenceScale{ REL::ID{ 911188, 2200892 } };
+		REL::Relocation<UseSpeedContoursForMovementCalculations_t*> g_useSpeedContoursForMovementCalculations{
+			REL::ID{ 272153, 2236396 }
+		};
+		REL::Relocation<GetActiveContourFromHolder_t*> g_getActiveContourFromHolder{ REL::ID(1388221) };
+		REL::Relocation<GetGraphSpeedForRequestedSpeedAndDirection_t*> g_getGraphSpeedForRequestedSpeedAndDirection{
+			REL::ID(289793)
+		};
+		REL::Relocation<DestroyAdjustmentArena_t*> g_destroyAdjustmentArena{ REL::ID(1000046) };
 		REL::Relocation<CalculateSpeedAdjustToSyncAnimationCycles_t*> g_calculateSpeedAdjustToSyncAnimationCycles{
 			REL::ID{ 552450, 2214290 }
 		};
@@ -989,6 +988,366 @@ namespace TF3DHud::Animations
 				reinterpret_cast<std::byte*>(a_graph) + 0x68);
 		}
 
+		class AdjustmentArena final
+		{
+		public:
+			using Adjustment = RE::AnimationSpeedInformationTypes::AnimationStateAdjustment;
+			static constexpr std::uint32_t kPageItemCount = 16;
+
+			AdjustmentArena()
+			{
+				scrapHeap_ = RE::MemoryManager::GetSingleton().GetThreadScrapHeap();
+				next_ = std::addressof(head_);
+			}
+
+			AdjustmentArena(const AdjustmentArena&) = delete;
+			AdjustmentArena& operator=(const AdjustmentArena&) = delete;
+
+			~AdjustmentArena()
+			{
+				if (engineOwnedPages_) {
+					g_destroyAdjustmentArena(this);
+				} else {
+					DestroyManualPages();
+				}
+			}
+
+			void FillFrom(const std::vector<Adjustment>& a_adjustments)
+			{
+				DestroyManualPages();
+				if (a_adjustments.empty()) {
+					return;
+				}
+
+				std::uint32_t remaining = static_cast<std::uint32_t>(a_adjustments.size());
+				std::uint32_t sourceIndex = 0;
+				while (remaining > 0) {
+					auto* page = new Page();
+					ownedPages_.push_back(page);
+					const bool firstPage = head_ == nullptr;
+					*next_ = page;
+					next_ = std::addressof(page->next);
+					tail_ = page;
+					if (firstPage) {
+						begin_ = page->buffer;
+					}
+
+					const auto inPage = (std::min)(remaining, kPageItemCount);
+					for (std::uint32_t index = 0; index < inPage; ++index) {
+						std::construct_at(
+							reinterpret_cast<Adjustment*>(page->buffer + index * sizeof(Adjustment)),
+							a_adjustments[sourceIndex++]);
+					}
+					size_ += inPage;
+					remaining -= inPage;
+				}
+
+				end_ = tail_->buffer + (size_ % kPageItemCount == 0 ? kPageItemCount : size_ % kPageItemCount) * sizeof(Adjustment);
+			}
+
+			template <class Func>
+			void ForEach(Func&& a_func) const
+			{
+				auto* page = head_;
+				std::uint32_t remaining = size_;
+				while (page && remaining > 0) {
+					const auto inPage = (std::min)(remaining, kPageItemCount);
+					for (std::uint32_t index = 0; index < inPage; ++index) {
+						const auto* adjustment = std::launder(
+							reinterpret_cast<const Adjustment*>(page->buffer + index * sizeof(Adjustment)));
+						a_func(*adjustment);
+					}
+					remaining -= inPage;
+					page = page->next;
+				}
+			}
+
+			[[nodiscard]] std::uint32_t Size() const { return size_; }
+
+			void MarkEngineOwnedPages() { engineOwnedPages_ = true; }
+
+		private:
+			struct Page
+			{
+				std::byte buffer[sizeof(Adjustment) * kPageItemCount]{};
+				Page* next{ nullptr };
+			};
+			static_assert(offsetof(Page, next) == 0x100);
+
+			void DestroyManualPages()
+			{
+				if (size_ != 0) {
+					ForEach([](const Adjustment& a_adjustment) {
+						std::destroy_at(std::addressof(const_cast<Adjustment&>(a_adjustment)));
+					});
+				}
+				for (auto* page : ownedPages_) {
+					delete page;
+				}
+				ownedPages_.clear();
+				head_ = nullptr;
+				next_ = std::addressof(head_);
+				tail_ = nullptr;
+				free_ = nullptr;
+				end_ = nullptr;
+				begin_ = nullptr;
+				size_ = 0;
+			}
+
+			RE::ScrapHeap* scrapHeap_{ nullptr };
+			Page* head_{ nullptr };
+			Page** next_{ nullptr };
+			Page* tail_{ nullptr };
+			Page* free_{ nullptr };
+			std::byte* end_{ nullptr };
+			std::byte* begin_{ nullptr };
+			std::uint32_t size_{ 0 };
+			std::uint32_t pad3C_{ 0 };
+			std::vector<Page*> ownedPages_;
+			bool engineOwnedPages_{ false };
+		};
+		static_assert(sizeof(AdjustmentArena) > 0x40);
+
+		class PreviewSpeedAnimationChannel final :
+			public RE::BSAnimationGraphChannel
+		{
+		public:
+			PreviewSpeedAnimationChannel(
+				RE::Actor& a_sourceActor,
+				RE::IAnimationGraphManagerHolder& a_previewHolder,
+				SpeedChannelDebugInfo& a_debugInfo) :
+				sourceActor_(std::addressof(a_sourceActor)),
+				previewHolder_(std::addressof(a_previewHolder)),
+				debug_(std::addressof(a_debugInfo))
+			{
+				variableName = "Speed";
+				scale_ = g_getReferenceScale(sourceActor_);
+				if (scale_ < 1.0e-4F || !std::isfinite(scale_)) {
+					scale_ = 1.0F;
+				}
+
+				float existingSpeed{ 0.0F };
+				if (previewHolder_->GetGraphVariableImplFloat(variableName, existingSpeed)) {
+					lastSpeed_ = existingSpeed;
+					SetCurrentValue(existingSpeed);
+				}
+				if (debug_) {
+					debug_->constructed = true;
+					debug_->scale = scale_;
+					debug_->lastSpeed = lastSpeed_;
+					debug_->graphSpeed = lastSpeed_;
+				}
+			}
+
+			~PreviewSpeedAnimationChannel() override = default;
+
+			void PollChannelUpdate(const bool a_shouldApplyAdjustments) override
+			{
+				if (debug_) {
+					++debug_->pollCount;
+					debug_->polled = true;
+					debug_->applyAdjustments = a_shouldApplyAdjustments;
+					debug_->previewFreeze = false;
+					debug_->actorFreeze = false;
+					debug_->useContours = false;
+					debug_->actorAllowsContours = false;
+					debug_->contourResolved = false;
+					debug_->contourState = false;
+					debug_->contourApplied = false;
+					debug_->contourResponse = 0;
+					debug_->adjustmentCount = 0;
+					debug_->scale = scale_;
+					debug_->lastSpeed = lastSpeed_;
+					debug_->graphSpeed = lastSpeed_;
+				}
+
+				if (!sourceActor_ || !previewHolder_) {
+					SetCurrentValue(lastSpeed_);
+					return;
+				}
+
+				bool freezeSpeedUpdate{ false };
+				(void)previewHolder_->GetGraphVariableImplBool("bFreezeSpeedUpdate", freezeSpeedUpdate);
+				const bool actorFreeze = g_getFreezeGraphLocomotionChannel(sourceActor_);
+				if (debug_) {
+					debug_->previewFreeze = freezeSpeedUpdate;
+					debug_->actorFreeze = actorFreeze;
+				}
+				if (freezeSpeedUpdate || actorFreeze) {
+					SetCurrentValue(lastSpeed_);
+					return;
+				}
+
+				const float desiredSpeed = sourceActor_->GetDesiredSpeed();
+				float speed = desiredSpeed / scale_;
+				if (speed < 0.0F || !std::isfinite(speed)) {
+					speed = 0.0F;
+				}
+				if (debug_) {
+					debug_->desiredSpeed = desiredSpeed;
+					debug_->rawSpeed = speed;
+				}
+
+				const bool actorAllowsContours = g_useSpeedContoursForMovementCalculations(sourceActor_, 4);
+				const bool useContours = speed >= 0.0F;
+				if (debug_) {
+					debug_->useContours = useContours;
+					debug_->actorAllowsContours = actorAllowsContours;
+				}
+				if (useContours) {
+					RE::BSTSmartPointer<RE::AnimationSpeedContour> contour;
+					bool hasContourState{ false };
+					const bool contourResolved =
+						g_getActiveContourFromHolder(previewHolder_, contour, std::addressof(hasContourState)) && contour;
+					if (debug_) {
+						debug_->contourResolved = contourResolved;
+						debug_->contourState = hasContourState;
+					}
+					if (contourResolved) {
+						ApplyContourSpeed(speed, *contour, a_shouldApplyAdjustments);
+					}
+				}
+
+				lastSpeed_ = speed;
+				SetCurrentValue(speed);
+				if (debug_) {
+					debug_->graphSpeed = speed;
+					debug_->lastSpeed = lastSpeed_;
+				}
+			}
+
+			void Reset() override
+			{
+				if (!sourceActor_ || !previewHolder_) {
+					lastSpeed_ = 0.0F;
+					scale_ = 1.0F;
+					SetCurrentValue(lastSpeed_);
+					lastContourAdjustments_.clear();
+					return;
+				}
+
+				scale_ = g_getReferenceScale(sourceActor_);
+				if (scale_ < 1.0e-4F || !std::isfinite(scale_)) {
+					scale_ = 1.0F;
+				}
+
+				float existingSpeed{ 0.0F };
+				if (previewHolder_->GetGraphVariableImplFloat(variableName, existingSpeed)) {
+					lastSpeed_ = existingSpeed;
+				}
+				SetCurrentValue(lastSpeed_);
+				lastContourAdjustments_.clear();
+				if (debug_) {
+					debug_->reset = true;
+					debug_->scale = scale_;
+					debug_->lastSpeed = lastSpeed_;
+					debug_->graphSpeed = lastSpeed_;
+				}
+			}
+
+		private:
+			using Adjustment = RE::AnimationSpeedInformationTypes::AnimationStateAdjustment;
+
+			void SetCurrentValue(const float a_value)
+			{
+				static_assert(sizeof(unk18) == sizeof(float));
+				std::memcpy(std::addressof(unk18), std::addressof(a_value), sizeof(float));
+			}
+
+			void ApplyContourSpeed(
+				float& a_speed,
+				const RE::AnimationSpeedContour& a_contour,
+				const bool a_shouldApplyAdjustments)
+			{
+				AdjustmentArena lastAdjustments;
+				lastAdjustments.FillFrom(lastContourAdjustments_);
+
+				AdjustmentArena nextAdjustments;
+				nextAdjustments.MarkEngineOwnedPages();
+				RE::AnimationSpeedInformationTypes::RequestedSpeed requestedSpeed{ a_speed };
+				RE::AnimationSpeedInformationTypes::GraphSpeedInput graphSpeed{};
+				const auto response = g_getGraphSpeedForRequestedSpeedAndDirection(
+					std::addressof(a_contour),
+					requestedSpeed,
+					g_getActorDirection(sourceActor_),
+					static_cast<const void*>(std::addressof(lastAdjustments)),
+					graphSpeed,
+					static_cast<void*>(std::addressof(nextAdjustments)));
+				if (debug_) {
+					debug_->contourResponse = response;
+					debug_->adjustmentCount = nextAdjustments.Size();
+				}
+				if (response == 0) {
+					return;
+				}
+
+				a_speed = graphSpeed.speed;
+				if (debug_) {
+					debug_->contourApplied = true;
+				}
+				if (!a_shouldApplyAdjustments) {
+					return;
+				}
+
+				ApplyAdjustments(nextAdjustments);
+
+				lastContourAdjustments_.clear();
+				nextAdjustments.ForEach([&](const Adjustment& adjustment) {
+					lastContourAdjustments_.push_back(adjustment);
+				});
+			}
+
+			void ApplyAdjustments(const AdjustmentArena& a_adjustments)
+			{
+				a_adjustments.ForEach([&](const Adjustment& adjustment) {
+					if (adjustment.adjustmentName.empty()) {
+						return;
+					}
+
+					if (adjustment.isVariable) {
+						if (adjustment.useFloat) {
+							(void)previewHolder_->SetGraphVariableFloat(
+								adjustment.adjustmentName,
+								adjustment.adjustmentVariable.variableFloatValue);
+						} else {
+							(void)previewHolder_->SetGraphVariableInt(
+								adjustment.adjustmentName,
+								adjustment.adjustmentVariable.variableIntValue);
+						}
+					} else {
+						if (IsDuplicateEventAdjustment(adjustment)) {
+							return;
+						}
+						(void)previewHolder_->NotifyAnimationGraphImpl(adjustment.adjustmentName);
+					}
+				});
+			}
+
+			[[nodiscard]] bool IsDuplicateEventAdjustment(const Adjustment& a_adjustment) const
+			{
+				if (a_adjustment.isVariable) {
+					return false;
+				}
+
+				return std::any_of(
+					lastContourAdjustments_.begin(),
+					lastContourAdjustments_.end(),
+					[&](const Adjustment& lastAdjustment) {
+						return !lastAdjustment.isVariable &&
+							   lastAdjustment.adjustmentName == a_adjustment.adjustmentName;
+					});
+			}
+
+			RE::Actor* sourceActor_{ nullptr };
+			RE::IAnimationGraphManagerHolder* previewHolder_{ nullptr };
+			SpeedChannelDebugInfo* debug_{ nullptr };
+			std::vector<Adjustment> lastContourAdjustments_;
+			float lastSpeed_{ 0.0F };
+			float scale_{ 1.0F };
+		};
+		static_assert(offsetof(PreviewSpeedAnimationChannel, variableName) == 0x10);
+		static_assert(offsetof(PreviewSpeedAnimationChannel, unk18) == 0x18);
+
 		class PreviewAnimationGraphHolder final :
 			public RE::IAnimationGraphManagerHolder
 		{
@@ -1129,7 +1488,7 @@ namespace TF3DHud::Animations
 			bool CreateAnimationChannels(
 				RE::BSScrapArray<RE::BSTSmartPointer<RE::BSAnimationGraphChannel>>& a_channels) override
 			{
-				if (!sourceHolder_) {
+				if (!sourceActor_ || !sourceHolder_) {
 					return false;
 				}
 
@@ -1146,6 +1505,8 @@ namespace TF3DHud::Animations
 					}
 				}
 
+				a_channels.push_back(RE::BSTSmartPointer<RE::BSAnimationGraphChannel>(
+					new PreviewSpeedAnimationChannel(*sourceActor_, *this, speedDebug_)));
 				return true;
 			}
 
@@ -1613,12 +1974,6 @@ namespace TF3DHud::Animations
 					// rather than forcing the selected subgraph state.
 					ApplyPreviewWeaponVisibilityEvent(a_event.tag);
 					const bool whitelisted = IsLiveMirrorEventWhitelisted(a_event.tag.c_str());
-					if (IsWalkRunDiagnosticEvent(a_event.tag.c_str())) {
-						REX::INFO(
-							"WalkRun event live-broadcast event={} mirrored={}",
-							a_event.tag.c_str(),
-							whitelisted ? 1 : 0);
-					}
 					if (whitelisted) {
 						QueueMirroredEvent(a_event.tag);
 					}
@@ -1632,13 +1987,6 @@ namespace TF3DHud::Animations
 				}
 
 				const bool whitelisted = IsLiveMirrorEventWhitelisted(a_eventName);
-				if (IsWalkRunDiagnosticEvent(a_eventName)) {
-					REX::INFO(
-						"WalkRun event live-request event={} accepted={} mirrored={}",
-						a_eventName,
-						a_result ? 1 : 0,
-						whitelisted ? 1 : 0);
-				}
 				if (!whitelisted) {
 					return;
 				}
@@ -1692,13 +2040,7 @@ namespace TF3DHud::Animations
 				}
 
 				for (const auto& eventName : events) {
-					const bool processed = NotifyAnimationGraphImpl(eventName);
-					if (IsWalkRunDiagnosticEvent(eventName.c_str())) {
-						REX::INFO(
-							"WalkRun event preview-request event={} accepted={}",
-							eventName.c_str(),
-							processed ? 1 : 0);
-					}
+					(void)NotifyAnimationGraphImpl(eventName);
 				}
 			}
 
@@ -1808,270 +2150,6 @@ namespace TF3DHud::Animations
 				}
 			}
 
-			void LogWalkRunVariables(const float a_deltaTime)
-			{
-				walkRunVariableLogTimer_ += a_deltaTime;
-				if (walkRunVariableLogTimer_ < 0.5F) {
-					return;
-				}
-				walkRunVariableLogTimer_ = 0.0F;
-
-				const auto previewGraph = GetActivePreviewGraph();
-				const auto* preview = previewGraph.get();
-				std::string line{ "WalkRun vars L/P:" };
-
-				const auto appendMissingOrInt = [](std::string& a_line, const bool a_hasValue, const std::int32_t a_value) {
-					if (a_hasValue) {
-						a_line += std::to_string(a_value);
-					} else {
-						a_line += '?';
-					}
-				};
-				const auto appendMissingOrBool = [](std::string& a_line, const bool a_hasValue, const bool a_value) {
-					if (a_hasValue) {
-						a_line += a_value ? '1' : '0';
-					} else {
-						a_line += '?';
-					}
-				};
-				const auto appendMissingOrFloat = [](std::string& a_line, const bool a_hasValue, const float a_value) {
-					if (!a_hasValue) {
-						a_line += '?';
-						return;
-					}
-
-					char buffer[32]{};
-					std::snprintf(buffer, sizeof(buffer), "%.3f", a_value);
-					a_line += buffer;
-				};
-				const auto appendGraphIndex = [](std::string& a_line, const bool a_hasValue, const std::uint32_t a_index) {
-					if (!a_hasValue) {
-						return;
-					}
-
-					a_line += '@';
-					if (a_index == std::numeric_limits<std::uint32_t>::max()) {
-						a_line += "cache";
-					} else {
-						a_line += std::to_string(a_index);
-					}
-				};
-				const auto appendName = [](std::string& a_line, const std::string_view a_name) {
-					a_line += ' ';
-					a_line.append(a_name.data(), a_name.size());
-					a_line += '=';
-				};
-
-				const auto appendInt = [&](const std::string_view a_name) {
-					const RE::BSFixedString variableName(a_name.data());
-					std::int32_t liveValue{ 0 };
-					std::int32_t previewValue{ 0 };
-					std::uint32_t liveIndex{ 0 };
-					const bool hasLive = TryGetLiveGraphVariableInt(variableName, liveValue, std::addressof(liveIndex));
-					const bool hasPreview = preview && g_getBShkbGraphVariableInt(preview, variableName, previewValue);
-					appendName(line, a_name);
-					appendMissingOrInt(line, hasLive, liveValue);
-					appendGraphIndex(line, hasLive, liveIndex);
-					line += '/';
-					appendMissingOrInt(line, hasPreview, previewValue);
-				};
-				const auto appendBool = [&](const std::string_view a_name) {
-					const RE::BSFixedString variableName(a_name.data());
-					bool liveValue{ false };
-					bool previewValue{ false };
-					std::uint32_t liveIndex{ 0 };
-					const bool hasLive = TryGetLiveGraphVariableBool(variableName, liveValue, std::addressof(liveIndex));
-					const bool hasPreview = preview && g_getBShkbGraphVariableBool(preview, variableName, previewValue);
-					appendName(line, a_name);
-					appendMissingOrBool(line, hasLive, liveValue);
-					appendGraphIndex(line, hasLive, liveIndex);
-					line += '/';
-					appendMissingOrBool(line, hasPreview, previewValue);
-				};
-				const auto appendFloat = [&](const std::string_view a_name) {
-					const RE::BSFixedString variableName(a_name.data());
-					float liveValue{ 0.0F };
-					float previewValue{ 0.0F };
-					std::uint32_t liveIndex{ 0 };
-					const bool hasLive = TryGetLiveGraphVariableFloat(variableName, liveValue, std::addressof(liveIndex));
-					const bool hasPreview = preview && g_getBShkbGraphVariableFloat(preview, variableName, previewValue);
-					appendName(line, a_name);
-					appendMissingOrFloat(line, hasLive, liveValue);
-					appendGraphIndex(line, hasLive, liveIndex);
-					line += '/';
-					appendMissingOrFloat(line, hasPreview, previewValue);
-				};
-
-				for (const auto name : {
-						 "iSyncIdleLocomotion",
-						 "iLocomotionSpeedState",
-						 "iSyncSneakWalkRun",
-						 "iSyncSprintState",
-						 "iSyncRunDirection",
-						 "iSyncTurnState",
-						 "iIsInSneak" }) {
-					appendInt(name);
-				}
-
-				for (const auto name : {
-						 "IsSprinting",
-						 "IsSneaking",
-						 "bIsSneaking",
-						 "bFreezeSpeedUpdate",
-						 "bManualGraphChange" }) {
-					appendBool(name);
-				}
-
-				for (const auto name : {
-						 "Speed",
-						 "SpeedSmoothed",
-						 "speedDamped",
-						 "WalkSpeedMult",
-						 "fSpeedWalk",
-						 "JogSpeedMult",
-						 "RunSpeedMult",
-						 "fLocomotionWalkPlaybackSpeed",
-						 "fLocomotionJogPlaybackSpeed",
-						 "fLocomotionRunPlaybackSpeed",
-						 "fLocomotionSneakWalkPlaybackSpeed",
-						 "fLocomotionSneakRunPlaybackSpeed",
-						 "weaponSpeedMult",
-						 "reloadSpeedMult" }) {
-					appendFloat(name);
-				}
-
-				if (line != lastWalkRunVariableLog_) {
-					lastWalkRunVariableLog_ = line;
-					REX::INFO("{}", line);
-				}
-
-				LogWalkRunActiveNodes();
-			}
-
-			void LogWalkRunActiveNodes()
-			{
-				std::string line{ "WalkRun nodes L/P:" };
-
-				const auto liveManager = GetLiveSourceManagerSmart();
-				AppendWalkRunActiveNodesForManager(line, "L", liveManager.get());
-				AppendWalkRunActiveNodesForManager(line, "P", manager_.get());
-
-				if (line != lastWalkRunNodeLog_) {
-					lastWalkRunNodeLog_ = line;
-					REX::INFO("{}", line);
-				}
-			}
-
-			void AppendWalkRunActiveNodesForManager(
-				std::string& a_line,
-				const std::string_view a_label,
-				const RE::BSAnimationGraphManager* a_manager) const
-			{
-				if (!a_manager || a_manager->graph.empty()) {
-					a_line += ' ';
-					a_line.append(a_label.data(), a_label.size());
-					a_line += "=?";
-					return;
-				}
-
-				for (std::uint32_t index = 0; index < a_manager->graph.size() && index < 4; ++index) {
-					a_line += ' ';
-					a_line.append(a_label.data(), a_label.size());
-					a_line += '@';
-					a_line += std::to_string(index);
-					if (index == a_manager->activeGraph) {
-						a_line += '*';
-					}
-					a_line += '=';
-
-					const auto& graph = a_manager->graph[index];
-					AppendWalkRunActiveNodesForGraph(a_line, graph.get());
-				}
-			}
-
-			void AppendWalkRunActiveNodesForGraph(
-				std::string& a_line,
-				const RE::BShkbAnimationGraph* a_graph) const
-			{
-				if (!a_graph) {
-					a_line += '?';
-					return;
-				}
-
-				const auto* const graphBase = reinterpret_cast<const std::byte*>(a_graph);
-				auto* behavior = *reinterpret_cast<HkbBehaviorGraphDiagnostic* const*>(graphBase + 0x378);
-				if (!behavior) {
-					a_line += "noBehavior";
-					return;
-				}
-
-				auto* activeNodes = behavior->activeNodes;
-				if (!activeNodes || !activeNodes->data || activeNodes->size <= 0 || activeNodes->size > 1024) {
-					a_line += "noNodes";
-					return;
-				}
-
-				a_line += '[';
-				a_line += std::to_string(activeNodes->size);
-				a_line += ']';
-
-				std::uint32_t shown = 0;
-				for (std::int32_t index = 0; index < activeNodes->size && index < 128; ++index) {
-					const auto entry = reinterpret_cast<std::uintptr_t>(activeNodes->data[index]);
-					if (!entry) {
-						continue;
-					}
-
-					const auto node = ReadActiveNodePointer(entry);
-					const auto clip = SelectActiveClip(entry);
-					const auto* nodeName = node ? SafeString(ReadTaggedString(node + 0x38)) : "";
-					const auto* clipName = clip ? SafeString(ReadTaggedString(clip + 0x38)) : "";
-					const auto* clipPath = clip ? SafeString(ReadTaggedString(clip + 0x90)) : "";
-					const auto clipLeaf = GetClipLeaf(clipPath);
-					if (!IsWalkRunDiagnosticNodeText(nodeName) &&
-						!IsWalkRunDiagnosticNodeText(clipName) &&
-						!IsWalkRunDiagnosticNodeText(clipLeaf)) {
-						continue;
-					}
-
-					if (shown == 0) {
-						a_line += '{';
-					} else {
-						a_line += ',';
-					}
-
-					if (nodeName[0] != '\0') {
-						a_line += nodeName;
-					} else {
-						a_line += "node?";
-					}
-
-					if (clipName[0] != '\0' || !clipLeaf.empty()) {
-						a_line += '|';
-						if (clipName[0] != '\0') {
-							a_line += clipName;
-						} else {
-							a_line += "clip?";
-						}
-						if (!clipLeaf.empty()) {
-							a_line += '|';
-							a_line += clipLeaf;
-						}
-					}
-
-					++shown;
-					if (shown >= 12 || a_line.size() > 3500) {
-						break;
-					}
-				}
-
-				if (shown == 0) {
-					a_line += "-";
-				} else {
-					a_line += '}';
-				}
-			}
-
 			void ApplyPreviewGraphVariableOverrides()
 			{
 				// IDA: BShkbAnimationGraph::ReceiveChannelsImpl only writes registered
@@ -2168,6 +2246,7 @@ namespace TF3DHud::Animations
 			[[nodiscard]] DebugSnapshot CaptureDebugSnapshot() const
 			{
 				DebugSnapshot snapshot;
+				snapshot.speedChannel = speedDebug_;
 				if (!manager_) {
 					return snapshot;
 				}
@@ -2192,6 +2271,9 @@ namespace TF3DHud::Animations
 
 				snapshot.hasGraph = true;
 				snapshot.graph = reinterpret_cast<std::uintptr_t>(graph.get());
+				RE::BSFixedString speedVariable("Speed");
+				snapshot.speedChannel.previewGraphSpeedHas =
+					g_getBShkbGraphVariableFloat(graph.get(), speedVariable, snapshot.speedChannel.previewGraphSpeed);
 				const auto* const graphBase = reinterpret_cast<const std::byte*>(graph.get());
 				snapshot.generateHavokBones = *reinterpret_cast<const std::uint8_t*>(graphBase + 0x3C6) != 0;
 				snapshot.hasRagdollInterface = *reinterpret_cast<void* const*>(graphBase + 0x210) != nullptr;
@@ -2292,9 +2374,6 @@ namespace TF3DHud::Animations
 				initialStateApplied_ = false;
 				previewStopEventsApplied_ = false;
 				lastLiveSyncJumpState_ = 0;
-				walkRunVariableLogTimer_ = 0.0F;
-				lastWalkRunVariableLog_.clear();
-				lastWalkRunNodeLog_.clear();
 			}
 
 		private:
@@ -2312,14 +2391,12 @@ namespace TF3DHud::Animations
 			RE::BSTEventSource<RE::BSAnimationGraphEvent>* previewEventSource_{ nullptr };
 			std::mutex pendingMirroredEventsLock_;
 			std::vector<RE::BSFixedString> pendingMirroredEvents_;
-			std::string lastWalkRunVariableLog_;
-			std::string lastWalkRunNodeLog_;
 			RE::BSTSmallArray<RE::SubgraphHandle, 2> defaultSubgraphHandles_;
 			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> defaultSubgraphIds_;
 			RE::BSTSmallArray<RE::SubgraphHandle, 2> weaponSubgraphHandles_;
 			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> weaponSubgraphIds_;
+			SpeedChannelDebugInfo speedDebug_;
 			std::int32_t lastLiveSyncJumpState_{ 0 };
-			float walkRunVariableLogTimer_{ 0.0F };
 			bool initialStateApplied_{ false };
 			bool previewStopEventsApplied_{ false };
 
@@ -2666,7 +2743,6 @@ namespace TF3DHud::Animations
 		a_previewRoot.SetLocalTransform(previewRootLocal);
 		RE::NiUpdateData niUpdateData;
 		a_previewRoot.Update(niUpdateData);
-		g_holder->LogWalkRunVariables(a_deltaTime);
 
 		if (!updated) {
 			LogDiagnostic("update returned false");
