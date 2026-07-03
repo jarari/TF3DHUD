@@ -86,6 +86,19 @@ namespace TF3DHud::Address
 	REL::Relocation<std::uintptr_t> ProcessGraphEventTarget{ REL::ID(1199489) };
 	REL::Relocation<std::uintptr_t> RenderPrepassesAndMenusTarget{ REL::ID(1189309) };
 	REL::Relocation<std::uintptr_t> Update3DModelTarget{ REL::ID{ 986782, 2231882 } };
+	// IDA OG 1.10.163: PowerArmorGeometry::~PowerArmorGeometry at 0x14127A000
+	// calls Interface3D::Renderer::Create for "PowerArmorRenderer" at +0x8B
+	// and "HUDRainRenderer" at +0xF0. AE call sites still need IDA validation.
+	const IDOffset PowerArmorGeometryPowerArmorRendererCreateCall{
+		REL::ID{ 1207506 },
+		VariantOffset{ 0x8B, 0x0 }
+	};
+	const IDOffset PowerArmorGeometryHUDRainRendererCreateCall{
+		REL::ID{ 1207506 },
+		VariantOffset{ 0xF0, 0x0 }
+	};
+	// IDA OG 1.10.163: Interface3D::anonymous namespace::RenderersRWLock.
+	REL::Relocation<std::uintptr_t> Interface3DRenderersRWLock{ REL::ID(778095) };
 
 	const IDOffset D3D11CreateDeviceAndSwapChainCall{
 		REL::ID{ 224250, 4492363 },

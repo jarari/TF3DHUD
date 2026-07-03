@@ -173,6 +173,8 @@ namespace TF3DHud::Address
 	using ProcessGraphEvent_t = std::uint32_t(RE::BSAnimationGraphManager*, const RE::BSFixedString&);
 	using QUpdateEditorDeadActorModel_t = bool(RE::AIProcess*);
 	using QTiledLighting_t = bool();
+	using Interface3DRendererCreate_t =
+		RE::Interface3D::Renderer*(const RE::BSFixedString&, RE::UI_DEPTH_PRIORITY, float, bool);
 	using RenderPrepassesAndMenus_t = void(RE::Interface3D::Renderer*);
 	using RenderSceneDeferred_t = void(
 		RE::NiCamera*,
@@ -287,6 +289,9 @@ namespace TF3DHud::Address
 	extern REL::Relocation<std::uintptr_t> ProcessGraphEventTarget;
 	extern REL::Relocation<std::uintptr_t> RenderPrepassesAndMenusTarget;
 	extern REL::Relocation<std::uintptr_t> Update3DModelTarget;
+	extern const IDOffset PowerArmorGeometryPowerArmorRendererCreateCall;
+	extern const IDOffset PowerArmorGeometryHUDRainRendererCreateCall;
+	extern REL::Relocation<std::uintptr_t> Interface3DRenderersRWLock;
 
 	extern const IDOffset D3D11CreateDeviceAndSwapChainCall;
 	extern const IDOffset Interface3DDrawModelRenderSceneDeferredCall;

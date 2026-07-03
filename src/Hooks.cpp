@@ -16,17 +16,13 @@
 #include "RE/B/BSFixedString.h"
 #include "RE/B/BSTimer.h"
 #include "RE/B/BSTEvent.h"
-#include "RE/H/HUDMenu.h"
-#include "RE/I/IMenu.h"
 #include "RE/I/Interface3D.h"
 #include "RE/P/PlayerCharacter.h"
 #include "RE/T/TESEquipEvent.h"
 #include "RE/T/TESForm.h"
-#include "RE/U/UI.h"
+#include "REX/FModule.h"
 
 #include <cstdint>
-#include <string_view>
-#include <vector>
 
 namespace TF3DHud
 {
@@ -37,6 +33,7 @@ namespace TF3DHud
 		using Update3DModel_t = Address::Update3DModel_t;
 		using RenderSceneDeferred_t = Address::RenderSceneDeferred_t;
 		using RenderPrepassesAndMenus_t = Address::RenderPrepassesAndMenus_t;
+		using Interface3DRendererCreate_t = Address::Interface3DRendererCreate_t;
 
 		const auto& g_runActorUpdatesCall = Address::RunActorUpdatesCall;
 		auto& g_processGraphEventTarget = Address::ProcessGraphEventTarget;
@@ -63,8 +60,14 @@ namespace TF3DHud
 		auto& g_qTiledLighting = Address::QTiledLighting;
 		RenderSceneDeferred_t* g_renderSceneDeferred{ nullptr };
 		RenderPrepassesAndMenus_t* g_renderPrepassesAndMenus{ nullptr };
+		Interface3DRendererCreate_t* g_powerArmorGeometryCreateRenderer{ nullptr };
 		bool g_equipWatcherRegistered{ false };
-		std::vector<Scaleform::Ptr<RE::IMenu>> g_renderDeferredMenuRefs;
+
+		struct BSReadWriteLockState
+		{
+			volatile std::uint32_t writerThread;
+			volatile std::uint32_t lock;
+		};
 
 		class EquipWatcher :
 			public RE::BSTEventSink<RE::TESEquipEvent>
@@ -114,37 +117,11 @@ namespace TF3DHud
 			REX::INFO("Registered TESEquipEvent watcher");
 		}
 
-		void RetainHUDMenuStackEntriesUntilNextFrame()
+		[[nodiscard]] bool IsInterface3DRendererRegistryReadLocked()
 		{
-			if (!g_renderDeferredMenuRefs.empty()) {
-				return;
-			}
-
-			auto* const ui = RE::UI::GetSingleton();
-			if (!ui) {
-				return;
-			}
-
-			// IDA: Interface3D::Renderer::RenderAll holds RenderersRWLock for read while
-			// RenderPrepassesAndMenus renders menus. If EnumerateMenuStack's temporary
-			// Release destroys HUDMenu there, PowerArmorGeometry::~PowerArmorGeometry can
-			// call Interface3D::Renderer::Create/Release and self-deadlock on that lock.
-			for (const auto& menu : ui->menuStack) {
-				auto* const rawMenu = menu.get();
-				if (!rawMenu) {
-					continue;
-				}
-
-				const auto* const menuName = rawMenu->menuName.c_str();
-				if (menuName && std::string_view{ menuName } == RE::HUDMenu::MENU_NAME) {
-					g_renderDeferredMenuRefs.emplace_back(rawMenu);
-				}
-			}
-		}
-
-		void ReleaseMenuRefsDeferredFromRender()
-		{
-			g_renderDeferredMenuRefs.clear();
+			const auto* const lock = reinterpret_cast<const BSReadWriteLockState*>(
+				Address::Interface3DRenderersRWLock.address());
+			return lock && lock->writerThread == 0 && lock->lock != 0;
 		}
 
 		[[nodiscard]] bool IsTF3DHudOffscreenRender(RE::ShadowSceneNode* a_shadowSceneNode)
@@ -158,8 +135,6 @@ namespace TF3DHud
 			if (g_runActorUpdates) {
 				g_runActorUpdates(a_processLists, a_deltaTime, a_instant);
 			}
-
-			ReleaseMenuRefsDeferredFromRender();
 
 			const auto* const timer = RE::BSTimer::GetSingleton();
 			Previewer::Update(timer ? timer->delta : a_deltaTime);
@@ -229,10 +204,6 @@ namespace TF3DHud
 
 		void HookedRenderPrepassesAndMenus(RE::Interface3D::Renderer* a_renderer)
 		{
-			if (Renderer::Get()) {
-				RetainHUDMenuStackEntriesUntilNextFrame();
-			}
-
 			if (a_renderer && a_renderer == Renderer::Get()) {
 				Previewer::CommitRenderState();
 			}
@@ -240,6 +211,25 @@ namespace TF3DHud
 			if (g_renderPrepassesAndMenus) {
 				g_renderPrepassesAndMenus(a_renderer);
 			}
+		}
+
+		RE::Interface3D::Renderer* HookedPowerArmorGeometryCreateRenderer(
+			const RE::BSFixedString& a_name,
+			RE::UI_DEPTH_PRIORITY a_depth,
+			float a_fov,
+			bool a_alwaysRenderWhenEnabled)
+		{
+			// IDA: PowerArmorGeometry::~PowerArmorGeometry can run from HUDMenu destruction
+			// inside Interface3D::Renderer::RenderAll, while RenderersRWLock is held for
+			// read. Let the existing destructor fallback skip Create/Release instead of
+			// self-deadlocking in Interface3D::Renderer::Create.
+			if (IsInterface3DRendererRegistryReadLocked()) {
+				return nullptr;
+			}
+
+			return g_powerArmorGeometryCreateRenderer ?
+				g_powerArmorGeometryCreateRenderer(a_name, a_depth, a_fov, a_alwaysRenderWhenEnabled) :
+				nullptr;
 		}
 
 		void F4SEMessageHandler(F4SE::MessagingInterface::Message* a_message)
@@ -312,5 +302,21 @@ namespace TF3DHud
 		REX::INFO(
 			"Installed Interface3D deferred render hook at {:X}",
 			g_interface3DDrawModelRenderSceneDeferredCall.address());
+
+		if (REX::FModule::IsRuntimeOG()) {
+			g_powerArmorGeometryCreateRenderer = reinterpret_cast<Interface3DRendererCreate_t*>(
+				trampoline.write_call<5>(
+					Address::PowerArmorGeometryPowerArmorRendererCreateCall.address(),
+					&HookedPowerArmorGeometryCreateRenderer));
+			trampoline.write_call<5>(
+				Address::PowerArmorGeometryHUDRainRendererCreateCall.address(),
+				&HookedPowerArmorGeometryCreateRenderer);
+			REX::INFO(
+				"Installed PowerArmorGeometry renderer create guards at {:X} and {:X}",
+				Address::PowerArmorGeometryPowerArmorRendererCreateCall.address(),
+				Address::PowerArmorGeometryHUDRainRendererCreateCall.address());
+		} else {
+			REX::WARN("Skipped PowerArmorGeometry renderer create guards: AE call sites need IDA validation");
+		}
 	}
 }
