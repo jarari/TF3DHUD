@@ -31,6 +31,7 @@ namespace TF3DHud::Morph
 
 	void MarkPrimaryDirty();
 	void MarkSecondaryDirty();
+	void ClearGeometryAudit();
 	void Reset();
 	UpdateResult Update(
 		RE::PlayerCharacter& a_player,

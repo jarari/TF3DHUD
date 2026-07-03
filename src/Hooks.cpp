@@ -111,7 +111,6 @@ namespace TF3DHud
 				}
 
 				Previewer::MarkEquipmentDirty();
-				Morph::MarkPrimaryDirty();
 				return RE::BSEventNotifyControl::kContinue;
 			}
 		};

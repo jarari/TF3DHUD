@@ -39,6 +39,8 @@
 #include <algorithm>
 #include <cstring>
 #include <cctype>
+#include <cstdio>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -113,12 +115,19 @@ namespace TF3DHud::Animations
 			"sightedStateExit",
 			"UpdateSighted",
 			"jumpStart",
+			"jumpStartFromWalk",
 			"jumpFall",
 			"jumpLand",
 			"jumpLandSoft",
+			"jumpLandToWalk",
+			"jumpLandToRun",
 			"jumpEnd",
+			"jumpEndToRun",
 			"JumpUp",
 			"JumpDown",
+			"JumpFullBody",
+			"JumpPartialBody",
+			"g_jumpStartFromSprint",
 			"sneakStart",
 			"sneakStop",
 			"sneakStateEnter",
@@ -128,6 +137,38 @@ namespace TF3DHud::Animations
 			"SyncCycleEnd",
 			"syncIdleStart",
 			"syncIdleStop",
+			"moveStart",
+			"moveStop",
+			"moveStartSlave",
+			"moveStopSlave",
+			"sprintStart",
+			"sprintStop",
+			"walkStart",
+			"runStart",
+			"walkRunBlendStart",
+		});
+
+		constexpr auto kWalkRunDiagnosticEvents = std::to_array<std::string_view>({
+			"moveStart",
+			"moveStop",
+			"moveStartSlave",
+			"moveStopSlave",
+			"walkStart",
+			"runStart",
+			"walkRunBlendStart",
+			"sprintStart",
+			"sprintStop",
+			"Walk",
+			"Jog",
+			"Run",
+		});
+
+		constexpr auto kWalkRunDiagnosticNodeTerms = std::to_array<std::string_view>({
+			"walk",
+			"run",
+			"jog",
+			"locomotion",
+			"combat",
 		});
 
 		constexpr auto kIntGraphVariableWhitelist = std::to_array<std::string_view>({
@@ -140,6 +181,11 @@ namespace TF3DHud::Animations
 			"iAttackState",
 			"CurrentJumpState",
 			"iIsInSneak",
+			"iLocomotionSpeedState",
+			"iSyncDirection",
+			"iSyncSprintState",
+			"iSyncIdleLocomotion",
+			"iSyncSneakWalkRun",
 		});
 
 		constexpr auto kBoolGraphVariableWhitelist = std::to_array<std::string_view>({
@@ -158,21 +204,29 @@ namespace TF3DHud::Animations
 			"weaponSpeedMult",
 			"reloadSpeedMult",
 			"sightedSpeedMult",
-			"AimWobble",
-			"AimWobbleSpeedMult",
+			"Speed",
+			"SpeedSmoothed",
+			"WalkSpeedMult",
+			"fSpeedWalk",
+			"JogSpeedMult",
+			"RunSpeedMult",
+			"fLocomotionWalkPlaybackSpeed",
+			"fLocomotionJogPlaybackSpeed",
+			"fLocomotionRunPlaybackSpeed",
+			"fLocomotionSprintPlaybackSpeed",
+			"fLocomotionSneakWalkPlaybackSpeed",
+			"fLocomotionSneakRunPlaybackSpeed",
 		});
 
 		constexpr auto kPreviewSuppressedAnimationChannels = std::to_array<std::string_view>({
 			"Direction",
 			"DirectionSmoothed",
-			"Speed",
 			"Pitch",
 			"Roll",
 			"TurnDelta",
 			"PitchDelta",
 			"PitchDeltaSmoothed",
 			"TurnDeltaSmoothed",
-			"SpeedSmoothed",
 			"DirectionDegrees",
 			"fControllerXSum",
 			"fControllerYSum",
@@ -194,11 +248,7 @@ namespace TF3DHud::Animations
 		});
 
 		constexpr auto kPreviewNeutralIntGraphVariables = std::to_array<std::string_view>({
-			"iLocomotionSpeedState",
-			"iSyncDirection",
-			"iSyncIdleLocomotion",
 			"iSyncRunDirection",
-			"iSyncSneakWalkRun",
 		});
 
 		constexpr auto kPreviewReadyIntGraphVariables = std::to_array<std::string_view>({
@@ -216,9 +266,6 @@ namespace TF3DHud::Animations
 			"DirectionDamped",
 			"DirectionDegrees",
 			"DirectionSmoothed",
-			"Speed",
-			"SpeedDamped",
-			"SpeedSmoothed",
 			"PitchDelta",
 			"PitchDeltaDamped",
 			"PitchDeltaSmoothed",
@@ -257,6 +304,35 @@ namespace TF3DHud::Animations
 			return ContainsEngineFixedString(RE::BSFixedString(a_event), kLiveMirrorEventWhitelist);
 		}
 
+		[[nodiscard]] bool IsWalkRunDiagnosticEvent(const char* a_event)
+		{
+			if (!a_event || a_event[0] == '\0') {
+				return false;
+			}
+
+			return ContainsEngineFixedString(RE::BSFixedString(a_event), kWalkRunDiagnosticEvents);
+		}
+
+		[[nodiscard]] bool ContainsAsciiInsensitive(const std::string_view a_text, const std::string_view a_term)
+		{
+			return std::search(
+					   a_text.begin(),
+					   a_text.end(),
+					   a_term.begin(),
+					   a_term.end(),
+					   [](const char a_lhs, const char a_rhs) {
+						   return std::tolower(static_cast<unsigned char>(a_lhs)) ==
+								  std::tolower(static_cast<unsigned char>(a_rhs));
+					   }) != a_text.end();
+		}
+
+		[[nodiscard]] bool IsWalkRunDiagnosticNodeText(const std::string_view a_text)
+		{
+			return std::any_of(kWalkRunDiagnosticNodeTerms.begin(), kWalkRunDiagnosticNodeTerms.end(), [&](const auto term) {
+				return ContainsAsciiInsensitive(a_text, term);
+			});
+		}
+
 		[[nodiscard]] bool IsSuppressedAnimationChannel(const RE::BSAnimationGraphChannel& a_channel)
 		{
 			return ContainsEngineFixedString(a_channel.variableName, kPreviewSuppressedAnimationChannels);
@@ -265,6 +341,9 @@ namespace TF3DHud::Animations
 		using BShkbAnimationGraphCtor_t =
 			RE::BShkbAnimationGraph*(RE::BShkbAnimationGraph*, RE::Actor*, bool);
 		using NotifyAnimationGraphImpl_t = bool(RE::IAnimationGraphManagerHolder*, const RE::BSFixedString&);
+		using GetGraphVariableBool_t = bool(const RE::BShkbAnimationGraph*, const RE::BSFixedString&, bool&);
+		using GetGraphVariableFloat_t = bool(const RE::BShkbAnimationGraph*, const RE::BSFixedString&, float&);
+		using GetGraphVariableInt_t = bool(const RE::BShkbAnimationGraph*, const RE::BSFixedString&, std::int32_t&);
 		using ActorAnimationGraphManagerCallback_t =
 			void(RE::IAnimationGraphManagerHolder*, const RE::BSTSmartPointer<RE::BSAnimationGraphManager>&);
 		using CreateAnimationGraphManager_t = bool(RE::IAnimationGraphManagerHolder*, const char*);
@@ -329,6 +408,9 @@ namespace TF3DHud::Animations
 
 		REL::Relocation<BShkbAnimationGraphCtor_t*> g_constructBShkbAnimationGraph{ REL::ID{ 1074981, 2256827 } };
 		REL::Relocation<NotifyAnimationGraphImpl_t*> g_notifyAnimationGraphImpl{ REL::ID{ 1379025, 2214561 } };
+		REL::Relocation<GetGraphVariableBool_t*> g_getBShkbGraphVariableBool{ REL::ID(815875) };
+		REL::Relocation<GetGraphVariableFloat_t*> g_getBShkbGraphVariableFloat{ REL::ID(1254547) };
+		REL::Relocation<GetGraphVariableInt_t*> g_getBShkbGraphVariableInt{ REL::ID(110974) };
 		REL::Relocation<ActorAnimationGraphManagerCallback_t*> g_actorPreUpdateAnimationGraphManager{ REL::ID{ 442032, 2230545 } };
 		REL::Relocation<ActorAnimationGraphManagerCallback_t*> g_actorPreLoadAnimationGraphManager{ REL::ID{ 1053762, 2230546 } };
 		REL::Relocation<ActorAnimationGraphManagerCallback_t*> g_actorPostLoadAnimationGraphManager{ REL::ID{ 348865, 2230547 } };
@@ -1091,16 +1173,25 @@ namespace TF3DHud::Animations
 
 			bool GetGraphVariableImplFloat(const RE::BSFixedString& a_variable, float& a_out) const override
 			{
+				if (auto graph = GetActivePreviewGraph(); graph && g_getBShkbGraphVariableFloat(graph.get(), a_variable, a_out)) {
+					return true;
+				}
 				return sourceHolder_ && sourceHolder_->GetGraphVariableImplFloat(a_variable, a_out);
 			}
 
 			bool GetGraphVariableImplInt(const RE::BSFixedString& a_variable, std::int32_t& a_out) const override
 			{
+				if (auto graph = GetActivePreviewGraph(); graph && g_getBShkbGraphVariableInt(graph.get(), a_variable, a_out)) {
+					return true;
+				}
 				return sourceHolder_ && sourceHolder_->GetGraphVariableImplInt(a_variable, a_out);
 			}
 
 			bool GetGraphVariableImplBool(const RE::BSFixedString& a_variable, bool& a_out) const override
 			{
+				if (auto graph = GetActivePreviewGraph(); graph && g_getBShkbGraphVariableBool(graph.get(), a_variable, a_out)) {
+					return true;
+				}
 				return sourceHolder_ && sourceHolder_->GetGraphVariableImplBool(a_variable, a_out);
 			}
 
@@ -1521,7 +1612,14 @@ namespace TF3DHud::Animations
 					// so replay whitelisted live graph events through the preview graph
 					// rather than forcing the selected subgraph state.
 					ApplyPreviewWeaponVisibilityEvent(a_event.tag);
-					if (IsLiveMirrorEventWhitelisted(a_event.tag.c_str())) {
+					const bool whitelisted = IsLiveMirrorEventWhitelisted(a_event.tag.c_str());
+					if (IsWalkRunDiagnosticEvent(a_event.tag.c_str())) {
+						REX::INFO(
+							"WalkRun event live-broadcast event={} mirrored={}",
+							a_event.tag.c_str(),
+							whitelisted ? 1 : 0);
+					}
+					if (whitelisted) {
 						QueueMirroredEvent(a_event.tag);
 					}
 				}
@@ -1533,13 +1631,43 @@ namespace TF3DHud::Animations
 					return;
 				}
 
-				const bool accepted = a_result != 0;
 				const bool whitelisted = IsLiveMirrorEventWhitelisted(a_eventName);
-				if (!accepted || !whitelisted) {
+				if (IsWalkRunDiagnosticEvent(a_eventName)) {
+					REX::INFO(
+						"WalkRun event live-request event={} accepted={} mirrored={}",
+						a_eventName,
+						a_result ? 1 : 0,
+						whitelisted ? 1 : 0);
+				}
+				if (!whitelisted) {
 					return;
 				}
 
+				// IDA: BSAnimationGraphManager::ProcessGraphEvent returns whether
+				// the active graph accepted the request. Nested/reload blend
+				// machines can still need the same input request even when the
+				// top-level result is false, so mirror the request stream itself.
+				(void)a_result;
 				QueueMirroredEvent(RE::BSFixedString(a_eventName));
+			}
+
+			void ReconcileJumpLandingFromLive()
+			{
+				if (!sourceHolder_) {
+					return;
+				}
+
+				std::int32_t liveSyncJumpState{ 0 };
+				if (!TryGetLiveGraphVariableInt("iSyncJumpState", liveSyncJumpState)) {
+					return;
+				}
+
+				std::int32_t liveCurrentJumpState{ 0 };
+				(void)TryGetLiveGraphVariableInt("CurrentJumpState", liveCurrentJumpState);
+				if (lastLiveSyncJumpState_ != 0 && liveSyncJumpState == 0 && liveCurrentJumpState == 0) {
+					QueueMirroredEvent(RE::BSFixedString("jumpLand"));
+				}
+				lastLiveSyncJumpState_ = liveSyncJumpState;
 			}
 
 			void QueueMirroredEvent(const RE::BSFixedString& a_eventName)
@@ -1564,7 +1692,13 @@ namespace TF3DHud::Animations
 				}
 
 				for (const auto& eventName : events) {
-					(void)NotifyAnimationGraphImpl(eventName);
+					const bool processed = NotifyAnimationGraphImpl(eventName);
+					if (IsWalkRunDiagnosticEvent(eventName.c_str())) {
+						REX::INFO(
+							"WalkRun event preview-request event={} accepted={}",
+							eventName.c_str(),
+							processed ? 1 : 0);
+					}
 				}
 			}
 
@@ -1651,7 +1785,7 @@ namespace TF3DHud::Animations
 
 				for (const auto& variableName : kIntGraphVariableWhitelist) {
 					std::int32_t value{ 0 };
-					if (sourceHolder_->GetGraphVariableImplInt(variableName.data(), value)) {
+					if (TryGetLiveGraphVariableInt(variableName.data(), value)) {
 						SetGraphVariableInt(variableName.data(), value);
 						if (variableName == std::string_view{ "iSyncWeaponDrawState" }) {
 							ApplyPreviewWeaponDrawState(value);
@@ -1661,16 +1795,280 @@ namespace TF3DHud::Animations
 
 				for (const auto& variableName : kBoolGraphVariableWhitelist) {
 					bool value{ false };
-					if (sourceHolder_->GetGraphVariableImplBool(variableName.data(), value)) {
+					if (TryGetLiveGraphVariableBool(variableName.data(), value)) {
 						SetGraphVariableBool(variableName.data(), value);
 					}
 				}
 
 				for (const auto& variableName : kFloatGraphVariableWhitelist) {
 					float value{ 0.0F };
-					if (sourceHolder_->GetGraphVariableImplFloat(variableName.data(), value)) {
+					if (TryGetLiveGraphVariableFloat(variableName.data(), value)) {
 						SetGraphVariableFloat(variableName.data(), value);
 					}
+				}
+			}
+
+			void LogWalkRunVariables(const float a_deltaTime)
+			{
+				walkRunVariableLogTimer_ += a_deltaTime;
+				if (walkRunVariableLogTimer_ < 0.5F) {
+					return;
+				}
+				walkRunVariableLogTimer_ = 0.0F;
+
+				const auto previewGraph = GetActivePreviewGraph();
+				const auto* preview = previewGraph.get();
+				std::string line{ "WalkRun vars L/P:" };
+
+				const auto appendMissingOrInt = [](std::string& a_line, const bool a_hasValue, const std::int32_t a_value) {
+					if (a_hasValue) {
+						a_line += std::to_string(a_value);
+					} else {
+						a_line += '?';
+					}
+				};
+				const auto appendMissingOrBool = [](std::string& a_line, const bool a_hasValue, const bool a_value) {
+					if (a_hasValue) {
+						a_line += a_value ? '1' : '0';
+					} else {
+						a_line += '?';
+					}
+				};
+				const auto appendMissingOrFloat = [](std::string& a_line, const bool a_hasValue, const float a_value) {
+					if (!a_hasValue) {
+						a_line += '?';
+						return;
+					}
+
+					char buffer[32]{};
+					std::snprintf(buffer, sizeof(buffer), "%.3f", a_value);
+					a_line += buffer;
+				};
+				const auto appendGraphIndex = [](std::string& a_line, const bool a_hasValue, const std::uint32_t a_index) {
+					if (!a_hasValue) {
+						return;
+					}
+
+					a_line += '@';
+					if (a_index == std::numeric_limits<std::uint32_t>::max()) {
+						a_line += "cache";
+					} else {
+						a_line += std::to_string(a_index);
+					}
+				};
+				const auto appendName = [](std::string& a_line, const std::string_view a_name) {
+					a_line += ' ';
+					a_line.append(a_name.data(), a_name.size());
+					a_line += '=';
+				};
+
+				const auto appendInt = [&](const std::string_view a_name) {
+					const RE::BSFixedString variableName(a_name.data());
+					std::int32_t liveValue{ 0 };
+					std::int32_t previewValue{ 0 };
+					std::uint32_t liveIndex{ 0 };
+					const bool hasLive = TryGetLiveGraphVariableInt(variableName, liveValue, std::addressof(liveIndex));
+					const bool hasPreview = preview && g_getBShkbGraphVariableInt(preview, variableName, previewValue);
+					appendName(line, a_name);
+					appendMissingOrInt(line, hasLive, liveValue);
+					appendGraphIndex(line, hasLive, liveIndex);
+					line += '/';
+					appendMissingOrInt(line, hasPreview, previewValue);
+				};
+				const auto appendBool = [&](const std::string_view a_name) {
+					const RE::BSFixedString variableName(a_name.data());
+					bool liveValue{ false };
+					bool previewValue{ false };
+					std::uint32_t liveIndex{ 0 };
+					const bool hasLive = TryGetLiveGraphVariableBool(variableName, liveValue, std::addressof(liveIndex));
+					const bool hasPreview = preview && g_getBShkbGraphVariableBool(preview, variableName, previewValue);
+					appendName(line, a_name);
+					appendMissingOrBool(line, hasLive, liveValue);
+					appendGraphIndex(line, hasLive, liveIndex);
+					line += '/';
+					appendMissingOrBool(line, hasPreview, previewValue);
+				};
+				const auto appendFloat = [&](const std::string_view a_name) {
+					const RE::BSFixedString variableName(a_name.data());
+					float liveValue{ 0.0F };
+					float previewValue{ 0.0F };
+					std::uint32_t liveIndex{ 0 };
+					const bool hasLive = TryGetLiveGraphVariableFloat(variableName, liveValue, std::addressof(liveIndex));
+					const bool hasPreview = preview && g_getBShkbGraphVariableFloat(preview, variableName, previewValue);
+					appendName(line, a_name);
+					appendMissingOrFloat(line, hasLive, liveValue);
+					appendGraphIndex(line, hasLive, liveIndex);
+					line += '/';
+					appendMissingOrFloat(line, hasPreview, previewValue);
+				};
+
+				for (const auto name : {
+						 "iSyncIdleLocomotion",
+						 "iLocomotionSpeedState",
+						 "iSyncSneakWalkRun",
+						 "iSyncSprintState",
+						 "iSyncRunDirection",
+						 "iSyncTurnState",
+						 "iIsInSneak" }) {
+					appendInt(name);
+				}
+
+				for (const auto name : {
+						 "IsSprinting",
+						 "IsSneaking",
+						 "bIsSneaking",
+						 "bFreezeSpeedUpdate",
+						 "bManualGraphChange" }) {
+					appendBool(name);
+				}
+
+				for (const auto name : {
+						 "Speed",
+						 "SpeedSmoothed",
+						 "speedDamped",
+						 "WalkSpeedMult",
+						 "fSpeedWalk",
+						 "JogSpeedMult",
+						 "RunSpeedMult",
+						 "fLocomotionWalkPlaybackSpeed",
+						 "fLocomotionJogPlaybackSpeed",
+						 "fLocomotionRunPlaybackSpeed",
+						 "fLocomotionSneakWalkPlaybackSpeed",
+						 "fLocomotionSneakRunPlaybackSpeed",
+						 "weaponSpeedMult",
+						 "reloadSpeedMult" }) {
+					appendFloat(name);
+				}
+
+				if (line != lastWalkRunVariableLog_) {
+					lastWalkRunVariableLog_ = line;
+					REX::INFO("{}", line);
+				}
+
+				LogWalkRunActiveNodes();
+			}
+
+			void LogWalkRunActiveNodes()
+			{
+				std::string line{ "WalkRun nodes L/P:" };
+
+				const auto liveManager = GetLiveSourceManagerSmart();
+				AppendWalkRunActiveNodesForManager(line, "L", liveManager.get());
+				AppendWalkRunActiveNodesForManager(line, "P", manager_.get());
+
+				if (line != lastWalkRunNodeLog_) {
+					lastWalkRunNodeLog_ = line;
+					REX::INFO("{}", line);
+				}
+			}
+
+			void AppendWalkRunActiveNodesForManager(
+				std::string& a_line,
+				const std::string_view a_label,
+				const RE::BSAnimationGraphManager* a_manager) const
+			{
+				if (!a_manager || a_manager->graph.empty()) {
+					a_line += ' ';
+					a_line.append(a_label.data(), a_label.size());
+					a_line += "=?";
+					return;
+				}
+
+				for (std::uint32_t index = 0; index < a_manager->graph.size() && index < 4; ++index) {
+					a_line += ' ';
+					a_line.append(a_label.data(), a_label.size());
+					a_line += '@';
+					a_line += std::to_string(index);
+					if (index == a_manager->activeGraph) {
+						a_line += '*';
+					}
+					a_line += '=';
+
+					const auto& graph = a_manager->graph[index];
+					AppendWalkRunActiveNodesForGraph(a_line, graph.get());
+				}
+			}
+
+			void AppendWalkRunActiveNodesForGraph(
+				std::string& a_line,
+				const RE::BShkbAnimationGraph* a_graph) const
+			{
+				if (!a_graph) {
+					a_line += '?';
+					return;
+				}
+
+				const auto* const graphBase = reinterpret_cast<const std::byte*>(a_graph);
+				auto* behavior = *reinterpret_cast<HkbBehaviorGraphDiagnostic* const*>(graphBase + 0x378);
+				if (!behavior) {
+					a_line += "noBehavior";
+					return;
+				}
+
+				auto* activeNodes = behavior->activeNodes;
+				if (!activeNodes || !activeNodes->data || activeNodes->size <= 0 || activeNodes->size > 1024) {
+					a_line += "noNodes";
+					return;
+				}
+
+				a_line += '[';
+				a_line += std::to_string(activeNodes->size);
+				a_line += ']';
+
+				std::uint32_t shown = 0;
+				for (std::int32_t index = 0; index < activeNodes->size && index < 128; ++index) {
+					const auto entry = reinterpret_cast<std::uintptr_t>(activeNodes->data[index]);
+					if (!entry) {
+						continue;
+					}
+
+					const auto node = ReadActiveNodePointer(entry);
+					const auto clip = SelectActiveClip(entry);
+					const auto* nodeName = node ? SafeString(ReadTaggedString(node + 0x38)) : "";
+					const auto* clipName = clip ? SafeString(ReadTaggedString(clip + 0x38)) : "";
+					const auto* clipPath = clip ? SafeString(ReadTaggedString(clip + 0x90)) : "";
+					const auto clipLeaf = GetClipLeaf(clipPath);
+					if (!IsWalkRunDiagnosticNodeText(nodeName) &&
+						!IsWalkRunDiagnosticNodeText(clipName) &&
+						!IsWalkRunDiagnosticNodeText(clipLeaf)) {
+						continue;
+					}
+
+					if (shown == 0) {
+						a_line += '{';
+					} else {
+						a_line += ',';
+					}
+
+					if (nodeName[0] != '\0') {
+						a_line += nodeName;
+					} else {
+						a_line += "node?";
+					}
+
+					if (clipName[0] != '\0' || !clipLeaf.empty()) {
+						a_line += '|';
+						if (clipName[0] != '\0') {
+							a_line += clipName;
+						} else {
+							a_line += "clip?";
+						}
+						if (!clipLeaf.empty()) {
+							a_line += '|';
+							a_line += clipLeaf;
+						}
+					}
+
+					++shown;
+					if (shown >= 12 || a_line.size() > 3500) {
+						break;
+					}
+				}
+
+				if (shown == 0) {
+					a_line += "-";
+				} else {
+					a_line += '}';
 				}
 			}
 
@@ -1696,11 +2094,17 @@ namespace TF3DHud::Animations
 				}
 
 				if (!previewStopEventsApplied_) {
-					// WeaponBehavior.xml exposes these stop events for turn and
-					// locomotion state machines. Send once after graph creation to
-					// unwind any live state copied during variable initialization.
+					// WeaponBehavior.xml exposes these stop events for state machines.
+					// Do not send moveStop while the live graph is already in locomotion:
+					// iSyncIdleLocomotion/iLocomotionSpeedState are start-state inputs
+					// during graph rebuild, and moveStop would immediately undo them.
 					(void)NotifyAnimationGraphImpl("TurnStop");
-					(void)NotifyAnimationGraphImpl("moveStop");
+					std::int32_t liveLocomotionState{ 0 };
+					if (!sourceHolder_ ||
+						!TryGetLiveGraphVariableInt("iSyncIdleLocomotion", liveLocomotionState) ||
+						liveLocomotionState != 1) {
+						(void)NotifyAnimationGraphImpl("moveStop");
+					}
 					previewStopEventsApplied_ = true;
 				}
 			}
@@ -1887,6 +2291,10 @@ namespace TF3DHud::Animations
 			{
 				initialStateApplied_ = false;
 				previewStopEventsApplied_ = false;
+				lastLiveSyncJumpState_ = 0;
+				walkRunVariableLogTimer_ = 0.0F;
+				lastWalkRunVariableLog_.clear();
+				lastWalkRunNodeLog_.clear();
 			}
 
 		private:
@@ -1904,10 +2312,14 @@ namespace TF3DHud::Animations
 			RE::BSTEventSource<RE::BSAnimationGraphEvent>* previewEventSource_{ nullptr };
 			std::mutex pendingMirroredEventsLock_;
 			std::vector<RE::BSFixedString> pendingMirroredEvents_;
+			std::string lastWalkRunVariableLog_;
+			std::string lastWalkRunNodeLog_;
 			RE::BSTSmallArray<RE::SubgraphHandle, 2> defaultSubgraphHandles_;
 			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> defaultSubgraphIds_;
 			RE::BSTSmallArray<RE::SubgraphHandle, 2> weaponSubgraphHandles_;
 			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> weaponSubgraphIds_;
+			std::int32_t lastLiveSyncJumpState_{ 0 };
+			float walkRunVariableLogTimer_{ 0.0F };
 			bool initialStateApplied_{ false };
 			bool previewStopEventsApplied_{ false };
 
@@ -1923,6 +2335,107 @@ namespace TF3DHud::Animations
 				}
 
 				return manager_->graph[activeGraph];
+			}
+
+			[[nodiscard]] RE::BSTSmartPointer<RE::BSAnimationGraphManager> GetLiveSourceManagerSmart() const
+			{
+				RE::BSTSmartPointer<RE::BSAnimationGraphManager> liveManager;
+				if (sourceHolder_) {
+					(void)sourceHolder_->GetAnimationGraphManagerImpl(liveManager);
+				}
+				return liveManager;
+			}
+
+			template <class Getter, class Value>
+			[[nodiscard]] bool TryGetLiveGraphVariable(
+				const RE::BSFixedString& a_variable,
+				Value& a_out,
+				Getter a_getter,
+				std::uint32_t* a_graphIndex = nullptr) const
+			{
+				auto liveManager = GetLiveSourceManagerSmart();
+				if (!liveManager || liveManager->graph.empty()) {
+					return false;
+				}
+
+				const auto tryGraph = [&](const std::uint32_t a_index) {
+					if (a_index >= liveManager->graph.size()) {
+						return false;
+					}
+
+					const auto& graph = liveManager->graph[a_index];
+					if (!graph || !a_getter(graph.get(), a_variable, a_out)) {
+						return false;
+					}
+
+					if (a_graphIndex) {
+						*a_graphIndex = a_index;
+					}
+					return true;
+				};
+
+				if (tryGraph(liveManager->activeGraph)) {
+					return true;
+				}
+
+				for (std::uint32_t index = 0; index < liveManager->graph.size(); ++index) {
+					if (index != liveManager->activeGraph && tryGraph(index)) {
+						return true;
+					}
+				}
+
+				return false;
+			}
+
+			[[nodiscard]] bool TryGetLiveGraphVariableInt(
+				const RE::BSFixedString& a_variable,
+				std::int32_t& a_out,
+				std::uint32_t* a_graphIndex = nullptr) const
+			{
+				if (TryGetLiveGraphVariable(a_variable, a_out, g_getBShkbGraphVariableInt.get(), a_graphIndex)) {
+					return true;
+				}
+				if (sourceHolder_ && sourceHolder_->GetGraphVariableImplInt(a_variable, a_out)) {
+					if (a_graphIndex) {
+						*a_graphIndex = std::numeric_limits<std::uint32_t>::max();
+					}
+					return true;
+				}
+				return false;
+			}
+
+			[[nodiscard]] bool TryGetLiveGraphVariableBool(
+				const RE::BSFixedString& a_variable,
+				bool& a_out,
+				std::uint32_t* a_graphIndex = nullptr) const
+			{
+				if (TryGetLiveGraphVariable(a_variable, a_out, g_getBShkbGraphVariableBool.get(), a_graphIndex)) {
+					return true;
+				}
+				if (sourceHolder_ && sourceHolder_->GetGraphVariableImplBool(a_variable, a_out)) {
+					if (a_graphIndex) {
+						*a_graphIndex = std::numeric_limits<std::uint32_t>::max();
+					}
+					return true;
+				}
+				return false;
+			}
+
+			[[nodiscard]] bool TryGetLiveGraphVariableFloat(
+				const RE::BSFixedString& a_variable,
+				float& a_out,
+				std::uint32_t* a_graphIndex = nullptr) const
+			{
+				if (TryGetLiveGraphVariable(a_variable, a_out, g_getBShkbGraphVariableFloat.get(), a_graphIndex)) {
+					return true;
+				}
+				if (sourceHolder_ && sourceHolder_->GetGraphVariableImplFloat(a_variable, a_out)) {
+					if (a_graphIndex) {
+						*a_graphIndex = std::numeric_limits<std::uint32_t>::max();
+					}
+					return true;
+				}
+				return false;
 			}
 
 			[[nodiscard]] RE::BSAnimationGraphManager* GetLiveSourceManager() const
@@ -2140,6 +2653,7 @@ namespace TF3DHud::Animations
 		g_holder->SyncWhitelistedGraphVariablesFromLive();
 		g_holder->RefreshPendingSubgraphLoads();
 		g_holder->TryApplyInitialAnimationState();
+		g_holder->ReconcileJumpLandingFromLive();
 		g_holder->ProcessMirroredEvents();
 		g_holder->SyncWeaponCullStateFromLive();
 		g_holder->SetGraphVariableBool("bAimEnabled", false);
@@ -2152,6 +2666,7 @@ namespace TF3DHud::Animations
 		a_previewRoot.SetLocalTransform(previewRootLocal);
 		RE::NiUpdateData niUpdateData;
 		a_previewRoot.Update(niUpdateData);
+		g_holder->LogWalkRunVariables(a_deltaTime);
 
 		if (!updated) {
 			LogDiagnostic("update returned false");

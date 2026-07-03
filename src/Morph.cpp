@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -30,6 +31,7 @@ namespace TF3DHud::Morph
 		std::uint32_t g_pendingMorphSignatureFrames{ 0 };
 		std::unordered_set<std::string> g_graphWrittenBoneNames;
 		bool g_graphWrittenBoneNamesValid{ false };
+		std::mutex g_stateLock;
 
 		void HashInteger(std::uint64_t& a_hash, const std::uintptr_t a_value)
 		{
@@ -134,17 +136,17 @@ namespace TF3DHud::Morph
 			return true;
 		}
 
-		[[nodiscard]] bool ApplySkeletalAdjustments(
+		[[nodiscard]] std::uint32_t ApplySkeletalAdjustments(
 			RE::NiAVObject& a_previewRoot,
 			const std::unordered_map<std::string, RE::NiAVObject*>& a_sourceNodes,
 			const std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
 		{
 			if (a_sourceNodes.empty()) {
-				return false;
+				return 0;
 			}
 
 			if (a_previewNodes.empty()) {
-				return false;
+				return 0;
 			}
 
 			std::uint32_t copied = 0;
@@ -164,12 +166,12 @@ namespace TF3DHud::Morph
 			}
 
 			if (copied == 0) {
-				return false;
+				return 0;
 			}
 
 			RE::NiUpdateData updateData;
 			a_previewRoot.Update(updateData);
-			return true;
+			return copied;
 		}
 
 		void BeginAuditsIfRequested()
@@ -199,8 +201,19 @@ namespace TF3DHud::Morph
 		g_requestedAdjustmentDelayFrames.store(kAdjustmentDelayFrames, std::memory_order_release);
 	}
 
+	void ClearGeometryAudit()
+	{
+		std::scoped_lock lock(g_stateLock);
+		g_requestedMorphAuditFrames.store(0, std::memory_order_release);
+		g_morphAuditFrames = 0;
+		g_lastMorphSignature = 0;
+		g_pendingMorphSignature = 0;
+		g_pendingMorphSignatureFrames = 0;
+	}
+
 	void Reset()
 	{
+		std::scoped_lock lock(g_stateLock);
 		g_requestedMorphAuditFrames.store(0, std::memory_order_release);
 		g_requestedAdjustmentDelayFrames.store(0, std::memory_order_release);
 		g_morphAuditFrames = 0;
@@ -217,13 +230,15 @@ namespace TF3DHud::Morph
 		RE::NiAVObject& a_previewRoot,
 		RE::BSFlattenedBoneTree* a_previewFlattenedBoneTree)
 	{
+		std::scoped_lock lock(g_stateLock);
 		BeginAuditsIfRequested();
 
 		UpdateResult result = UpdateResult::kNone;
 		if (g_morphAuditFrames != 0) {
 			--g_morphAuditFrames;
+			const auto morphSignature = BuildMorphSignature(a_player);
 			if (CheckStableChangedSignature(
-					BuildMorphSignature(a_player),
+					morphSignature,
 					g_lastMorphSignature,
 					g_pendingMorphSignature,
 					g_pendingMorphSignatureFrames)) {
@@ -249,7 +264,8 @@ namespace TF3DHud::Morph
 
 			std::unordered_map<std::string, RE::NiAVObject*> previewNodes;
 			BuildPreviewTargetMap(a_previewRoot, a_previewFlattenedBoneTree, previewNodes);
-			if (ApplySkeletalAdjustments(a_previewRoot, sourceNodes, previewNodes)) {
+			const auto adjustedNodes = ApplySkeletalAdjustments(a_previewRoot, sourceNodes, previewNodes);
+			if (adjustedNodes != 0) {
 				result = result | UpdateResult::kAdjustmentsApplied;
 			}
 		}
