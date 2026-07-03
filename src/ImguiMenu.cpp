@@ -957,6 +957,9 @@ namespace TF3DHud::Imgui
 			if (!snapshot.lastDiagnostic.empty()) {
 				ImGui::Text("Last diagnostic: %s", snapshot.lastDiagnostic.c_str());
 			}
+			if (ImGui::Button("Log Right-Hand Bone Hierarchy")) {
+				Previewer::LogRightHandBoneHierarchy();
+			}
 			ImGui::Separator();
 
 			ImGui::Text(

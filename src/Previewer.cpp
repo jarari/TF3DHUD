@@ -271,6 +271,24 @@ namespace TF3DHud
 			return nullptr;
 		}
 
+		[[nodiscard]] RE::NiNode* ResolveWeaponBonePreviewAttachParent(
+			const RE::BIPED_OBJECT a_slot,
+			const RE::BIPOBJECT& a_sourceObject,
+			RE::NiAVObject& a_previewRoot,
+			const std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
+		{
+			const auto* sourceForm = a_sourceObject.parent.object;
+			if (!IsEngineWeaponAttachSlot(a_slot) || !sourceForm || !sourceForm->Is(RE::ENUM_FORM_ID::kWEAP)) {
+				return nullptr;
+			}
+
+			// IDA OG 1.10.163: when no fixed parent is found and no Prn is
+			// present, AttachToParent falls back to WeaponUtils::GetWeaponBoneName.
+			// The FO4 right-hand weapon bone is named "Weapon"; shield remains
+			// handled by the fixed WeaponLeft path above.
+			return FindPreviewNodeByName(a_previewRoot, a_previewNodes, "Weapon");
+		}
+
 		RE::NiNode* FindPreviewAttachParent(
 			const RE::BIPED_OBJECT a_slot,
 			const RE::BIPOBJECT& a_sourceBipedObject,
@@ -292,6 +310,10 @@ namespace TF3DHud
 				}
 			}
 
+			if (auto* weaponBoneParent = ResolveWeaponBonePreviewAttachParent(a_slot, a_sourceBipedObject, a_previewRoot, a_previewNodes)) {
+				return weaponBoneParent;
+			}
+
 			for (auto* sourceParent = a_sourceClone.parent; sourceParent; sourceParent = sourceParent->parent) {
 				auto* previewObject = FindNodeByName(a_previewNodes, sourceParent->GetName());
 				auto* previewNode = previewObject ? previewObject->IsNode() : nullptr;
@@ -300,6 +322,14 @@ namespace TF3DHud
 				}
 			}
 
+			const auto* sourceForm = a_sourceBipedObject.parent.object;
+			REX::WARN(
+				"Preview attach parent fallback failed: slot={}, sourceForm='{}' ({:08X}), sourceClone='{}', sourceClonePtr={:X}; using preview root",
+				std::to_underlying(a_slot),
+				sourceForm ? sourceForm->GetFormTypeString() : "<null>",
+				sourceForm ? sourceForm->GetFormID() : 0,
+				a_sourceClone.GetName(),
+				reinterpret_cast<std::uintptr_t>(std::addressof(a_sourceClone)));
 			return a_previewRoot.IsNode();
 		}
 
@@ -1490,6 +1520,113 @@ namespace TF3DHud
 			TrackReparentedPreviewAttachment(a_slot, *backpack, *targetNode, a_previewNodes);
 		}
 
+		[[nodiscard]] const char* DebugNodeName(const RE::NiAVObject& a_object)
+		{
+			const auto name = a_object.GetName();
+			return name.empty() ? "<unnamed>" : name.c_str();
+		}
+
+		void LogBoneNodeHierarchy(
+			RE::NiAVObject& a_object,
+			const std::string& a_prefix,
+			const bool a_isLast,
+			const bool a_isRoot,
+			std::unordered_set<RE::NiAVObject*>& a_seen)
+		{
+			if (!a_seen.insert(std::addressof(a_object)).second) {
+				REX::WARN(
+					"Preview right-hand bone hierarchy: {}{}'{}' ptr={:X} <cycle>",
+					a_prefix,
+					a_isRoot ? "" : (a_isLast ? "`-- " : "|-- "),
+					DebugNodeName(a_object),
+					reinterpret_cast<std::uintptr_t>(std::addressof(a_object)));
+				return;
+			}
+
+			const auto& local = a_object.GetLocalTransform();
+			const auto& world = a_object.GetWorldTransform();
+			const auto& r = local.rotate;
+			REX::INFO(
+				"Preview right-hand bone hierarchy: {}{}'{}' ptr={:X} parent='{}' parentPtr={:X} localT=({:.3f},{:.3f},{:.3f}) localS={:.3f} localR=[({:.4f},{:.4f},{:.4f}),({:.4f},{:.4f},{:.4f}),({:.4f},{:.4f},{:.4f})] worldT=({:.3f},{:.3f},{:.3f}) worldS={:.3f}",
+				a_prefix,
+				a_isRoot ? "" : (a_isLast ? "`-- " : "|-- "),
+				DebugNodeName(a_object),
+				reinterpret_cast<std::uintptr_t>(std::addressof(a_object)),
+				a_object.parent ? DebugNodeName(*a_object.parent) : "<null>",
+				reinterpret_cast<std::uintptr_t>(a_object.parent),
+				local.translate.x,
+				local.translate.y,
+				local.translate.z,
+				local.scale,
+				r[0].x,
+				r[0].y,
+				r[0].z,
+				r[1].x,
+				r[1].y,
+				r[1].z,
+				r[2].x,
+				r[2].y,
+				r[2].z,
+				world.translate.x,
+				world.translate.y,
+				world.translate.z,
+				world.scale);
+
+			auto* node = a_object.IsNode();
+			if (!node) {
+				return;
+			}
+
+			std::vector<RE::NiAVObject*> childNodes;
+			childNodes.reserve(node->children.size());
+			for (auto& child : node->children) {
+				if (child && child->IsNode()) {
+					childNodes.push_back(child.get());
+				}
+			}
+
+			const auto childPrefix = a_prefix + (a_isRoot ? "" : (a_isLast ? "    " : "|   "));
+			for (std::size_t i = 0; i < childNodes.size(); ++i) {
+				auto* child = childNodes[i];
+				if (!child) {
+					continue;
+				}
+				LogBoneNodeHierarchy(*child, childPrefix, i + 1 == childNodes.size(), false, a_seen);
+			}
+		}
+
+		void LogPreviewRightHandBoneHierarchy()
+		{
+			if (!g_previewRoot) {
+				REX::WARN("Preview right-hand bone hierarchy skipped: preview root is null");
+				return;
+			}
+
+			RefreshPreviewBoneLookup(*g_previewRoot);
+			std::unordered_map<std::string, RE::NiAVObject*> previewNodes;
+			CollectPreviewSkinTargetNodes(*g_previewRoot, previewNodes);
+
+			auto* rightHand = FindPreviewNodeByName(*g_previewRoot, previewNodes, "RArm_Hand");
+			if (!rightHand) {
+				REX::WARN(
+					"Preview right-hand bone hierarchy skipped: RArm_Hand not found, root='{}', rootPtr={:X}, namedNodes={}",
+					g_previewRoot->GetName(),
+					reinterpret_cast<std::uintptr_t>(g_previewRoot.get()),
+					previewNodes.size());
+				return;
+			}
+
+			REX::INFO(
+				"Preview right-hand bone hierarchy begin: root='{}', rootPtr={:X}, rightHandPtr={:X}, namedNodes={}",
+				g_previewRoot->GetName(),
+				reinterpret_cast<std::uintptr_t>(g_previewRoot.get()),
+				reinterpret_cast<std::uintptr_t>(rightHand),
+				previewNodes.size());
+			std::unordered_set<RE::NiAVObject*> seen;
+			LogBoneNodeHierarchy(*rightHand, "", true, true, seen);
+			REX::INFO("Preview right-hand bone hierarchy end: nodes={}", seen.size());
+		}
+
 		[[nodiscard]] std::uint32_t CountPreviewAttachmentsForSlot(const RE::BIPED_OBJECT a_slot)
 		{
 			return static_cast<std::uint32_t>(std::ranges::count_if(
@@ -2324,6 +2461,12 @@ namespace TF3DHud
 
 			g_looksMenuSuspended = false;
 			ClearPreviewRebuildState();
+		}
+
+		void LogRightHandBoneHierarchy()
+		{
+			std::scoped_lock lock(g_stateLock);
+			LogPreviewRightHandBoneHierarchy();
 		}
 	}
 

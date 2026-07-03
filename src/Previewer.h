@@ -13,4 +13,5 @@ namespace TF3DHud::Previewer
 	void ReloadConfig();
 	void SuspendForLooksMenu();
 	void ResumeAfterLooksMenu();
+	void LogRightHandBoneHierarchy();
 }
