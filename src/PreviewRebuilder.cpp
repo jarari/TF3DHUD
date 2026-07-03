@@ -344,6 +344,7 @@ namespace TF3DHud::PreviewRebuilder
 	{
 		committedEquipmentSignature_ = a_equipmentSignature;
 		committedMorphGeometrySignature_ = a_morphGeometrySignature;
+		RequestBehaviorGraphRefresh();
 	}
 
 	void Controller::RequestSkeletonAdjustment()

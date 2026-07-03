@@ -2712,6 +2712,12 @@ namespace TF3DHud::Animations
 		g_lastDiagnostic.clear();
 	}
 
+	void ResetGraph()
+	{
+		std::scoped_lock lock(g_stateLock);
+		Clear();
+	}
+
 	void ResetInitialState()
 	{
 		std::scoped_lock lock(g_stateLock);

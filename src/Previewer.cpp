@@ -3048,7 +3048,7 @@ namespace TF3DHud
 
 			(void)SyncPreviewAttachmentParentsFromBiped(*g_previewRoot, *biped);
 			if (g_rebuilder.ConsumeBehaviorGraphRefreshRequest()) {
-				Animations::ResetInitialState();
+				Animations::ResetGraph();
 			}
 			Animations::Update(*player, *g_previewRoot, renderDelta);
 			SyncPreviewFacialExpression(*player);

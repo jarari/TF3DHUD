@@ -153,6 +153,7 @@ namespace TF3DHud::Animations
 	};
 
 	void Reset();
+	void ResetGraph();
 	void ResetInitialState();
 	void Update(RE::PlayerCharacter& a_player, RE::NiAVObject& a_previewRoot, float a_deltaTime);
 	void ObserveGraphRequest(RE::BSAnimationGraphManager* a_manager, const char* a_eventName, std::uint32_t a_result);
