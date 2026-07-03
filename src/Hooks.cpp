@@ -4,7 +4,6 @@
 #include "Config.h"
 #include "Events.h"
 #include "ImguiMenu.h"
-#include "Morph.h"
 #include "Previewer.h"
 #include "Renderer.h"
 #include "Utils.h"
@@ -157,7 +156,7 @@ namespace TF3DHud
 
 		void HookedUpdate3DModel(RE::AIProcess* a_process, RE::Actor* a_actor, bool a_queued)
 		{
-			const auto updateFlags = a_process ? g_getAll3DUpdateFlags(a_process) : 0;
+			const std::uint16_t updateFlags = a_process ? g_getAll3DUpdateFlags(a_process) : 0;
 			const bool updateEditorDeadModel = a_process && g_qUpdateEditorDeadActorModel(a_process);
 
 			if (g_update3DModel) {
@@ -165,7 +164,7 @@ namespace TF3DHud
 			}
 
 			if (a_actor && a_actor->IsPlayerRef() && (updateFlags != 0 || updateEditorDeadModel)) {
-				Morph::MarkSecondaryDirty();
+				Previewer::ObserveUpdate3DModel(updateFlags, updateEditorDeadModel);
 			}
 		}
 

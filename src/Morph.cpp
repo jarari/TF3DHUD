@@ -38,6 +38,19 @@ namespace TF3DHud::Morph
 			HashValue(a_hash, reinterpret_cast<void*>(a_value));
 		}
 
+		struct GeometryDataView
+		{
+			struct VertexData
+			{
+				void* d3d11Buffer;
+				void* vertexBlock;
+			};
+
+			std::uint64_t vertexDesc;
+			VertexData* vertexData;
+			void* triangleData;
+		};
+
 		[[nodiscard]] std::uint64_t BuildMorphSignature(RE::PlayerCharacter& a_player)
 		{
 			auto* root = a_player.Get3D(false);
@@ -52,10 +65,18 @@ namespace TF3DHud::Morph
 				HashValue(hash, std::addressof(a_geometry));
 				HashValue(hash, a_geometry.parent);
 				HashValue(hash, a_geometry.skinInstance.get());
-				HashValue(hash, a_geometry.properties[0].get());
-				HashValue(hash, a_geometry.properties[1].get());
 				HashInteger(hash, a_geometry.vertexDesc.desc);
 				HashInteger(hash, a_geometry.type);
+
+				if (a_geometry.IsTriShape()) {
+					// F4EE body morphs fork BSGeometryData and swap this pointer on BSTriShape.
+					auto* geometryData = static_cast<GeometryDataView*>(a_geometry.rendererData);
+					HashValue(hash, geometryData);
+					if (geometryData) {
+						HashValue(hash, geometryData->vertexData);
+						HashValue(hash, geometryData->vertexData ? geometryData->vertexData->vertexBlock : nullptr);
+					}
+				}
 			});
 			HashInteger(hash, geometryCount);
 			return hash;

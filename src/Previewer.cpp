@@ -1,6 +1,7 @@
 #include "Previewer.h"
 #include "Animations.h"
 #include "Morph.h"
+#include "PreviewRebuilder.h"
 #include "Renderer.h"
 #include "Utils.h"
 
@@ -196,55 +197,39 @@ namespace TF3DHud
 			RE::NiNode* parent{ nullptr };
 		};
 
+		enum class EquipmentSyncResult
+		{
+			kNoChange,
+			kSynced,
+			kSyncedWithMergedBones,
+			kNeedsSkeletonTopologyRebuild,
+			kFailedTransient
+		};
+
+		[[nodiscard]] bool EquipmentSyncSucceeded(const EquipmentSyncResult a_result)
+		{
+			return a_result == EquipmentSyncResult::kNoChange ||
+			       a_result == EquipmentSyncResult::kSynced ||
+			       a_result == EquipmentSyncResult::kSyncedWithMergedBones;
+		}
+
 		RE::NiPointer<RE::NiAVObject> g_previewRoot;
 		RE::BSFlattenedBoneTree* g_previewFlattenedBoneTree{ nullptr };
 		RE::NiPointer<RE::BSFaceGenNiNode> g_previewFaceNode;
 		std::vector<PreviewAttachment> g_previewAttachments;
 		std::vector<RE::NiPointer<RE::NiAVObject>> g_retiredPreviewObjects;
-		constexpr std::uint32_t kEquipmentAuditFrames = 300;
-		constexpr std::uint32_t kBipedSignatureStableFrames = 3;
-		std::atomic_uint32_t g_requestedEquipmentAuditFrames{ 0 };
-		std::atomic_bool g_equipmentAuditActive{ false };
-		std::uint32_t g_equipmentAuditFrames{ 0 };
-		std::uint64_t g_pendingBipedSignature{ 0 };
-		std::uint32_t g_pendingBipedSignatureFrames{ 0 };
-		std::uint64_t g_deferredBipedRebuildSignature{ 0 };
-		std::uint64_t g_bipedSignature{ 0 };
-		std::uint64_t g_visualSignature{ 0 };
-		bool g_pendingMorphGeometryRebuild{ false };
+		std::vector<RE::NiPointer<RE::NiAVObject>> g_retiredPreviewObjectsPendingRelease;
+		constexpr std::uint32_t kPostRebuildAdjustmentHoldFrames = 6;
+		PreviewRebuilder::Controller g_rebuilder;
 		bool g_pendingRendererAttach{ false };
 		bool g_pendingFramingUpdate{ false };
 		bool g_renderStateDirty{ false };
 		bool g_committingRenderState{ false };
+		std::uint32_t g_postRebuildAdjustmentHoldFrames{ 0 };
 		float g_pendingRenderDelta{ 0.0F };
 		bool g_looksMenuSuspended{ false };
 		std::string g_lastDiagnostic;
 		std::recursive_mutex g_stateLock;
-
-		void HashInteger(std::uint64_t& a_hash, const std::uintptr_t a_value)
-		{
-			HashValue(a_hash, reinterpret_cast<void*>(a_value));
-		}
-
-		void HashFloat(std::uint64_t& a_hash, const float a_value)
-		{
-			std::uint32_t bits = 0;
-			std::memcpy(std::addressof(bits), std::addressof(a_value), sizeof(bits));
-			HashInteger(a_hash, bits);
-		}
-
-		[[nodiscard]] RE::NiAVObject* GetSourceFaceNode(RE::Actor& a_sourceActor)
-		{
-			if (auto* faceNode = a_sourceActor.GetFaceNodeSkinned()) {
-				return reinterpret_cast<RE::NiAVObject*>(faceNode);
-			}
-
-			auto* sourceRoot = a_sourceActor.Get3D(false);
-			if (!sourceRoot) {
-				sourceRoot = a_sourceActor.Get3D();
-			}
-			return sourceRoot ? sourceRoot->GetObjectByName(RE::BSFixedString("BSFaceGenNiNodeSkinned")) : nullptr;
-		}
 
 		[[nodiscard]] RE::BSFaceGenAnimationData* GetLiveFaceAnimationData(const RE::PlayerCharacter& a_player)
 		{
@@ -273,109 +258,6 @@ namespace TF3DHud
 			previewData->morphsDirty = true;
 			previewData->forceMorphUpdate = true;
 			g_previewFaceNode->faceGenFlags &= static_cast<std::uint16_t>(~0x4u);
-		}
-
-		[[nodiscard]] std::uint64_t BuildVisualSignature(RE::PlayerCharacter& a_player)
-		{
-			std::uint64_t hash = 1469598103934665603ull;
-
-			auto* playerBase = a_player.GetObjectReference();
-			auto* npc = playerBase ? playerBase->As<RE::TESNPC>() : nullptr;
-			HashValue(hash, npc);
-			HashValue(hash, npc ? npc->GetRootFaceNPC() : nullptr);
-			HashValue(hash, a_player.GetVisualsRace());
-			HashValue(hash, a_player.charGenRace);
-			HashValue(hash, a_player.complexion);
-			HashValue(hash, a_player.tintingData);
-			HashValue(hash, GetSourceFaceNode(a_player));
-			HashInteger(hash, static_cast<std::uintptr_t>(a_player.GetSex()));
-
-			if (npc) {
-				HashValue(hash, npc->headRelatedData);
-				HashValue(hash, npc->originalRace);
-				HashValue(hash, npc->faceNPC);
-				HashValue(hash, g_getSkin(npc));
-				HashValue(hash, npc->headParts);
-				HashValue(hash, npc->morphRegionSliderValues);
-				HashValue(hash, npc->facialBoneRegionSliderValues);
-				HashValue(hash, npc->morphSliderValues);
-				HashValue(hash, npc->tintingData);
-				HashInteger(hash, static_cast<std::uintptr_t>(npc->GetSex()));
-				HashInteger(hash, static_cast<std::uintptr_t>(npc->numHeadParts));
-				HashInteger(hash, static_cast<std::uint8_t>(npc->bodyTintColorR));
-				HashInteger(hash, static_cast<std::uint8_t>(npc->bodyTintColorG));
-				HashInteger(hash, static_cast<std::uint8_t>(npc->bodyTintColorB));
-				HashInteger(hash, static_cast<std::uint8_t>(npc->bodyTintColorA));
-				for (std::int32_t i = 0; i < npc->numHeadParts && npc->headParts; ++i) {
-					HashValue(hash, npc->headParts[i]);
-				}
-			}
-
-			return hash;
-		}
-
-		[[nodiscard]] std::uint64_t BuildBipedSignature(const RE::BipedAnim* a_biped)
-		{
-			if (!a_biped) {
-				return 0;
-			}
-
-			std::uint64_t hash = 1469598103934665603ull;
-			for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kTotal); ++i) {
-				const auto& object = a_biped->object[i];
-				HashValue(hash, object.parent.object);
-				HashValue(hash, object.parent.instanceData.get());
-				HashValue(hash, object.modExtra);
-				HashValue(hash, object.armorAddon);
-				HashValue(hash, object.part);
-				HashValue(hash, object.skinTexture);
-				HashValue(hash, object.partClone.get());
-				HashValue(hash, object.objectGraphManager.get());
-				HashValue(hash, object.hitEffect.get());
-				HashValue(hash, reinterpret_cast<void*>(static_cast<std::uintptr_t>(object.skinned)));
-			}
-
-			auto* root = a_biped->GetRoot();
-			HashValue(hash, root);
-			if (root) {
-				std::unordered_set<RE::NiAVObject*> resolvedSlotRoots;
-				for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kTotal); ++i) {
-					if (auto* partClone = a_biped->object[i].partClone.get()) {
-						resolvedSlotRoots.insert(partClone);
-					}
-				}
-
-				std::uint32_t unresolvedSkinnedGeometry = 0;
-				std::uint32_t unresolvedVisibleGeometry = 0;
-				ForEachGeometry(root, [&](RE::BSGeometry& a_geometry) {
-					if (!a_geometry.skinInstance) {
-						return;
-					}
-
-					auto* geometryObject = static_cast<RE::NiAVObject*>(std::addressof(a_geometry));
-					for (auto* parent = geometryObject; parent; parent = parent->parent) {
-						if (resolvedSlotRoots.contains(parent)) {
-							return;
-						}
-					}
-
-					++unresolvedSkinnedGeometry;
-					if (!a_geometry.GetAppCulled()) {
-						++unresolvedVisibleGeometry;
-					}
-					HashValue(hash, geometryObject);
-					HashValue(hash, geometryObject->parent);
-					HashValue(hash, a_geometry.skinInstance.get());
-					HashInteger(hash, a_geometry.GetFlags());
-					HashInteger(hash, a_geometry.GetAppCulled() ? 1 : 0);
-					HashFloat(hash, a_geometry.fadeAmount);
-					HashValue(hash, a_geometry.properties[0].get());
-					HashValue(hash, a_geometry.properties[1].get());
-				});
-				HashInteger(hash, unresolvedSkinnedGeometry);
-				HashInteger(hash, unresolvedVisibleGeometry);
-			}
-			return hash;
 		}
 
 		[[nodiscard]] bool IsHudAvailable(std::string& a_reason)
@@ -454,6 +336,29 @@ namespace TF3DHud
 			g_pendingRenderDelta += a_deltaTime;
 		}
 
+		void RetirePreviewObject(RE::NiPointer<RE::NiAVObject>&& a_object)
+		{
+			if (a_object) {
+				g_retiredPreviewObjects.emplace_back(std::move(a_object));
+			}
+		}
+
+		void AdvanceRetiredPreviewObjects()
+		{
+			// Keep retired roots across a render boundary; then release them so
+			// rapid equipment rebuilds cannot accumulate old cloth/scene trees.
+			g_retiredPreviewObjectsPendingRelease.clear();
+			if (g_retiredPreviewObjects.empty()) {
+				return;
+			}
+
+			g_retiredPreviewObjectsPendingRelease.reserve(g_retiredPreviewObjects.size());
+			for (auto& object : g_retiredPreviewObjects) {
+				g_retiredPreviewObjectsPendingRelease.emplace_back(std::move(object));
+			}
+			g_retiredPreviewObjects.clear();
+		}
+
 		[[nodiscard]] bool ShouldShow(const RE::PlayerCharacter* a_player, std::string& a_reason)
 		{
 			const auto& config = GetConfig();
@@ -504,7 +409,7 @@ namespace TF3DHud
 				return false;
 			}
 
-			if (!GetSourceFaceNode(a_player)) {
+			if (!PreviewRebuilder::GetSourceFaceNode(a_player)) {
 				a_reason = "player face node is not initialized";
 				return false;
 			}
@@ -1475,7 +1380,7 @@ namespace TF3DHud
 			for (auto& [parent, object] : detachedObjects) {
 				if (parent && object) {
 					parent->DetachChild(object.get());
-					g_retiredPreviewObjects.emplace_back(std::move(object));
+					RetirePreviewObject(std::move(object));
 				}
 			}
 
@@ -2113,7 +2018,7 @@ namespace TF3DHud
 					}
 
 					a_duplicateNode.DetachChild(child.get());
-					g_retiredPreviewObjects.emplace_back(std::move(child));
+					RetirePreviewObject(std::move(child));
 					++pruned;
 					continue;
 				}
@@ -2161,7 +2066,7 @@ namespace TF3DHud
 					}
 
 					node->DetachChild(child.get());
-					g_retiredPreviewObjects.emplace_back(std::move(child));
+					RetirePreviewObject(std::move(child));
 					++pruned;
 					continue;
 				}
@@ -2267,17 +2172,23 @@ namespace TF3DHud
 			return changed;
 		}
 
-		void RetirePreviewAttachments(const bool a_detach)
+		void RetirePreviewAttachments(const bool a_detach, const bool a_preserveFaceAttachments = false)
 		{
+			std::vector<PreviewAttachment> preservedAttachments;
 			for (auto& attachment : g_previewAttachments) {
+				if (a_preserveFaceAttachments && attachment.slot == RE::BIPED_OBJECT::kFaceGenHead) {
+					preservedAttachments.push_back(std::move(attachment));
+					continue;
+				}
+
 				if (a_detach && attachment.parent && attachment.object) {
 					attachment.parent->DetachChild(attachment.object.get());
 				}
 				if (attachment.object) {
-					g_retiredPreviewObjects.emplace_back(std::move(attachment.object));
+					RetirePreviewObject(std::move(attachment.object));
 				}
 			}
-			g_previewAttachments.clear();
+			g_previewAttachments = std::move(preservedAttachments);
 		}
 
 		void ResetPreview3DState(const bool a_disableRenderer)
@@ -2297,42 +2208,28 @@ namespace TF3DHud
 		{
 			ResetPreview3DState(true);
 			g_retiredPreviewObjects.clear();
+			g_retiredPreviewObjectsPendingRelease.clear();
 		}
 
 		void ClearPreviewRebuildState()
 		{
-			g_requestedEquipmentAuditFrames.store(0, std::memory_order_release);
-			g_equipmentAuditActive.store(false, std::memory_order_release);
-			g_equipmentAuditFrames = 0;
-			g_pendingBipedSignature = 0;
-			g_pendingBipedSignatureFrames = 0;
-			g_deferredBipedRebuildSignature = 0;
-			g_bipedSignature = 0;
-			g_visualSignature = 0;
-			g_pendingMorphGeometryRebuild = false;
+			g_rebuilder.Reset();
 			g_pendingRendererAttach = false;
 			g_pendingFramingUpdate = false;
 			g_renderStateDirty = false;
+			g_postRebuildAdjustmentHoldFrames = 0;
 			g_pendingRenderDelta = 0.0F;
 			g_lastDiagnostic.clear();
 		}
 
-		void BeginEquipmentAuditIfRequested()
+		void BeginChangeAuditsIfRequested()
 		{
-			const auto requestedFrames = g_requestedEquipmentAuditFrames.exchange(0, std::memory_order_acq_rel);
-			if (requestedFrames == 0) {
-				return;
-			}
-
-			g_equipmentAuditFrames = std::max(g_equipmentAuditFrames, requestedFrames);
-			g_equipmentAuditActive.store(true, std::memory_order_release);
-			g_pendingBipedSignature = 0;
-			g_pendingBipedSignatureFrames = 0;
+			g_rebuilder.BeginRequestedAudits();
 		}
 
 		[[nodiscard]] bool TryBuildBipedSignature(const RE::BipedAnim& a_biped, std::uint64_t& a_signature)
 		{
-			a_signature = BuildBipedSignature(std::addressof(a_biped));
+			a_signature = PreviewRebuilder::BuildEquipmentSignature(std::addressof(a_biped));
 			if (a_signature == 0) {
 				LogDiagnostic("third-person biped has empty signature");
 				return false;
@@ -2340,73 +2237,34 @@ namespace TF3DHud
 			return true;
 		}
 
-		[[nodiscard]] bool TryResolveAuditedBipedSignature(const RE::BipedAnim& a_biped, std::uint64_t& a_signature)
+		[[nodiscard]] bool TryResolveAuditedEquipmentSignature(const RE::BipedAnim& a_biped, std::uint64_t& a_signature)
 		{
-			if (g_equipmentAuditFrames == 0) {
-				g_equipmentAuditActive.store(false, std::memory_order_release);
-				return false;
-			}
-
 			std::int32_t pendingSlot = -1;
-			if (HasPendingBipedModelHandles(a_biped, pendingSlot)) {
-				g_pendingBipedSignature = 0;
-				g_pendingBipedSignatureFrames = 0;
-				return false;
-			}
-
-			--g_equipmentAuditFrames;
-			if (g_equipmentAuditFrames == 0) {
-				g_equipmentAuditActive.store(false, std::memory_order_release);
-			}
-
 			std::uint64_t currentSignature = 0;
 			if (!TryBuildBipedSignature(a_biped, currentSignature)) {
-				g_pendingBipedSignature = 0;
-				g_pendingBipedSignatureFrames = 0;
 				return false;
 			}
 
-			if (currentSignature == g_bipedSignature) {
-				g_pendingBipedSignature = 0;
-				g_pendingBipedSignatureFrames = 0;
-				return false;
+			if (const auto accepted = g_rebuilder.TryResolveEquipmentSignature(
+					currentSignature,
+					HasPendingBipedModelHandles(a_biped, pendingSlot))) {
+				a_signature = *accepted;
+				return true;
 			}
 
-			if (currentSignature != g_pendingBipedSignature) {
-				g_pendingBipedSignature = currentSignature;
-				g_pendingBipedSignatureFrames = 1;
-				return false;
-			}
-
-			++g_pendingBipedSignatureFrames;
-			if (g_pendingBipedSignatureFrames < kBipedSignatureStableFrames) {
-				return false;
-			}
-
-			a_signature = currentSignature;
-			g_equipmentAuditActive.store(false, std::memory_order_release);
-			g_pendingBipedSignature = 0;
-			g_pendingBipedSignatureFrames = 0;
-			return true;
+			return false;
 		}
 
-		void UpdatePostAnimationBipedSignature(const RE::BipedAnim& a_biped)
+		[[nodiscard]] bool TryResolveAuditedMorphGeometrySignature(RE::PlayerCharacter& a_player, std::uint64_t& a_signature)
 		{
-			if (g_deferredBipedRebuildSignature != 0) {
-				return;
+			const auto currentSignature = PreviewRebuilder::BuildMorphGeometrySignature(a_player);
+			if (const auto accepted = g_rebuilder.TryResolveMorphGeometrySignature(
+					currentSignature)) {
+				a_signature = *accepted;
+				return true;
 			}
 
-			std::uint64_t signature = 0;
-			if (g_equipmentAuditFrames != 0) {
-				if (TryResolveAuditedBipedSignature(a_biped, signature)) {
-					g_deferredBipedRebuildSignature = signature;
-				}
-				return;
-			}
-
-			if (TryBuildBipedSignature(a_biped, signature)) {
-				g_bipedSignature = signature;
-			}
+			return false;
 		}
 
 		void RebindSkinInstance(
@@ -2502,28 +2360,39 @@ namespace TF3DHud
 			a_previewRoot.Update(updateData);
 		}
 
-		[[nodiscard]] bool SyncEquipmentsFromBiped(
+		[[nodiscard]] std::uint32_t CountPreviewAttachmentsForSlot(const RE::BIPED_OBJECT a_slot)
+		{
+			return static_cast<std::uint32_t>(std::ranges::count_if(
+				g_previewAttachments,
+				[&](const PreviewAttachment& a_attachment) {
+					return a_attachment.slot == a_slot;
+				}));
+		}
+
+		[[nodiscard]] EquipmentSyncResult SyncEquipmentsFromBiped(
 			RE::PlayerCharacter& a_player,
 			RE::NiAVObject& a_previewRoot,
-			const RE::BipedAnim& a_sourceBiped)
+			const RE::BipedAnim& a_sourceBiped,
+			const bool a_preserveFaceAttachments)
 		{
 			auto* previewRootNode = a_previewRoot.IsNode();
 			if (!previewRootNode) {
 				LogDiagnostic("equipment sync skipped: preview root is not a NiNode");
-				return false;
+				return EquipmentSyncResult::kFailedTransient;
 			}
 
-			RetirePreviewAttachments(true);
+			RetirePreviewAttachments(true, a_preserveFaceAttachments);
 
 			std::unordered_map<std::string, RE::NiAVObject*> previewNodes;
 			CollectPreviewSkinTargetNodes(a_previewRoot, previewNodes);
 			if (previewNodes.empty()) {
 				LogDiagnostic("equipment sync skipped: preview root has no named nodes");
-				return false;
+				return EquipmentSyncResult::kFailedTransient;
 			}
 
 			std::unordered_set<RE::NiAVObject*> seenSourceObjects;
 			std::uint32_t attachedObjects = 0;
+			const auto externalBoneAttachmentsBefore = CountPreviewAttachmentsForSlot(RE::BIPED_OBJECT::kNone);
 
 			auto mirrorObject = [&](const RE::BIPED_OBJECT a_slot, const RE::BIPOBJECT& a_sourceObject) {
 				auto* sourceClone = a_sourceObject.partClone.get();
@@ -2542,7 +2411,7 @@ namespace TF3DHud
 
 				auto* parent = FindPreviewAttachParent(*sourceClone, a_previewRoot, previewNodes);
 				if (!parent) {
-					g_retiredPreviewObjects.emplace_back(std::move(previewClone));
+					RetirePreviewObject(std::move(previewClone));
 					return;
 				}
 
@@ -2607,7 +2476,16 @@ namespace TF3DHud
 			RE::NiUpdateData updateData;
 			a_previewRoot.Update(updateData);
 
-			return attachedObjects > 0;
+			if (attachedObjects == 0) {
+				return EquipmentSyncResult::kNoChange;
+			}
+
+			const auto externalBoneAttachmentsAfter = CountPreviewAttachmentsForSlot(RE::BIPED_OBJECT::kNone);
+			if (externalBoneAttachmentsAfter > externalBoneAttachmentsBefore) {
+				return EquipmentSyncResult::kSyncedWithMergedBones;
+			}
+
+			return EquipmentSyncResult::kSynced;
 		}
 
 		bool AttachPreviewFaceBonesFromBiped(
@@ -2880,8 +2758,7 @@ namespace TF3DHud
 				g_previewFaceNode = std::move(previousFaceNode);
 				g_previewFlattenedBoneTree = previousFlattenedBoneTree;
 				if (!g_previewRoot) {
-					g_bipedSignature = 0;
-					g_visualSignature = 0;
+					g_rebuilder.ClearCommittedSignatures();
 				}
 			};
 
@@ -2895,7 +2772,7 @@ namespace TF3DHud
 			RE::bhkWorld::RemoveObjects(previewRoot.get(), true, true);
 			StripControllerChains(*previewRoot);
 			PreparePreviewTree(*previewRoot);
-			if (!SyncEquipmentsFromBiped(a_player, *previewRoot, a_biped)) {
+			if (!EquipmentSyncSucceeded(SyncEquipmentsFromBiped(a_player, *previewRoot, a_biped, false))) {
 				restorePreviousPreviewMetadata();
 				return false;
 			}
@@ -2917,19 +2794,68 @@ namespace TF3DHud
 			// Do not detach children from the old root here. DrawModel can have
 			// stale traversal work after Offscreen_Set3D is updated.
 			if (g_previewRoot) {
-				g_retiredPreviewObjects.emplace_back(std::move(g_previewRoot));
+				RetirePreviewObject(std::move(g_previewRoot));
 			}
 			g_previewRoot = previewRoot;
-			g_bipedSignature = a_bipedSignature;
-			g_visualSignature = a_visualSignature;
+			g_rebuilder.CommitSkeletonBuild(
+				a_bipedSignature,
+				a_visualSignature,
+				PreviewRebuilder::BuildMorphGeometrySignature(a_player));
 
 			g_pendingRendererAttach = true;
 			g_pendingFramingUpdate = false;
+			g_postRebuildAdjustmentHoldFrames = kPostRebuildAdjustmentHoldFrames;
 			MarkRenderStateDirty();
 			Animations::ResetInitialState();
-			Morph::ClearGeometryAudit();
-			Morph::MarkSecondaryDirty();
+			g_rebuilder.RequestSkeletonAdjustment();
+			g_rebuilder.RequestBehaviorGraphRefresh();
 
+			return true;
+		}
+
+		[[nodiscard]] bool SyncPreviewEquipmentLayer(
+			RE::PlayerCharacter& a_player,
+			const RE::BipedAnim& a_biped,
+			const std::uint64_t a_equipmentSignature,
+			const std::uint64_t a_morphGeometrySignature,
+			const char* a_reason)
+		{
+			if (!g_previewRoot) {
+				return false;
+			}
+
+			std::int32_t pendingSlot = -1;
+			if (HasPendingBipedModelHandles(a_biped, pendingSlot)) {
+				return false;
+			}
+
+			const auto result = SyncEquipmentsFromBiped(a_player, *g_previewRoot, a_biped, true);
+			if (!EquipmentSyncSucceeded(result)) {
+				return false;
+			}
+
+			if (auto* playerBase = a_player.GetObjectReference(); playerBase) {
+				if (auto* npc = playerBase->As<RE::TESNPC>(); npc) {
+					ApplyPreviewBodyTint(*npc, *g_previewRoot);
+				}
+			}
+
+			RebindPreviewSkinInstances(*g_previewRoot, a_biped);
+			SanitizePreviewRenderTree(*g_previewRoot);
+			ApplyHeadCenteredFraming(*g_previewRoot);
+			PrepareForInterface3DOffscreen(*g_previewRoot);
+
+			g_rebuilder.CommitEquipmentLayer(
+				a_equipmentSignature,
+				a_morphGeometrySignature != 0 ? a_morphGeometrySignature : PreviewRebuilder::BuildMorphGeometrySignature(a_player));
+			g_rebuilder.RequestSkeletonAdjustment();
+			g_pendingFramingUpdate = false;
+			MarkRenderStateDirty();
+
+			REX::INFO(
+				"Preview equipment layer synced: reason={}, result={}",
+				a_reason ? a_reason : "unknown",
+				static_cast<std::uint32_t>(result));
 			return true;
 		}
 
@@ -2990,6 +2916,7 @@ namespace TF3DHud
 			const REX::TScopeExit clearCommitGuard{ [&]() noexcept {
 				g_committingRenderState = false;
 			} };
+			AdvanceRetiredPreviewObjects();
 
 			auto* player = RE::PlayerCharacter::GetSingleton();
 			if (!player) {
@@ -3029,7 +2956,7 @@ namespace TF3DHud
 			g_pendingRenderDelta = 0.0F;
 			g_renderStateDirty = false;
 
-			BeginEquipmentAuditIfRequested();
+			BeginChangeAuditsIfRequested();
 
 			auto tryRebuildPreview = [&](std::uint64_t a_bipedSignature, std::uint64_t a_visualSignature) {
 				std::int32_t pendingSlot = -1;
@@ -3054,16 +2981,16 @@ namespace TF3DHud
 				return true;
 			};
 
-			const auto visualSignature = BuildVisualSignature(*player);
-			const bool forceRebuild = !g_previewRoot || visualSignature != g_visualSignature;
-			const bool auditRebuild = !forceRebuild && g_deferredBipedRebuildSignature != 0;
-			if (forceRebuild || auditRebuild) {
-				std::uint64_t bipedSignature = auditRebuild ? g_deferredBipedRebuildSignature : 0;
+			const auto visualSignature = PreviewRebuilder::BuildVisualSignature(*player);
+			const bool forceRebuild = g_rebuilder.NeedsSkeletonBuild(visualSignature, static_cast<bool>(g_previewRoot));
+			const bool deferRebuildForAdjustment = g_previewRoot && g_postRebuildAdjustmentHoldFrames != 0;
+			bool structuralCommandRan = false;
+			if (forceRebuild && !deferRebuildForAdjustment) {
+				std::uint64_t bipedSignature = 0;
 				if (tryRebuildPreview(
 						bipedSignature,
 						visualSignature)) {
-					g_deferredBipedRebuildSignature = 0;
-					g_pendingMorphGeometryRebuild = false;
+					structuralCommandRan = true;
 				} else if (!g_previewRoot) {
 					return;
 				}
@@ -3078,17 +3005,35 @@ namespace TF3DHud
 				g_pendingFramingUpdate = false;
 			}
 
-			const auto morphResult = Morph::Update(*player, *g_previewRoot, g_previewFlattenedBoneTree);
-			g_pendingMorphGeometryRebuild =
-				g_pendingMorphGeometryRebuild ||
-				Morph::HasResult(morphResult, Morph::UpdateResult::kGeometryRebuild);
+			if (g_postRebuildAdjustmentHoldFrames != 0) {
+				--g_postRebuildAdjustmentHoldFrames;
+			}
 
-			if (g_pendingMorphGeometryRebuild) {
-				std::uint64_t bipedSignature = 0;
-				if (tryRebuildPreview(bipedSignature, BuildVisualSignature(*player))) {
-					g_pendingMorphGeometryRebuild = false;
-				} else {
-					return;
+			if (!structuralCommandRan && g_postRebuildAdjustmentHoldFrames == 0) {
+				std::uint64_t equipmentSignature = 0;
+				std::uint64_t morphGeometrySignature = 0;
+				if (TryResolveAuditedEquipmentSignature(*biped, equipmentSignature)) {
+					if (!SyncPreviewEquipmentLayer(
+							*player,
+							*biped,
+							equipmentSignature,
+							PreviewRebuilder::BuildMorphGeometrySignature(*player),
+							"equipment")) {
+						return;
+					}
+					structuralCommandRan = true;
+				} else if (TryResolveAuditedMorphGeometrySignature(*player, morphGeometrySignature)) {
+					std::uint64_t currentEquipmentSignature = 0;
+					if (!TryBuildBipedSignature(*biped, currentEquipmentSignature) ||
+						!SyncPreviewEquipmentLayer(
+							*player,
+							*biped,
+							currentEquipmentSignature,
+							morphGeometrySignature,
+							"morph geometry")) {
+						return;
+					}
+					structuralCommandRan = true;
 				}
 			}
 
@@ -3096,11 +3041,18 @@ namespace TF3DHud
 				return;
 			}
 
+			if (g_postRebuildAdjustmentHoldFrames == 0 && g_rebuilder.ConsumeSkeletonAdjustmentRequest()) {
+				Morph::MarkSecondaryDirty();
+			}
+			(void)Morph::Update(*player, *g_previewRoot, g_previewFlattenedBoneTree);
+
 			(void)SyncPreviewAttachmentParentsFromBiped(*g_previewRoot, *biped);
+			if (g_rebuilder.ConsumeBehaviorGraphRefreshRequest()) {
+				Animations::ResetInitialState();
+			}
 			Animations::Update(*player, *g_previewRoot, renderDelta);
 			SyncPreviewFacialExpression(*player);
 			ApplyHeadFollowTranslation(*g_previewRoot);
-			UpdatePostAnimationBipedSignature(*biped);
 
 			if (g_pendingRendererAttach) {
 				Renderer::AttachPreviewRoot(*g_previewRoot);
@@ -3139,16 +3091,16 @@ namespace TF3DHud
 
 		void MarkEquipmentDirty()
 		{
-			if (g_equipmentAuditActive.load(std::memory_order_acquire)) {
-				return;
-			}
+			std::scoped_lock lock(g_stateLock);
+			g_rebuilder.ObserveEquipment();
+			MarkRenderStateDirty();
+		}
 
-			std::uint32_t expected = 0;
-			g_requestedEquipmentAuditFrames.compare_exchange_strong(
-				expected,
-				kEquipmentAuditFrames,
-				std::memory_order_acq_rel,
-				std::memory_order_acquire);
+		void ObserveUpdate3DModel(const std::uint16_t a_updateFlags, const bool a_updateEditorDeadModel)
+		{
+			std::scoped_lock lock(g_stateLock);
+			g_rebuilder.ObserveUpdate3DModel(a_updateFlags, a_updateEditorDeadModel);
+			MarkRenderStateDirty();
 		}
 
 		void ApplyConfigChanges()
