@@ -27,6 +27,7 @@
 #include "RE/M/MemoryManager.h"
 #include "RE/N/NiExtraData.h"
 #include "RE/N/NiNode.h"
+#include "RE/N/NiStringExtraData.h"
 #include "RE/N/NiUpdateData.h"
 #include "RE/P/PlayerCharacter.h"
 #include "RE/T/TESNPC.h"
@@ -211,12 +212,87 @@ namespace TF3DHud
 
 		[[nodiscard]] RE::TESRace* ResolvePreviewRace(RE::PlayerCharacter& a_player, RE::TESNPC& a_npc);
 
-		RE::NiNode* FindPreviewAttachParent(
-			RE::NiAVObject& a_sourceObject,
+		[[nodiscard]] bool IsEngineWeaponAttachSlot(const RE::BIPED_OBJECT a_slot)
+		{
+			const auto slot = std::to_underlying(a_slot);
+			return slot >= 32 && (slot <= 39 || (slot >= 41 && slot <= 43));
+		}
+
+		[[nodiscard]] RE::NiStringExtraData* FindStringExtraDataInTree(
+			RE::NiAVObject& a_root,
+			const RE::BSFixedString& a_name)
+		{
+			RE::NiStringExtraData* found = nullptr;
+			ForEachAVObject(std::addressof(a_root), [&](RE::NiAVObject& a_object) {
+				if (found) {
+					return;
+				}
+				found = netimmerse_cast<RE::NiStringExtraData*>(a_object.GetExtraData(a_name));
+			});
+			return found;
+		}
+
+		[[nodiscard]] RE::NiNode* FindPreviewNodeByName(
+			RE::NiAVObject& a_previewRoot,
+			const std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes,
+			const std::string_view a_name)
+		{
+			auto* previewObject = FindNodeByName(a_previewNodes, a_name);
+			if (!previewObject) {
+				previewObject = a_previewRoot.GetObjectByName(RE::BSFixedString(a_name.data()));
+			}
+
+			return previewObject ? previewObject->IsNode() : nullptr;
+		}
+
+		[[nodiscard]] RE::NiNode* ResolveFixedPreviewAttachParent(
+			const RE::BIPED_OBJECT a_slot,
+			const RE::BIPOBJECT& a_sourceObject,
 			RE::NiAVObject& a_previewRoot,
 			const std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
 		{
-			for (auto* sourceParent = a_sourceObject.parent; sourceParent; sourceParent = sourceParent->parent) {
+			const auto* sourceForm = a_sourceObject.parent.object;
+			if (a_slot == RE::BIPED_OBJECT::kWeaponHand &&
+				sourceForm &&
+				sourceForm->Is(RE::ENUM_FORM_ID::kLIGH)) {
+				return FindPreviewNodeByName(a_previewRoot, a_previewNodes, "Weapon");
+			}
+
+			if (a_slot == RE::BIPED_OBJECT::kWeaponStaff) {
+				return FindPreviewNodeByName(a_previewRoot, a_previewNodes, "Weapon");
+			}
+
+			if (a_slot == RE::BIPED_OBJECT::kShield &&
+				sourceForm &&
+				sourceForm->Is(RE::ENUM_FORM_ID::kWEAP)) {
+				return FindPreviewNodeByName(a_previewRoot, a_previewNodes, "WeaponLeft");
+			}
+
+			return nullptr;
+		}
+
+		RE::NiNode* FindPreviewAttachParent(
+			const RE::BIPED_OBJECT a_slot,
+			const RE::BIPOBJECT& a_sourceBipedObject,
+			RE::NiAVObject& a_sourceClone,
+			RE::NiAVObject& a_previewRoot,
+			const std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
+		{
+			// IDA OG 1.10.163: BipedAnim::AttachToParent resolves fixed
+			// Weapon/WeaponLeft parents before falling back to NiStringExtraData
+			// "Prn". Keep the live-parent chain as the final copied-biped fallback.
+			if (auto* fixedParent = ResolveFixedPreviewAttachParent(a_slot, a_sourceBipedObject, a_previewRoot, a_previewNodes)) {
+				return fixedParent;
+			}
+
+			auto* prn = FindStringExtraDataInTree(a_sourceClone, RE::BSFixedString("Prn"));
+			if (prn && !prn->GetValue().empty()) {
+				if (auto* previewNode = FindPreviewNodeByName(a_previewRoot, a_previewNodes, prn->GetValue())) {
+					return previewNode;
+				}
+			}
+
+			for (auto* sourceParent = a_sourceClone.parent; sourceParent; sourceParent = sourceParent->parent) {
 				auto* previewObject = FindNodeByName(a_previewNodes, sourceParent->GetName());
 				auto* previewNode = previewObject ? previewObject->IsNode() : nullptr;
 				if (previewNode) {
@@ -1255,6 +1331,165 @@ namespace TF3DHud
 			a_previewRoot.Update(updateData);
 		}
 
+		[[nodiscard]] RE::NiAVObject* FindNamedObjectOutside(
+			RE::NiAVObject& a_root,
+			const std::string_view a_name,
+			RE::NiAVObject& a_excludedRoot)
+		{
+			RE::NiAVObject* found = nullptr;
+			ForEachAVObject(std::addressof(a_root), [&](RE::NiAVObject& a_object) {
+				if (found || IsDescendantOf(a_object, a_excludedRoot)) {
+					return;
+				}
+				if (NamesEqual(a_object.GetName(), a_name)) {
+					found = std::addressof(a_object);
+				}
+			});
+			return found;
+		}
+
+		void AttachPreviewChildLikeEngine(RE::NiAVObject& a_child, RE::NiNode& a_parent)
+		{
+			if (a_child.parent == std::addressof(a_parent)) {
+				return;
+			}
+
+			RE::NiPointer<RE::NiAVObject> keepAlive(std::addressof(a_child));
+			if (auto* oldParent = a_child.parent) {
+				oldParent->DetachChild(std::addressof(a_child));
+			}
+			a_parent.AttachChild(keepAlive.get(), true);
+		}
+
+		void TrackReparentedPreviewAttachment(
+			const RE::BIPED_OBJECT a_slot,
+			RE::NiAVObject& a_object,
+			RE::NiNode& a_parent,
+			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
+		{
+			g_previewAttachments.push_back({
+				.slot = a_slot,
+				.object = RE::NiPointer<RE::NiAVObject>(std::addressof(a_object)),
+				.parent = std::addressof(a_parent),
+			});
+			CollectNamedNodes(std::addressof(a_object), a_previewNodes);
+		}
+
+		void PrepareClonedWeaponLayoutObject(
+			RE::PlayerCharacter& a_player,
+			RE::NiAVObject& a_attachment,
+			RE::NiNode& a_previewRootNode,
+			RE::NiAVObject& a_previewRoot,
+			const RE::BIPED_OBJECT a_slot,
+			const RE::BIPOBJECT& a_sourceObject,
+			const RE::BipedAnim& a_sourceBiped,
+			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
+		{
+			RE::bhkWorld::RemoveObjects(std::addressof(a_attachment), true, true);
+			StripControllerChains(a_attachment);
+			PreparePreviewTree(a_attachment);
+			(void)PreviewCloth::Initialize(
+				a_player,
+				a_attachment,
+				a_previewRoot,
+				a_sourceObject.part ? a_sourceObject.part->GetModel() : nullptr);
+
+			ForEachGeometry(std::addressof(a_attachment), [&](RE::BSGeometry& a_geometry) {
+				if (auto* skin = a_geometry.skinInstance.get()) {
+					ResolveNullSkinBonesFromFlattenedTree(*skin, a_attachment);
+				}
+			});
+
+			MergeAttachmentSkinBones(a_attachment, a_previewRootNode, a_previewRoot, a_previewNodes);
+
+			ForEachGeometry(std::addressof(a_attachment), [&](RE::BSGeometry& a_geometry) {
+				auto* skin = a_geometry.skinInstance.get();
+				if (!skin) {
+					return;
+				}
+				RebindSkinInstance(*skin, a_previewRoot, a_previewNodes);
+			});
+
+			PrepareAttachmentSkinComplexion(a_attachment, a_slot, a_sourceBiped);
+		}
+
+		void ReplayEngineWeaponPostAttachLayout(
+			RE::PlayerCharacter& a_player,
+			const RE::BIPED_OBJECT a_slot,
+			const RE::BIPOBJECT& a_sourceObject,
+			const RE::BipedAnim& a_sourceBiped,
+			RE::NiAVObject& a_sourceClone,
+			RE::NiAVObject& a_previewClone,
+			RE::NiNode& a_parent,
+			RE::NiNode& a_previewRootNode,
+			RE::NiAVObject& a_previewRoot,
+			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
+		{
+			if (!IsEngineWeaponAttachSlot(a_slot)) {
+				return;
+			}
+
+			// IDA OG 1.10.163: BipedAnim::AttachToParent+0x4A4 moves "Scb"
+			// under the resolved parent bone after the weapon root is attached.
+			constexpr std::string_view scbName{ "Scb" };
+			auto* previewScb = a_previewClone.GetObjectByName(RE::BSFixedString(scbName.data()));
+			if (previewScb && previewScb != std::addressof(a_previewClone)) {
+				AttachPreviewChildLikeEngine(*previewScb, a_parent);
+				TrackReparentedPreviewAttachment(a_slot, *previewScb, a_parent, a_previewNodes);
+			} else if (!FindNamedObjectOutside(a_parent, scbName, a_previewClone)) {
+				RE::NiAVObject* sourceScb = nullptr;
+				if (auto* sourceParent = a_sourceClone.parent) {
+					sourceScb = FindNamedObjectOutside(*sourceParent, scbName, a_sourceClone);
+				}
+
+				if (sourceScb) {
+					auto scbClone = PreviewClone::CloneObject(*sourceScb, std::addressof(a_previewRoot), std::addressof(a_previewNodes));
+					if (scbClone) {
+						StripControllerChains(*scbClone);
+						a_parent.AttachChild(scbClone.get(), true);
+						PrepareClonedWeaponLayoutObject(
+							a_player,
+							*scbClone,
+							a_previewRootNode,
+							a_previewRoot,
+							a_slot,
+							a_sourceObject,
+							a_sourceBiped,
+							a_previewNodes);
+						g_previewAttachments.push_back({
+							.slot = a_slot,
+							.object = scbClone,
+							.parent = std::addressof(a_parent),
+						});
+						CollectNamedNodes(g_previewAttachments.back().object.get(), a_previewNodes);
+					}
+				}
+			}
+
+			auto* backpack = a_previewClone.GetObjectByName(RE::BSFixedString("Backpack"));
+			if (!backpack || backpack == std::addressof(a_previewClone)) {
+				return;
+			}
+
+			auto* upb = netimmerse_cast<RE::NiStringExtraData*>(backpack->GetExtraData(RE::BSFixedString("UPB")));
+			if (!upb || upb->GetValue().empty()) {
+				return;
+			}
+
+			auto* target = FindNodeByName(a_previewNodes, upb->GetValue());
+			if (!target) {
+				target = a_previewRoot.GetObjectByName(upb->GetValue());
+			}
+
+			auto* targetNode = target ? target->IsNode() : nullptr;
+			if (!targetNode) {
+				return;
+			}
+
+			AttachPreviewChildLikeEngine(*backpack, *targetNode);
+			TrackReparentedPreviewAttachment(a_slot, *backpack, *targetNode, a_previewNodes);
+		}
+
 		[[nodiscard]] std::uint32_t CountPreviewAttachmentsForSlot(const RE::BIPED_OBJECT a_slot)
 		{
 			return static_cast<std::uint32_t>(std::ranges::count_if(
@@ -1304,14 +1539,17 @@ namespace TF3DHud
 				}
 				StripControllerChains(*previewClone);
 
-				auto* parent = FindPreviewAttachParent(*sourceClone, a_previewRoot, previewNodes);
+				auto* parent = FindPreviewAttachParent(a_slot, a_sourceObject, *sourceClone, a_previewRoot, previewNodes);
 				if (!parent) {
 					RetirePreviewObject(std::move(previewClone));
 					return;
 				}
 
 				parent->AttachChild(previewClone.get(), false);
-				const auto modReplay = ReplayObjectInstanceMod3D(a_sourceObject, *previewClone);
+				Mod3DReplayResult modReplay;
+				if (!IsEngineWeaponAttachSlot(a_slot)) {
+					modReplay = ReplayObjectInstanceMod3D(a_sourceObject, *previewClone);
+				}
 
 				RE::bhkWorld::RemoveObjects(previewClone.get(), true, true);
 				StripControllerChains(*previewClone);
@@ -1348,6 +1586,17 @@ namespace TF3DHud
 					*previewClone,
 					a_slot,
 					a_sourceBiped);
+				ReplayEngineWeaponPostAttachLayout(
+					a_player,
+					a_slot,
+					a_sourceObject,
+					a_sourceBiped,
+					*sourceClone,
+					*previewClone,
+					*parent,
+					*previewRootNode,
+					a_previewRoot,
+					previewNodes);
 
 				g_previewAttachments.push_back({
 					.slot = a_slot,
@@ -1752,6 +2001,8 @@ namespace TF3DHud
 				a_equipmentSignature,
 				a_morphGeometrySignature != 0 ? a_morphGeometrySignature : PreviewRebuilder::BuildMorphGeometrySignature(a_player));
 			g_rebuilder.RequestSkeletonAdjustment();
+			g_rebuilder.RequestBehaviorGraphRefresh();
+			g_pendingRendererAttach = true;
 			g_pendingFramingUpdate = false;
 			MarkRenderStateDirty();
 
