@@ -1225,28 +1225,6 @@ namespace TF3DHud::Animations
 			public RE::IAnimationGraphManagerHolder
 		{
 		public:
-			class LiveAnimationEventSink final :
-				public RE::BSTEventSink<RE::BSAnimationGraphEvent>
-			{
-			public:
-				explicit LiveAnimationEventSink(PreviewAnimationGraphHolder& a_owner) :
-					owner_(std::addressof(a_owner))
-				{}
-
-				RE::BSEventNotifyControl ProcessEvent(
-					const RE::BSAnimationGraphEvent& a_event,
-					[[maybe_unused]] RE::BSTEventSource<RE::BSAnimationGraphEvent>* a_source) override
-				{
-					if (owner_) {
-						owner_->RecordLiveAnimationEvent(a_event);
-					}
-					return RE::BSEventNotifyControl::kContinue;
-				}
-
-			private:
-				PreviewAnimationGraphHolder* owner_{ nullptr };
-			};
-
 			class PreviewAnimationEventSink final :
 				public RE::BSTEventSink<RE::BSAnimationGraphEvent>
 			{
@@ -1275,13 +1253,11 @@ namespace TF3DHud::Animations
 				targetRoot_(std::addressof(a_target)),
 				targetGraphRoot_(std::addressof(a_target)),
 				sourceManagerIdentity_(GetLiveSourceManager()),
-				liveAnimationEventSink_(*this),
 				previewAnimationEventSink_(*this)
 			{}
 
 			~PreviewAnimationGraphHolder() override
 			{
-				UnregisterLiveEventSource();
 				UnregisterPreviewEventSource();
 				manager_.reset();
 			}
@@ -1805,54 +1781,6 @@ namespace TF3DHud::Animations
 				}
 			}
 
-			void SyncLiveEventSource()
-			{
-				RE::BSTSmartPointer<RE::BSAnimationGraphManager> sourceManager;
-				if (!sourceHolder_ ||
-					!sourceHolder_->GetAnimationGraphManagerImpl(sourceManager) ||
-					!sourceManager ||
-					sourceManager->graph.empty()) {
-					UnregisterLiveEventSource();
-					return;
-				}
-
-				const auto activeGraph = sourceManager->activeGraph;
-				if (activeGraph >= sourceManager->graph.size()) {
-					UnregisterLiveEventSource();
-					return;
-				}
-
-				auto liveGraph = sourceManager->graph[activeGraph];
-				auto* eventSource = GetGraphEventSource(liveGraph.get());
-				if (eventSource == liveEventSource_) {
-					return;
-				}
-
-				UnregisterLiveEventSource();
-				if (!eventSource) {
-					return;
-				}
-
-				eventSource->RegisterSink(std::addressof(liveAnimationEventSink_));
-				liveEventGraph_ = std::move(liveGraph);
-				liveEventSource_ = eventSource;
-			}
-
-			void RecordLiveAnimationEvent(const RE::BSAnimationGraphEvent& a_event)
-			{
-				if (!a_event.tag.empty()) {
-					// BShkbAnimationGraph::BroadcastQueuedEventsImpl emits graph events
-					// after Generate(). Root swap selection uses normal graph events,
-					// so replay whitelisted live graph events through the preview graph
-					// rather than forcing the selected subgraph state.
-					ApplyPreviewWeaponVisibilityEvent(a_event.tag);
-					const bool whitelisted = IsLiveMirrorEventWhitelisted(a_event.tag.c_str());
-					if (whitelisted) {
-						QueueMirroredEvent(a_event.tag);
-					}
-				}
-			}
-
 			void ObserveLiveGraphRequest(const char* a_eventName, const std::uint32_t a_result)
 			{
 				if (!a_eventName || a_eventName[0] == '\0') {
@@ -1913,6 +1841,7 @@ namespace TF3DHud::Animations
 				}
 
 				for (const auto& eventName : events) {
+					ApplyPreviewWeaponVisibilityEvent(eventName);
 					(void)NotifyAnimationGraphImpl(eventName);
 				}
 			}
@@ -2256,11 +2185,8 @@ namespace TF3DHud::Animations
 			RE::NiAVObject* targetGraphRoot_{ nullptr };
 			RE::BSAnimationGraphManager* sourceManagerIdentity_{ nullptr };
 			RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager_;
-			LiveAnimationEventSink liveAnimationEventSink_;
 			PreviewAnimationEventSink previewAnimationEventSink_;
-			RE::BSTSmartPointer<RE::BShkbAnimationGraph> liveEventGraph_;
 			RE::BSTSmartPointer<RE::BShkbAnimationGraph> previewEventGraph_;
-			RE::BSTEventSource<RE::BSAnimationGraphEvent>* liveEventSource_{ nullptr };
 			RE::BSTEventSource<RE::BSAnimationGraphEvent>* previewEventSource_{ nullptr };
 			std::mutex pendingMirroredEventsLock_;
 			std::vector<RE::BSFixedString> pendingMirroredEvents_;
@@ -2409,17 +2335,6 @@ namespace TF3DHud::Animations
 				eventSource->RegisterSink(std::addressof(previewAnimationEventSink_));
 				previewEventGraph_ = a_graph;
 				previewEventSource_ = eventSource;
-			}
-
-			void UnregisterLiveEventSource()
-			{
-				if (!liveEventSource_) {
-					return;
-				}
-
-				liveEventSource_->UnregisterSink(std::addressof(liveAnimationEventSink_));
-				liveEventSource_ = nullptr;
-				liveEventGraph_.reset();
 			}
 
 			void UnregisterPreviewEventSource()
@@ -2605,7 +2520,6 @@ namespace TF3DHud::Animations
 		if (!EnsureGraph(a_player, a_previewRoot) || !g_holder) {
 			return;
 		}
-		g_holder->SyncLiveEventSource();
 		g_holder->SyncWhitelistedGraphVariablesFromLive();
 		g_holder->RefreshPendingSubgraphLoads();
 		g_holder->TryApplyInitialAnimationState();
@@ -2630,7 +2544,13 @@ namespace TF3DHud::Animations
 
 	void ObserveGraphRequest(RE::BSAnimationGraphManager* a_manager, const char* a_eventName, const std::uint32_t a_result)
 	{
-		std::scoped_lock lock(g_stateLock);
+		// This hook runs while vanilla graph event dispatch owns its event-source lock.
+		// Do not wait on the render-boundary animation mutex from that context.
+		std::unique_lock lock(g_stateLock, std::try_to_lock);
+		if (!lock.owns_lock()) {
+			return;
+		}
+
 		if (!g_holder || !g_holder->IsLiveSourceManager(a_manager)) {
 			return;
 		}
