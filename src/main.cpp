@@ -8,7 +8,7 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 		.log = true,
 		.logName = "TF3DHUD",
 		.trampoline = true,
-		.trampolineSize = 128
+		.trampolineSize = 256,
 	});
 
 	TF3DHud::LoadConfig();
