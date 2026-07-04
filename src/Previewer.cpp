@@ -64,12 +64,8 @@ namespace TF3DHud
 		auto& g_fixFaceGenHeadSkinInstances = Address::FixFaceGenHeadSkinInstances;
 		auto& g_resetFaceGenCurrentMorphs = Address::ResetFaceGenCurrentMorphs;
 		auto& g_generateFlattenedHeadPartArray = Address::GenerateFlattenedHeadPartArray;
-		auto& g_applyAllCustomizationMorphs = Address::ApplyAllCustomizationMorphs;
-		auto& g_applyWeightFaceMorph = Address::ApplyWeightFaceMorph;
-		auto& g_prepareHeadForShaders = Address::PrepareHeadForShaders;
 		auto& g_bakeChargenMorphs = Address::BakeChargenMorphs;
 		auto& g_scaleFaceBones = Address::ScaleFaceBones;
-		auto& g_updateAllChildrenMorphData = Address::UpdateAllChildrenMorphData;
 		auto& g_tryAttachMod3DRecurse = Address::TryAttachMod3DRecurse;
 
 		using PreviewRenderTree::PrepareForInterface3DOffscreen;
@@ -1822,13 +1818,13 @@ namespace TF3DHud
 
 			PreviewHeadParts::ApplyBipedVisibility(*npc, *previewRace, *faceNode, a_player, a_sourceBiped);
 
-			auto* actorRootNode = GetPreviewActor3DRootNode(a_previewRoot);
-			if (!actorRootNode) {
-				LogDiagnostic("preview head creation failed: preview actor root is not a NiNode");
+			auto* actor3DRoot = a_previewRoot.IsNode();
+			if (!actor3DRoot) {
+				LogDiagnostic("preview head creation failed: preview actor 3D root is not a NiNode");
 				return false;
 			}
 
-			AttachAndRebindHeadToRoot(*faceNode, *actorRootNode);
+			AttachAndRebindHeadToRoot(*faceNode, *actor3DRoot);
 			g_previewFaceNode = faceNode;
 			RefreshPreviewBoneLookup(a_previewRoot);
 
@@ -1845,7 +1841,7 @@ namespace TF3DHud
 			PreviewCloth::InitializeHeadParts(*npc, a_player, *faceNode, a_previewRoot);
 
 			RE::NiUpdateData updateData;
-			actorRootNode->Update(updateData);
+			actor3DRoot->Update(updateData);
 			return true;
 		}
 
@@ -1856,43 +1852,6 @@ namespace TF3DHud
 			bodyTint.a = 1.0F;
 			g_updateBodyTintColorsOnScene(std::addressof(a_previewRoot), bodyTint);
 			RestorePreviewShaderAlpha(a_previewRoot);
-		}
-
-		bool ApplyPreviewFaceCustomization(RE::PlayerCharacter& a_player, const std::uint64_t a_signature)
-		{
-			if (!g_previewRoot || !g_previewFaceNode) {
-				return false;
-			}
-
-			auto* playerBase = a_player.GetObjectReference();
-			auto* npc = playerBase ? playerBase->As<RE::TESNPC>() : nullptr;
-			if (!npc) {
-				return false;
-			}
-
-			RE::BSScrapArray<RE::BGSHeadPart*> headParts;
-			g_generateFlattenedHeadPartArray(npc, headParts);
-
-			// IDA: CreateHeadForNPC runs these after headpart creation. This
-			// pass deliberately skips creating/replacing headparts and reapplies
-			// only the current TESNPC FaceGen customization payload.
-			g_applyWeightFaceMorph(npc, g_previewFaceNode.get());
-			g_applyAllCustomizationMorphs(npc, headParts, g_previewFaceNode.get());
-			g_updateAllChildrenMorphData(g_previewFaceNode.get(), true);
-			g_prepareHeadForShaders(headParts, g_previewFaceNode.get(), npc, nullptr);
-			ApplyPreviewBodyTint(*npc, *g_previewRoot);
-			g_lastAppliedFaceGenEntries = CaptureLiveFaceGenEntries(a_player);
-
-			if (auto* animationData = g_previewFaceNode->animationData; animationData) {
-				animationData->morphsDirty = true;
-				animationData->forceMorphUpdate = true;
-			}
-			g_previewFaceNode->faceGenFlags &= static_cast<std::uint16_t>(~0x4u);
-
-			RE::NiUpdateData updateData;
-			g_previewFaceNode->Update(updateData);
-			g_rebuilder.CommitFaceCustomization(a_signature);
-			return true;
 		}
 
 		bool RebuildPreview(
@@ -1958,13 +1917,11 @@ namespace TF3DHud
 			}
 			g_previewRoot = previewRoot;
 			const auto faceCustomizationSignature = PreviewRebuilder::BuildFaceCustomizationSignature(a_player);
-			const bool faceCustomizationApplied =
-				ApplyPreviewFaceCustomization(a_player, faceCustomizationSignature);
 			g_rebuilder.CommitSkeletonBuild(
 				a_bipedSignature,
 				a_visualSignature,
 				PreviewRebuilder::BuildMorphGeometrySignature(a_player),
-				faceCustomizationApplied ? faceCustomizationSignature : 0);
+				faceCustomizationSignature);
 
 			g_pendingRendererAttach = true;
 			g_pendingFramingUpdate = false;
@@ -2198,7 +2155,12 @@ namespace TF3DHud
 			if (!structuralCommandRan && g_postRebuildAdjustmentHoldFrames == 0) {
 				std::uint64_t faceCustomizationSignature = 0;
 				if (TryResolveFaceCustomizationSignature(*player, faceCustomizationSignature)) {
-					(void)ApplyPreviewFaceCustomization(*player, faceCustomizationSignature);
+					std::uint64_t bipedSignature = 0;
+					if (tryRebuildPreview(
+							bipedSignature,
+							PreviewRebuilder::BuildVisualSignature(*player))) {
+						structuralCommandRan = true;
+					}
 				}
 			}
 
