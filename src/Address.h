@@ -3,7 +3,6 @@
 #include "RE/AnimationSpeedContour.h"
 #include "RE/BSAnimationUpdateData.h"
 #include "RE/BSFaceGenAnimationData.h"
-#include "RE/BSSkin.h"
 #include "RE/BShkbAnimationGraph.h"
 #include "RE/EquipEventSource.h"
 
@@ -12,6 +11,7 @@
 #include "RE/A/Actor.h"
 #include "RE/B/BGSAction.h"
 #include "RE/B/BGSAnimationSystemUtils.h"
+#include "RE/B/BGSBodyPartDefs.h"
 #include "RE/B/BGSHeadPart.h"
 #include "RE/B/BGSMod.h"
 #include "RE/B/BGSObjectInstance.h"
@@ -127,19 +127,19 @@ namespace TF3DHud::Address
 	using CreateClothFor3D_t =
 		RE::NiExtraData*(RE::NiAVObject&, const char*, const RE::NiTransform&, RE::NiAVObject*);
 	using CreateHeadForNPC_t = bool(RE::TESNPC*, RE::NiPointer<RE::BSFaceGenNiNode>&, bool, bool, void*);
+	using BakeChargenMorphs_t = void(RE::TESNPC*, RE::NiNode*, RE::NiNode*, const void*);
 	using DestroyAdjustmentArena_t = void(void*);
 	using DoAdjustSkinComplexion_t = std::uint64_t(SkinComplexionContext*, RE::NiAVObject*);
 	using GenerateFlattenedHeadPartArray_t = void(RE::TESNPC*, RE::BSScrapArray<RE::BGSHeadPart*>&);
 	using ForceUpgradeTextures_t = void(RE::NiAVObject*, bool, bool);
 	using GetActorBodyPart3D_t =
-		RE::NiAVObject*(RE::Actor*, RE::NiAVObject*, const std::uint32_t*, bool, bool);
+		RE::NiAVObject*(const RE::Actor*, RE::NiAVObject*, const RE::BGSBodyPartDefs::LIMB_ENUM*, bool);
 	using GetActiveContourFromHolder_t = bool(
 		const RE::IAnimationGraphManagerHolder*,
 		RE::BSTSmartPointer<RE::AnimationSpeedContour>&,
 		bool*);
 	using GetAll3DUpdateFlags_t = std::uint16_t(RE::AIProcess*);
 	using GetCellPriority_t = std::int32_t(RE::TES*, const RE::TESObjectCELL*, RE::NiPoint3*);
-	using GetChargenModelName_t = void(char*, std::uint32_t, const char*, bool);
 	using GetDefaultAction_t = RE::BGSAction*(void);
 	using GetDefaultRaceHeadPart_t =
 		RE::BGSHeadPart*(const RE::TESRace*, RE::SEX, RE::BGSHeadPart::HeadPartType);
@@ -169,7 +169,6 @@ namespace TF3DHud::Address
 	using PrepareHeadForShaders_t =
 		void(const RE::BSScrapArray<RE::BGSHeadPart*>&, RE::BSFaceGenNiNode*, RE::TESNPC*, void*);
 	using ScaleFaceBones_t = void(RE::TESNPC*, RE::NiAVObject*, bool);
-	using ScaleFaceSkinBones_t = void(RE::TESNPC*, RE::BSSkin::Instance*);
 	using UpdateAllChildrenMorphData_t = void(RE::BSFaceGenNiNode*, bool);
 	using InitializeSubGraph_t = bool(
 		void*,
@@ -242,6 +241,7 @@ namespace TF3DHud::Address
 	extern REL::Relocation<CreateAnimationGraphManager_t*> CreateAnimationGraphManager;
 	extern REL::Relocation<CreateClothFor3D_t*> CreateClothFor3D;
 	extern REL::Relocation<CreateHeadForNPC_t*> CreateHeadForNPC;
+	extern REL::Relocation<BakeChargenMorphs_t*> BakeChargenMorphs;
 	extern REL::Relocation<DestroyAdjustmentArena_t*> DestroyAdjustmentArena;
 	extern REL::Relocation<DoAdjustSkinComplexion_t*> DoAdjustSkinComplexion;
 	extern REL::Relocation<GenerateFlattenedHeadPartArray_t*> GenerateFlattenedHeadPartArray;
@@ -250,7 +250,6 @@ namespace TF3DHud::Address
 	extern REL::Relocation<GetActiveContourFromHolder_t*> GetActiveContourFromHolder;
 	extern REL::Relocation<GetAll3DUpdateFlags_t*> GetAll3DUpdateFlags;
 	extern REL::Relocation<GetCellPriority_t*> GetCellPriority;
-	extern REL::Relocation<GetChargenModelName_t*> GetChargenModelName;
 	extern REL::Relocation<GetDefaultAction_t*> GetDefaultObjectForActionInitializeToBaseState;
 	extern REL::Relocation<GetDefaultAction_t*> GetDefaultObjectForActionInstantInitializeToBaseState;
 	extern REL::Relocation<GetDefaultRaceHeadPart_t*> GetDefaultRaceHeadPart;
@@ -271,7 +270,6 @@ namespace TF3DHud::Address
 	extern REL::Relocation<ApplyWeightFaceMorph_t*> ApplyWeightFaceMorph;
 	extern REL::Relocation<PrepareHeadForShaders_t*> PrepareHeadForShaders;
 	extern REL::Relocation<ScaleFaceBones_t*> ScaleFaceBones;
-	extern REL::Relocation<ScaleFaceSkinBones_t*> ScaleFaceSkinBones;
 	extern REL::Relocation<UpdateAllChildrenMorphData_t*> UpdateAllChildrenMorphData;
 	extern REL::Relocation<InitializeSubGraph_t*> InitializeSubGraph;
 	extern REL::Relocation<InterpretAction_t*> InterpretAction;

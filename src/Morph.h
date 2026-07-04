@@ -4,6 +4,8 @@
 #include "RE/P/PlayerCharacter.h"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace RE
 {
@@ -32,9 +34,14 @@ namespace TF3DHud::Morph
 	void MarkPrimaryDirty();
 	void MarkSecondaryDirty();
 	void ClearGeometryAudit();
+	void CaptureTrustedSkeleton(
+		RE::NiAVObject& a_previewRoot,
+		RE::BSFlattenedBoneTree* a_previewFlattenedBoneTree);
+	[[nodiscard]] std::vector<std::string> GetTrustedSkeletonLeafNames();
+	[[nodiscard]] std::vector<std::vector<std::string>> GetTrustedSkeletonLeafPaths();
 	void Reset();
 	UpdateResult Update(
 		RE::PlayerCharacter& a_player,
 		RE::NiAVObject& a_previewRoot,
-		RE::BSFlattenedBoneTree* a_previewFlattenedBoneTree);
+		RE::BSFlattenedBoneTree*& a_previewFlattenedBoneTree);
 }

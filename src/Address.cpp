@@ -20,6 +20,7 @@ namespace TF3DHud::Address
 	REL::Relocation<CreateAnimationGraphManager_t*> CreateAnimationGraphManager{ REL::ID{ 532453, 2214553 } };
 	REL::Relocation<CreateClothFor3D_t*> CreateClothFor3D{ REL::ID(1322043) };
 	REL::Relocation<CreateHeadForNPC_t*> CreateHeadForNPC{ REL::ID(1455012) };
+	REL::Relocation<BakeChargenMorphs_t*> BakeChargenMorphs{ REL::ID(994093) };
 	REL::Relocation<DestroyAdjustmentArena_t*> DestroyAdjustmentArena{ REL::ID(1000046) };
 	REL::Relocation<DoAdjustSkinComplexion_t*> DoAdjustSkinComplexion{ REL::ID(1295935) };
 	REL::Relocation<GenerateFlattenedHeadPartArray_t*> GenerateFlattenedHeadPartArray{ REL::ID(72114) };
@@ -28,7 +29,6 @@ namespace TF3DHud::Address
 	REL::Relocation<GetActiveContourFromHolder_t*> GetActiveContourFromHolder{ REL::ID(1388221) };
 	REL::Relocation<GetAll3DUpdateFlags_t*> GetAll3DUpdateFlags{ REL::ID{ 582098, 2232393 } };
 	REL::Relocation<GetCellPriority_t*> GetCellPriority{ REL::ID{ 665767, 2192052 } };
-	REL::Relocation<GetChargenModelName_t*> GetChargenModelName{ REL::ID(1493791) };
 	REL::Relocation<GetDefaultAction_t*> GetDefaultObjectForActionInitializeToBaseState{ REL::ID(639576) };
 	REL::Relocation<GetDefaultAction_t*> GetDefaultObjectForActionInstantInitializeToBaseState{ REL::ID{ 1517112, 2214310 } };
 	REL::Relocation<GetDefaultRaceHeadPart_t*> GetDefaultRaceHeadPart{ REL::ID(1120148) };
@@ -54,7 +54,6 @@ namespace TF3DHud::Address
 	REL::Relocation<ApplyWeightFaceMorph_t*> ApplyWeightFaceMorph{ REL::ID(1582451) };
 	REL::Relocation<PrepareHeadForShaders_t*> PrepareHeadForShaders{ REL::ID(305300) };
 	REL::Relocation<ScaleFaceBones_t*> ScaleFaceBones{ REL::ID{ 839112, 2207358 } };
-	REL::Relocation<ScaleFaceSkinBones_t*> ScaleFaceSkinBones{ REL::ID(1011655) };
 	REL::Relocation<UpdateAllChildrenMorphData_t*> UpdateAllChildrenMorphData{ REL::ID{ 213436, 2209481 } };
 	// IDA OG 1.10.163: BSBehaviorGraphSwapSingleton::InitializeSubGraph at 0x1416F3890.
 	// The AE ID is not present in the local OG->AE mapping CSV yet.

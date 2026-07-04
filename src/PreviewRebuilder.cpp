@@ -161,9 +161,14 @@ namespace TF3DHud::PreviewRebuilder
 			HashFloat(a_hash, a_npc.morphWeight.y);
 			HashFloat(a_hash, a_npc.morphWeight.z);
 			HashMorphRegionSliderValues(a_hash, a_npc.morphRegionSliderValues);
-			HashFacialBoneRegionSliderValues(a_hash, a_npc.facialBoneRegionSliderValues);
 			HashMorphSliderValues(a_hash, a_npc.morphSliderValues);
 			HashTintingData(a_hash, a_npc.tintingData);
+		}
+
+		void HashNPCFacialBoneRegions(std::uint64_t& a_hash, const RE::TESNPC& a_npc)
+		{
+			HashValue(a_hash, std::addressof(a_npc));
+			HashFacialBoneRegionSliderValues(a_hash, a_npc.facialBoneRegionSliderValues);
 		}
 
 		struct GeometryDataView
@@ -212,6 +217,10 @@ namespace TF3DHud::PreviewRebuilder
 			HashValue(hash, npc->faceNPC);
 			HashValue(hash, g_getSkin(npc));
 			HashValue(hash, npc->headParts);
+			HashNPCFacialBoneRegions(hash, *npc);
+			if (auto* rootFaceNPC = npc->GetRootFaceNPC(); rootFaceNPC && rootFaceNPC != npc) {
+				HashNPCFacialBoneRegions(hash, *rootFaceNPC);
+			}
 			HashInteger(hash, static_cast<std::uintptr_t>(npc->GetSex()));
 			HashInteger(hash, static_cast<std::uintptr_t>(npc->numHeadParts));
 			for (std::int32_t i = 0; i < npc->numHeadParts && npc->headParts; ++i) {

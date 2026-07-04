@@ -1,18 +1,20 @@
 #include "Morph.h"
 
+#include "Address.h"
 #include "Utils.h"
 
-#include "RE/B/BipedAnim.h"
 #include "RE/B/BSGeometry.h"
 #include "RE/N/NiNode.h"
 #include "RE/N/NiUpdateData.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace TF3DHud::Morph
 {
@@ -30,6 +32,7 @@ namespace TF3DHud::Morph
 		std::uint64_t g_pendingMorphSignature{ 0 };
 		std::uint32_t g_pendingMorphSignatureFrames{ 0 };
 		std::unordered_set<std::string> g_graphWrittenBoneNames;
+		std::vector<std::vector<std::string>> g_trustedSkeletonPaths;
 		bool g_graphWrittenBoneNamesValid{ false };
 		std::mutex g_stateLock;
 
@@ -96,16 +99,100 @@ namespace TF3DHud::Morph
 			}
 
 			const auto name = a_object.GetName();
-			return !name.empty() && !g_graphWrittenBoneNames.contains(name.c_str());
+			return !name.empty() && !NamesEqual(name.c_str(), "Root") && !g_graphWrittenBoneNames.contains(name.c_str());
 		}
 
 		void BuildPreviewTargetMap(
-			[[maybe_unused]] RE::NiAVObject& a_previewRoot,
+			RE::NiAVObject& a_previewRoot,
 			RE::BSFlattenedBoneTree* a_previewFlattenedBoneTree,
 			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
 		{
 			a_previewNodes.clear();
 			CollectFlattenedBoneNodes(a_previewFlattenedBoneTree, a_previewNodes);
+			CollectNamedNodes(std::addressof(a_previewRoot), a_previewNodes);
+		}
+
+		[[nodiscard]] RE::NiAVObject* FindNamedNodeRecursive(RE::NiAVObject& a_object, const std::string_view a_name)
+		{
+			if (a_object.IsNode() && NamesEqual(a_object.GetName(), a_name)) {
+				return std::addressof(a_object);
+			}
+
+			auto* node = a_object.IsNode();
+			if (!node) {
+				return nullptr;
+			}
+
+			for (auto& child : node->children) {
+				if (!child) {
+					continue;
+				}
+				if (auto* found = FindNamedNodeRecursive(*child, a_name)) {
+					return found;
+				}
+			}
+			return nullptr;
+		}
+
+		void CollectTrustedSkeletonLeafPaths(
+			RE::NiAVObject& a_object,
+			std::vector<std::string>& a_currentPath,
+			std::vector<std::vector<std::string>>& a_paths)
+		{
+			auto* node = a_object.IsNode();
+			if (!node) {
+				return;
+			}
+
+			const auto name = a_object.GetName();
+			if (name.empty()) {
+				return;
+			}
+
+			a_currentPath.emplace_back(name.c_str());
+			std::vector<RE::NiAVObject*> nodeChildren;
+			nodeChildren.reserve(node->children.size());
+			for (auto& child : node->children) {
+				if (child && child->IsNode()) {
+					nodeChildren.push_back(child.get());
+				}
+			}
+
+			if (nodeChildren.empty()) {
+				if (a_currentPath.size() >= 2) {
+					a_paths.push_back(a_currentPath);
+				}
+				a_currentPath.pop_back();
+				return;
+			}
+
+			for (auto* child : nodeChildren) {
+				CollectTrustedSkeletonLeafPaths(*child, a_currentPath, a_paths);
+			}
+
+			a_currentPath.pop_back();
+		}
+
+		void CaptureTrustedSkeletonPaths(
+			RE::NiAVObject& a_previewRoot,
+			[[maybe_unused]] RE::BSFlattenedBoneTree* a_previewFlattenedBoneTree,
+			std::vector<std::vector<std::string>>& a_paths)
+		{
+			a_paths.clear();
+			auto* root = FindNamedNodeRecursive(a_previewRoot, "Root");
+			if (!root) {
+				root = std::addressof(a_previewRoot);
+			}
+			if (!root->IsNode()) {
+				return;
+			}
+
+			std::vector<std::string> currentPath;
+			CollectTrustedSkeletonLeafPaths(*root, currentPath, a_paths);
+
+			std::ranges::sort(a_paths, [](const auto& a_lhs, const auto& a_rhs) {
+				return a_lhs < a_rhs;
+			});
 		}
 
 		[[nodiscard]] bool BuildSourceAdjustmentMap(
@@ -119,13 +206,194 @@ namespace TF3DHud::Morph
 				return false;
 			}
 
-			auto* sourceFlattenedTree = FindFlattenedBoneTree(sourceRoot);
-			if (!sourceFlattenedTree) {
+			if (auto* sourceFlattenedTree = FindFlattenedBoneTree(sourceRoot)) {
+				CollectFlattenedBoneNodes(sourceFlattenedTree, a_sourceNodes);
+			}
+			CollectNamedNodes(sourceRoot, a_sourceNodes);
+			return !a_sourceNodes.empty();
+		}
+
+		[[nodiscard]] bool EnsurePreviewParent(RE::NiAVObject& a_child, RE::NiNode& a_parent)
+		{
+			if (a_child.parent == std::addressof(a_parent)) {
+				return false;
+			}
+			if (std::addressof(a_child) == std::addressof(a_parent) || IsDescendantOf(a_parent, a_child)) {
 				return false;
 			}
 
-			CollectFlattenedBoneNodes(sourceFlattenedTree, a_sourceNodes);
-			return !a_sourceNodes.empty();
+			RE::NiPointer<RE::NiAVObject> keepAlive(std::addressof(a_child));
+			if (auto* oldParent = a_child.parent) {
+				oldParent->DetachChild(keepAlive.get());
+			}
+			a_parent.AttachChild(keepAlive.get(), false);
+			return true;
+		}
+
+		[[nodiscard]] RE::NiPointer<RE::NiNode> CreatePreviewAdjustmentNode(RE::NiAVObject& a_source)
+		{
+			const auto name = a_source.GetName();
+			if (name.empty()) {
+				return nullptr;
+			}
+
+			auto node = RE::make_nismart<RE::NiNode>(0);
+			node->name = name;
+			node->SetLocalTransform(a_source.GetLocalTransform());
+			node->SetWorldTransform(a_source.GetWorldTransform());
+			node->fadeAmount = 1.0F;
+			return node;
+		}
+
+		[[nodiscard]] RE::NiNode* GetNamedNode(RE::NiAVObject& a_root, const std::string_view a_name)
+		{
+			if (a_name.empty()) {
+				return nullptr;
+			}
+			auto* object = a_root.GetObjectByName(RE::BSFixedString(a_name.data()));
+			return object ? object->IsNode() : nullptr;
+		}
+
+		void RefreshPreviewAdjustmentLookup(
+			RE::NiAVObject& a_previewRoot,
+			RE::BSFlattenedBoneTree*& a_previewFlattenedBoneTree,
+			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
+		{
+			Address::CreateBoneMap(std::addressof(a_previewRoot));
+			a_previewFlattenedBoneTree = FindFlattenedBoneTree(std::addressof(a_previewRoot));
+			if (a_previewFlattenedBoneTree) {
+				Address::CreateBoneMap(a_previewFlattenedBoneTree);
+			}
+			BuildPreviewTargetMap(a_previewRoot, a_previewFlattenedBoneTree, a_previewNodes);
+		}
+
+		struct ReconstructionStats
+		{
+			std::uint32_t created{ 0 };
+			std::uint32_t reparented{ 0 };
+			std::uint32_t cachedStops{ 0 };
+			std::uint32_t transformed{ 0 };
+		};
+
+		[[nodiscard]] ReconstructionStats ReconstructTrustedLeafPathFromLive(
+			RE::NiAVObject& a_liveRoot,
+			RE::NiAVObject& a_previewRoot,
+			const std::string_view a_leafName,
+			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes,
+			std::unordered_set<RE::NiAVObject*>& a_visitedLiveNodes)
+		{
+			ReconstructionStats stats;
+			auto* liveLeaf = GetNamedNode(a_liveRoot, a_leafName);
+			if (!liveLeaf) {
+				return stats;
+			}
+
+			std::vector<RE::NiAVObject*> livePathLeafToRoot;
+			livePathLeafToRoot.reserve(16);
+			std::unordered_set<RE::NiAVObject*> seen;
+			for (auto* current = static_cast<RE::NiAVObject*>(liveLeaf); current; current = current->parent) {
+				if (!current->IsNode() || !seen.insert(current).second) {
+					return stats;
+				}
+
+				livePathLeafToRoot.push_back(current);
+				if (NamesEqual(current->GetName().c_str(), "Root")) {
+					break;
+				}
+				if (a_visitedLiveNodes.contains(current)) {
+					++stats.cachedStops;
+					break;
+				}
+				if (current == std::addressof(a_liveRoot)) {
+					break;
+				}
+				if (livePathLeafToRoot.size() > 256) {
+					return stats;
+				}
+			}
+
+			RE::NiNode* previewParent = nullptr;
+			std::vector<RE::NiAVObject*> reconstructed;
+			reconstructed.reserve(livePathLeafToRoot.size());
+
+			for (auto it = livePathLeafToRoot.rbegin(); it != livePathLeafToRoot.rend(); ++it) {
+				auto* liveNode = *it;
+				const auto name = liveNode->GetName();
+				if (name.empty()) {
+					return stats;
+				}
+				const bool isRootNode = NamesEqual(name.c_str(), "Root");
+
+				auto* previewNode = GetNamedNode(a_previewRoot, name.c_str());
+				RE::NiPointer<RE::NiNode> created;
+				if (!previewNode) {
+					if (isRootNode) {
+						return stats;
+					}
+					if (!previewParent) {
+						return stats;
+					}
+
+					created = CreatePreviewAdjustmentNode(*liveNode);
+					previewNode = created.get();
+					if (!previewNode) {
+						return stats;
+					}
+
+					previewParent->AttachChild(previewNode, false);
+					a_previewNodes.insert_or_assign(std::string(name), previewNode);
+					++stats.created;
+				} else if (!isRootNode && previewParent && previewNode != previewParent &&
+						   EnsurePreviewParent(*previewNode, *previewParent)) {
+					++stats.reparented;
+				}
+
+				if (IsAdjustmentBone(*liveNode)) {
+					previewNode->SetLocalTransform(liveNode->GetLocalTransform());
+					++stats.transformed;
+				}
+
+				reconstructed.push_back(liveNode);
+				previewParent = previewNode;
+			}
+
+			for (auto* liveNode : reconstructed) {
+				a_visitedLiveNodes.insert(liveNode);
+			}
+
+			return stats;
+		}
+
+		[[nodiscard]] ReconstructionStats ReconstructTrustedSkeletonAdjustmentHierarchy(
+			RE::NiAVObject& a_liveRoot,
+			RE::NiAVObject& a_previewRoot,
+			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
+		{
+			ReconstructionStats total;
+			if (g_trustedSkeletonPaths.empty()) {
+				return total;
+			}
+
+			std::unordered_set<RE::NiAVObject*> visitedLiveNodes;
+			visitedLiveNodes.reserve(g_trustedSkeletonPaths.size() * 4);
+
+			for (const auto& path : g_trustedSkeletonPaths) {
+				if (path.empty()) {
+					continue;
+				}
+
+				const auto stats = ReconstructTrustedLeafPathFromLive(
+					a_liveRoot,
+					a_previewRoot,
+					path.back(),
+					a_previewNodes,
+					visitedLiveNodes);
+				total.created += stats.created;
+				total.reparented += stats.reparented;
+				total.cachedStops += stats.cachedStops;
+				total.transformed += stats.transformed;
+			}
+			return total;
 		}
 
 		[[nodiscard]] bool CheckStableChangedSignature(
@@ -158,16 +426,23 @@ namespace TF3DHud::Morph
 		}
 
 		[[nodiscard]] std::uint32_t ApplySkeletalAdjustments(
+			RE::NiAVObject& a_liveRoot,
 			RE::NiAVObject& a_previewRoot,
+			RE::BSFlattenedBoneTree*& a_previewFlattenedBoneTree,
 			const std::unordered_map<std::string, RE::NiAVObject*>& a_sourceNodes,
-			const std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
+			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
 		{
-			if (a_sourceNodes.empty()) {
+			if (a_sourceNodes.empty() || a_previewNodes.empty()) {
 				return 0;
 			}
 
-			if (a_previewNodes.empty()) {
-				return 0;
+			const auto reconstruction = ReconstructTrustedSkeletonAdjustmentHierarchy(
+				a_liveRoot,
+				a_previewRoot,
+				a_previewNodes);
+			const auto topologyChanges = reconstruction.created + reconstruction.reparented;
+			if (topologyChanges != 0) {
+				RefreshPreviewAdjustmentLookup(a_previewRoot, a_previewFlattenedBoneTree, a_previewNodes);
 			}
 
 			std::uint32_t copied = 0;
@@ -177,22 +452,20 @@ namespace TF3DHud::Morph
 				}
 
 				auto* target = FindNodeByName(a_previewNodes, name);
-				if (!target || !target->IsNode()) {
+				if (!target || target == std::addressof(a_previewRoot) || !target->IsNode()) {
 					continue;
 				}
 
-				const auto appliedTransform = source->GetLocalTransform();
-				target->SetLocalTransform(appliedTransform);
+				target->SetLocalTransform(source->GetLocalTransform());
 				++copied;
 			}
 
-			if (copied == 0) {
-				return 0;
+			if (copied != 0 || topologyChanges != 0) {
+				RE::NiUpdateData updateData;
+				a_previewRoot.Update(updateData);
 			}
 
-			RE::NiUpdateData updateData;
-			a_previewRoot.Update(updateData);
-			return copied;
+			return copied + topologyChanges;
 		}
 
 		void BeginAuditsIfRequested()
@@ -232,6 +505,40 @@ namespace TF3DHud::Morph
 		g_pendingMorphSignatureFrames = 0;
 	}
 
+	void CaptureTrustedSkeleton(
+		RE::NiAVObject& a_previewRoot,
+		RE::BSFlattenedBoneTree* a_previewFlattenedBoneTree)
+	{
+		std::scoped_lock lock(g_stateLock);
+		CaptureTrustedSkeletonPaths(a_previewRoot, a_previewFlattenedBoneTree, g_trustedSkeletonPaths);
+	}
+
+	std::vector<std::string> GetTrustedSkeletonLeafNames()
+	{
+		std::scoped_lock lock(g_stateLock);
+
+		std::vector<std::string> leaves;
+		leaves.reserve(g_trustedSkeletonPaths.size());
+		std::unordered_set<std::string> seen;
+		for (const auto& path : g_trustedSkeletonPaths) {
+			if (path.empty()) {
+				continue;
+			}
+			if (seen.emplace(path.back()).second) {
+				leaves.push_back(path.back());
+			}
+		}
+
+		std::ranges::sort(leaves);
+		return leaves;
+	}
+
+	std::vector<std::vector<std::string>> GetTrustedSkeletonLeafPaths()
+	{
+		std::scoped_lock lock(g_stateLock);
+		return g_trustedSkeletonPaths;
+	}
+
 	void Reset()
 	{
 		std::scoped_lock lock(g_stateLock);
@@ -243,13 +550,14 @@ namespace TF3DHud::Morph
 		g_pendingMorphSignature = 0;
 		g_pendingMorphSignatureFrames = 0;
 		g_graphWrittenBoneNames.clear();
+		g_trustedSkeletonPaths.clear();
 		g_graphWrittenBoneNamesValid = false;
 	}
 
 	UpdateResult Update(
 		RE::PlayerCharacter& a_player,
-		RE::NiAVObject& a_previewRoot,
-		RE::BSFlattenedBoneTree* a_previewFlattenedBoneTree)
+		[[maybe_unused]] RE::NiAVObject& a_previewRoot,
+		[[maybe_unused]] RE::BSFlattenedBoneTree*& a_previewFlattenedBoneTree)
 	{
 		std::scoped_lock lock(g_stateLock);
 		BeginAuditsIfRequested();
@@ -278,6 +586,11 @@ namespace TF3DHud::Morph
 				return result;
 			}
 
+			auto* liveRoot = a_player.Get3D(false);
+			if (!liveRoot) {
+				return result;
+			}
+
 			std::unordered_map<std::string, RE::NiAVObject*> sourceNodes;
 			if (!BuildSourceAdjustmentMap(a_player, sourceNodes)) {
 				return result;
@@ -285,7 +598,8 @@ namespace TF3DHud::Morph
 
 			std::unordered_map<std::string, RE::NiAVObject*> previewNodes;
 			BuildPreviewTargetMap(a_previewRoot, a_previewFlattenedBoneTree, previewNodes);
-			const auto adjustedNodes = ApplySkeletalAdjustments(a_previewRoot, sourceNodes, previewNodes);
+			const auto adjustedNodes =
+				ApplySkeletalAdjustments(*liveRoot, a_previewRoot, a_previewFlattenedBoneTree, sourceNodes, previewNodes);
 			if (adjustedNodes != 0) {
 				result = result | UpdateResult::kAdjustmentsApplied;
 			}

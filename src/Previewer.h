@@ -16,8 +16,43 @@ namespace TF3DHud::Previewer
 		bool hasPreview{ false };
 	};
 
+	struct FaceGenHeadPartDebugInfo
+	{
+		std::uint32_t formID{ 0 };
+		std::uintptr_t ptr{ 0 };
+		std::string editorID;
+		std::string fullName;
+		std::string type;
+		std::string model;
+	};
+
+	struct FaceGenGeometryDebugInfo
+	{
+		std::uintptr_t ptr{ 0 };
+		std::string name;
+		std::uintptr_t parentPtr{ 0 };
+		std::string parentName;
+	};
+
+	struct HairSkinBoneDebugInfo
+	{
+		std::string source;
+		std::string headPart;
+		std::string geometry;
+		std::uint32_t index{ 0 };
+		std::string boneName;
+		std::uintptr_t bonePtr{ 0 };
+		std::string parentName;
+		std::uintptr_t parentPtr{ 0 };
+		std::string local;
+		std::string world;
+	};
+
 	struct FaceGenDebugSnapshot
 	{
+		std::vector<FaceGenHeadPartDebugInfo> headParts;
+		std::vector<FaceGenGeometryDebugInfo> geometries;
+		std::vector<HairSkinBoneDebugInfo> hairSkinBones;
 		std::vector<FaceGenSliderDebugInfo> sliders;
 	};
 
@@ -30,6 +65,6 @@ namespace TF3DHud::Previewer
 	void ReloadConfig();
 	void SuspendForLooksMenu();
 	void ResumeAfterLooksMenu();
-	void LogRightHandBoneHierarchy();
 	FaceGenDebugSnapshot GetFaceGenDebugSnapshot();
+	void LogHairSkinBoneDiagnostics();
 }

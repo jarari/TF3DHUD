@@ -620,10 +620,6 @@ namespace TF3DHud::Imgui
 			if (!a_snapshot.lastDiagnostic.empty()) {
 				ImGui::Text("Last diagnostic: %s", a_snapshot.lastDiagnostic.c_str());
 			}
-			if (ImGui::Button("Log Right-Hand Bone Hierarchy")) {
-				Previewer::LogRightHandBoneHierarchy();
-			}
-			ImGui::Separator();
 
 			ImGui::Text("Project: %s", a_snapshot.project.empty() ? "(none)" : a_snapshot.project.c_str());
 			ImGui::Text(
@@ -674,8 +670,8 @@ namespace TF3DHud::Imgui
 		void DrawFaceGenTab()
 		{
 			const auto snapshot = Previewer::GetFaceGenDebugSnapshot();
-			if (snapshot.sliders.empty()) {
-				ImGui::TextDisabled("No FaceGen slider data.");
+			if (snapshot.headParts.empty() && snapshot.geometries.empty() && snapshot.hairSkinBones.empty() && snapshot.sliders.empty()) {
+				ImGui::TextDisabled("No FaceGen debug data.");
 				return;
 			}
 
@@ -683,6 +679,129 @@ namespace TF3DHud::Imgui
 				ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
 				ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg |
 				ImGuiTableFlags_SizingStretchProp;
+
+			ImGui::TextUnformatted("Used headparts");
+			if (snapshot.headParts.empty()) {
+				ImGui::TextDisabled("No used HDPT data.");
+			} else if (ImGui::BeginTable("facegen_headparts", 6, tableFlags)) {
+				ImGui::TableSetupColumn("HDPT", ImGuiTableColumnFlags_WidthStretch, 1.1F);
+				ImGui::TableSetupColumn("Form", ImGuiTableColumnFlags_WidthFixed, 86.0F);
+				ImGui::TableSetupColumn("Ptr", ImGuiTableColumnFlags_WidthFixed, 118.0F);
+				ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 82.0F);
+				ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+				ImGui::TableSetupColumn("Model", ImGuiTableColumnFlags_WidthStretch, 1.8F);
+				ImGui::TableHeadersRow();
+
+				for (const auto& headPart : snapshot.headParts) {
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					ImGui::TextUnformatted(headPart.editorID.empty() ? "<no editor id>" : headPart.editorID.c_str());
+					ImGui::TableSetColumnIndex(1);
+					ImGui::Text("%08X", headPart.formID);
+					ImGui::TableSetColumnIndex(2);
+					ImGui::Text("%llX", static_cast<unsigned long long>(headPart.ptr));
+					ImGui::TableSetColumnIndex(3);
+					ImGui::TextUnformatted(headPart.type.c_str());
+					ImGui::TableSetColumnIndex(4);
+					ImGui::TextUnformatted(headPart.fullName.empty() ? "-" : headPart.fullName.c_str());
+					ImGui::TableSetColumnIndex(5);
+					ImGui::TextUnformatted(headPart.model.empty() ? "-" : headPart.model.c_str());
+				}
+
+				ImGui::EndTable();
+			}
+
+			ImGui::Spacing();
+			ImGui::TextUnformatted("Preview face geometries");
+			if (snapshot.geometries.empty()) {
+				ImGui::TextDisabled("No preview face geometry data.");
+			} else if (ImGui::BeginTable("facegen_geometries", 4, tableFlags)) {
+				ImGui::TableSetupColumn("Geometry", ImGuiTableColumnFlags_WidthStretch, 1.5F);
+				ImGui::TableSetupColumn("Geometry Ptr", ImGuiTableColumnFlags_WidthFixed, 118.0F);
+				ImGui::TableSetupColumn("Parent", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+				ImGui::TableSetupColumn("Parent Ptr", ImGuiTableColumnFlags_WidthFixed, 118.0F);
+				ImGui::TableHeadersRow();
+
+				for (const auto& geometry : snapshot.geometries) {
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					ImGui::TextUnformatted(geometry.name.empty() ? "<unnamed>" : geometry.name.c_str());
+					ImGui::TableSetColumnIndex(1);
+					ImGui::Text("%llX", static_cast<unsigned long long>(geometry.ptr));
+					ImGui::TableSetColumnIndex(2);
+					ImGui::TextUnformatted(geometry.parentName.empty() ? "-" : geometry.parentName.c_str());
+					ImGui::TableSetColumnIndex(3);
+					if (geometry.parentPtr != 0) {
+						ImGui::Text("%llX", static_cast<unsigned long long>(geometry.parentPtr));
+					} else {
+						ImGui::TextDisabled("-");
+					}
+				}
+
+				ImGui::EndTable();
+			}
+
+			ImGui::Spacing();
+			if (ImGui::Button("Dump hair skin bones")) {
+				Previewer::LogHairSkinBoneDiagnostics();
+			}
+			ImGui::TextUnformatted("Hair skin bones");
+			if (snapshot.hairSkinBones.empty()) {
+				ImGui::TextDisabled("No hair skin-bone data.");
+			} else if (ImGui::BeginTable("facegen_hair_skin_bones", 10, tableFlags)) {
+				ImGui::TableSetupColumn("Src", ImGuiTableColumnFlags_WidthFixed, 58.0F);
+				ImGui::TableSetupColumn("HDPT", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+				ImGui::TableSetupColumn("Geometry", ImGuiTableColumnFlags_WidthStretch, 1.1F);
+				ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 36.0F);
+				ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+				ImGui::TableSetupColumn("Bone Ptr", ImGuiTableColumnFlags_WidthFixed, 118.0F);
+				ImGui::TableSetupColumn("Parent", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+				ImGui::TableSetupColumn("Parent Ptr", ImGuiTableColumnFlags_WidthFixed, 118.0F);
+				ImGui::TableSetupColumn("Local", ImGuiTableColumnFlags_WidthStretch, 1.8F);
+				ImGui::TableSetupColumn("World", ImGuiTableColumnFlags_WidthStretch, 1.8F);
+				ImGui::TableHeadersRow();
+
+				for (const auto& bone : snapshot.hairSkinBones) {
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					ImGui::TextUnformatted(bone.source.c_str());
+					ImGui::TableSetColumnIndex(1);
+					ImGui::TextUnformatted(bone.headPart.empty() ? "-" : bone.headPart.c_str());
+					ImGui::TableSetColumnIndex(2);
+					ImGui::TextUnformatted(bone.geometry.empty() ? "-" : bone.geometry.c_str());
+					ImGui::TableSetColumnIndex(3);
+					ImGui::Text("%u", bone.index);
+					ImGui::TableSetColumnIndex(4);
+					ImGui::TextUnformatted(bone.boneName.empty() ? "-" : bone.boneName.c_str());
+					ImGui::TableSetColumnIndex(5);
+					if (bone.bonePtr != 0) {
+						ImGui::Text("%llX", static_cast<unsigned long long>(bone.bonePtr));
+					} else {
+						ImGui::TextDisabled("-");
+					}
+					ImGui::TableSetColumnIndex(6);
+					ImGui::TextUnformatted(bone.parentName.empty() ? "-" : bone.parentName.c_str());
+					ImGui::TableSetColumnIndex(7);
+					if (bone.parentPtr != 0) {
+						ImGui::Text("%llX", static_cast<unsigned long long>(bone.parentPtr));
+					} else {
+						ImGui::TextDisabled("-");
+					}
+					ImGui::TableSetColumnIndex(8);
+					ImGui::TextUnformatted(bone.local.empty() ? "-" : bone.local.c_str());
+					ImGui::TableSetColumnIndex(9);
+					ImGui::TextUnformatted(bone.world.empty() ? "-" : bone.world.c_str());
+				}
+
+				ImGui::EndTable();
+			}
+
+			ImGui::Separator();
+			ImGui::TextUnformatted("Sliders and tints");
+			if (snapshot.sliders.empty()) {
+				ImGui::TextDisabled("No FaceGen slider data.");
+				return;
+			}
 
 			if (!ImGui::BeginTable("facegen_sliders", 4, tableFlags)) {
 				return;
