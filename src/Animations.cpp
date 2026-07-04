@@ -125,6 +125,7 @@ namespace TF3DHud::Animations
 			"syncIdleStart",
 			"syncIdleStop",
 			"moveStart",
+			"moveStartAnimated",
 			"moveStop",
 			"moveStartSlave",
 			"moveStopSlave",
@@ -1794,11 +1795,11 @@ namespace TF3DHud::Animations
 				}
 
 				// IDA: BSAnimationGraphManager::ProcessGraphEvent returns whether
-				// the active graph accepted the request. Nested/reload blend
-				// machines can still need the same input request even when the
-				// top-level result is false, so mirror the request stream itself.
+				// the active graph accepted the request. The live actor can be on
+				// a first-person graph while the preview is third-person, so this
+				// result is not a reliable preview eligibility test.
 				(void)a_result;
-				QueueMirroredEvent(RE::BSFixedString(a_eventName));
+				QueueMirroredEvent(GetPreviewMirroredEvent(RE::BSFixedString(a_eventName)));
 			}
 
 			void ReconcileJumpLandingFromLive()
@@ -1828,6 +1829,33 @@ namespace TF3DHud::Animations
 
 				std::scoped_lock lock(pendingMirroredEventsLock_);
 				pendingMirroredEvents_.emplace_back(a_eventName);
+			}
+
+			[[nodiscard]] RE::BSFixedString GetPreviewMirroredEvent(const RE::BSFixedString& a_eventName) const
+			{
+				if (a_eventName != std::string_view{ "moveStart" } &&
+					a_eventName != std::string_view{ "MoveStart" }) {
+					return a_eventName;
+				}
+
+				std::int32_t isSneaking = 0;
+				std::int32_t syncIdleLocomotion = 0;
+				if (!TryGetLiveGraphVariableInt("iIsInSneak", isSneaking) || isSneaking == 0 ||
+					!TryGetLiveGraphVariableInt("iSyncIdleLocomotion", syncIdleLocomotion) ||
+					syncIdleLocomotion != 1 || !IsLiveWeaponHolstered()) {
+					return a_eventName;
+				}
+
+				// The live first-person graph can report MoveStart here, but the
+				// third-person MT sneak-holstered path uses moveStartAnimated.
+				return RE::BSFixedString("moveStartAnimated");
+			}
+
+			[[nodiscard]] bool IsLiveWeaponHolstered() const
+			{
+				const auto* process = sourceActor_ ? sourceActor_->currentProcess : nullptr;
+				const auto* middleHigh = process ? process->middleHigh : nullptr;
+				return middleHigh && middleHigh->weaponCullCounter != 0;
 			}
 
 			void ProcessMirroredEvents()
@@ -2525,16 +2553,16 @@ namespace TF3DHud::Animations
 		g_holder->RefreshPendingSubgraphLoads();
 		g_holder->TryApplyInitialAnimationState();
 		g_holder->ReconcileJumpLandingFromLive();
-		g_holder->ProcessMirroredEvents();
 		g_holder->SyncWeaponCullStateFromLive();
 		g_holder->SetGraphVariableBool("bAimEnabled", false);
 
 		const auto previewRootLocal = a_previewRoot.GetLocalTransform();
 		const auto updateDelta = g_holder->GetActiveClipSynchronizedDeltaTime(a_deltaTime);
-
 		const bool updated = g_updateAnimationGraphManagerFloat(g_holder.get(), updateDelta);
-
 		a_previewRoot.SetLocalTransform(previewRootLocal);
+
+		g_holder->ProcessMirroredEvents();
+
 		RE::NiUpdateData niUpdateData;
 		a_previewRoot.Update(niUpdateData);
 
