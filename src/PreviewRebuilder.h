@@ -16,6 +16,7 @@ namespace TF3DHud::PreviewRebuilder
 {
 	[[nodiscard]] RE::NiAVObject* GetSourceFaceNode(RE::Actor& a_sourceActor);
 	[[nodiscard]] std::uint64_t BuildVisualSignature(RE::PlayerCharacter& a_player);
+	[[nodiscard]] std::uint64_t BuildFaceCustomizationSignature(RE::PlayerCharacter& a_player);
 	[[nodiscard]] std::uint64_t BuildEquipmentSignature(const RE::BipedAnim* a_biped);
 	[[nodiscard]] std::uint64_t BuildMorphGeometrySignature(RE::PlayerCharacter& a_player);
 
@@ -27,6 +28,7 @@ namespace TF3DHud::PreviewRebuilder
 		kSkeletonAdjust = 1u << 2,
 		kFaceStructure = 1u << 3,
 		kBehaviorGraph = 1u << 4,
+		kFaceCustomization = 1u << 5,
 	};
 
 	class Controller
@@ -45,13 +47,17 @@ namespace TF3DHud::PreviewRebuilder
 			bool a_hasPendingModels);
 		[[nodiscard]] std::optional<std::uint64_t> TryResolveMorphGeometrySignature(
 			std::uint64_t a_currentSignature);
+		[[nodiscard]] std::optional<std::uint64_t> TryResolveFaceCustomizationSignature(
+			std::uint64_t a_currentSignature);
 		void CommitSkeletonBuild(
 			std::uint64_t a_equipmentSignature,
 			std::uint64_t a_visualSignature,
-			std::uint64_t a_morphGeometrySignature);
+			std::uint64_t a_morphGeometrySignature,
+			std::uint64_t a_faceCustomizationSignature);
 		void CommitEquipmentLayer(
 			std::uint64_t a_equipmentSignature,
 			std::uint64_t a_morphGeometrySignature);
+		void CommitFaceCustomization(std::uint64_t a_faceCustomizationSignature);
 
 		void RequestSkeletonAdjustment();
 		[[nodiscard]] bool ConsumeSkeletonAdjustmentRequest();
@@ -77,9 +83,13 @@ namespace TF3DHud::PreviewRebuilder
 		std::uint32_t morphQuietFrames_{ 0 };
 		std::uint64_t pendingMorphSignature_{ 0 };
 		std::uint32_t pendingMorphSignatureFrames_{ 0 };
+		std::uint32_t faceCustomizationQuietFrames_{ 0 };
+		std::uint64_t pendingFaceCustomizationSignature_{ 0 };
+		std::uint32_t pendingFaceCustomizationSignatureFrames_{ 0 };
 		std::uint64_t committedEquipmentSignature_{ 0 };
 		std::uint64_t committedVisualSignature_{ 0 };
 		std::uint64_t committedMorphGeometrySignature_{ 0 };
+		std::uint64_t committedFaceCustomizationSignature_{ 0 };
 		bool skeletonAdjustmentRequested_{ false };
 		bool behaviorGraphRefreshRequested_{ false };
 	};

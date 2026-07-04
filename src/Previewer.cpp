@@ -41,6 +41,7 @@
 #include <atomic>
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -66,6 +67,12 @@ namespace TF3DHud
 		auto& g_getActorBodyPart3D = Address::GetActorBodyPart3D;
 		auto& g_fixFaceGenHeadSkinInstances = Address::FixFaceGenHeadSkinInstances;
 		auto& g_resetFaceGenCurrentMorphs = Address::ResetFaceGenCurrentMorphs;
+		auto& g_generateFlattenedHeadPartArray = Address::GenerateFlattenedHeadPartArray;
+		auto& g_applyAllCustomizationMorphs = Address::ApplyAllCustomizationMorphs;
+		auto& g_applyWeightFaceMorph = Address::ApplyWeightFaceMorph;
+		auto& g_prepareHeadForShaders = Address::PrepareHeadForShaders;
+		auto& g_scaleFaceSkinBones = Address::ScaleFaceSkinBones;
+		auto& g_updateAllChildrenMorphData = Address::UpdateAllChildrenMorphData;
 		auto& g_tryAttachMod3DRecurse = Address::TryAttachMod3DRecurse;
 		auto& g_bipedAnimCtor = Address::BipedAnimCtor;
 		auto& g_bipedAnimDtor = Address::BipedAnimDtor;
@@ -109,6 +116,7 @@ namespace TF3DHud
 		RE::NiPointer<RE::NiAVObject> g_previewRoot;
 		RE::BSFlattenedBoneTree* g_previewFlattenedBoneTree{ nullptr };
 		RE::NiPointer<RE::BSFaceGenNiNode> g_previewFaceNode;
+		std::vector<Previewer::FaceGenSliderDebugInfo> g_lastAppliedFaceGenEntries;
 		std::vector<PreviewAttachment> g_previewAttachments;
 		std::vector<RE::NiPointer<RE::NiAVObject>> g_retiredPreviewObjects;
 		std::vector<RE::NiPointer<RE::NiAVObject>> g_retiredPreviewObjectsPendingRelease;
@@ -128,6 +136,227 @@ namespace TF3DHud
 		void CollectPreviewSkinTargetNodes(
 			RE::NiAVObject& a_previewRoot,
 			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes);
+
+		[[nodiscard]] std::string FormatFloat(const float a_value)
+		{
+			char buffer[32]{};
+			std::snprintf(buffer, sizeof(buffer), "%.4f", a_value);
+			return buffer;
+		}
+
+		[[nodiscard]] std::string FormatTransform(const RE::BGSCharacterMorph::Transform& a_transform)
+		{
+			char buffer[192]{};
+			std::snprintf(
+				buffer,
+				sizeof(buffer),
+				"p(%.3f %.3f %.3f) r(%.3f %.3f %.3f) s(%.3f %.3f %.3f)",
+				a_transform.position.x,
+				a_transform.position.y,
+				a_transform.position.z,
+				a_transform.rotation.x,
+				a_transform.rotation.y,
+				a_transform.rotation.z,
+				a_transform.scale.x,
+				a_transform.scale.y,
+				a_transform.scale.z);
+			return buffer;
+		}
+
+		[[nodiscard]] const char* BodyMorphRegionName(const std::uint32_t a_index)
+		{
+			switch (static_cast<RE::BGSCharacterMorph::BODY_MORPH_REGION>(a_index)) {
+			case RE::BGSCharacterMorph::BODY_MORPH_REGION::kHead:
+				return "morphRegion/head";
+			case RE::BGSCharacterMorph::BODY_MORPH_REGION::kUpperTorso:
+				return "morphRegion/upperTorso";
+			case RE::BGSCharacterMorph::BODY_MORPH_REGION::kArms:
+				return "morphRegion/arms";
+			case RE::BGSCharacterMorph::BODY_MORPH_REGION::kLowerTorso:
+				return "morphRegion/lowerTorso";
+			case RE::BGSCharacterMorph::BODY_MORPH_REGION::kLegs:
+				return "morphRegion/legs";
+			default:
+				return "morphRegion/unknown";
+			}
+		}
+
+		void AddFaceGenDebugValue(
+			std::vector<Previewer::FaceGenSliderDebugInfo>& a_entries,
+			std::string a_category,
+			const std::uint32_t a_id,
+			std::string a_value)
+		{
+			a_entries.push_back({
+				.category = std::move(a_category),
+				.id = a_id,
+				.liveValue = std::move(a_value),
+				.hasLive = true,
+			});
+		}
+
+		[[nodiscard]] std::string ResolveMorphSliderCategory(
+			const RE::TESRace* a_race,
+			const RE::SEX a_sex,
+			const std::uint32_t a_sliderId)
+		{
+			const auto sex = std::to_underlying(a_sex);
+			const auto* faceData = a_race && sex < 2 ? a_race->faceRelatedData[sex] : nullptr;
+			const auto* groups = faceData ? faceData->morphGroups : nullptr;
+			if (groups) {
+				for (const auto* group : *groups) {
+					if (!group) {
+						continue;
+					}
+					for (const auto sliderId : group->sliders) {
+						if (sliderId == a_sliderId) {
+							return group->name.empty() ? "morphSlider/group" : group->name.c_str();
+						}
+					}
+				}
+			}
+
+			if (a_race) {
+				if (const auto slider = a_race->morphSliders.find(a_sliderId); slider != a_race->morphSliders.end()) {
+					const auto* sliderData = slider->second;
+					if (sliderData && !sliderData->morphNames[0].empty()) {
+						return std::string("morphSlider/") + sliderData->morphNames[0].c_str();
+					}
+				}
+			}
+
+			return "morphSlider";
+		}
+
+		[[nodiscard]] std::string ResolveFacialBoneRegionCategory(
+			const RE::TESRace* a_race,
+			const RE::SEX a_sex,
+			const std::uint32_t a_regionId)
+		{
+			const auto sex = std::to_underlying(a_sex);
+			const auto* faceData = a_race && sex < 2 ? a_race->faceRelatedData[sex] : nullptr;
+			const auto* regions = faceData ? faceData->facialBoneRegions : nullptr;
+			if (regions) {
+				for (const auto* region : *regions) {
+					if (region && region->id == a_regionId) {
+						return region->name.empty() ? "facialBoneRegion" : region->name.c_str();
+					}
+				}
+			}
+
+			return "facialBoneRegion";
+		}
+
+		void CaptureFaceGenEntriesFromNPC(
+			RE::PlayerCharacter& a_player,
+			RE::TESNPC& a_npc,
+			std::vector<Previewer::FaceGenSliderDebugInfo>& a_entries)
+		{
+			auto* race = a_player.charGenRace ? a_player.charGenRace : a_player.GetVisualsRace();
+			const auto sex = a_npc.GetSex();
+
+			if (a_npc.morphRegionSliderValues) {
+				for (std::uint32_t index = 0; index < a_npc.morphRegionSliderValues->size(); ++index) {
+					AddFaceGenDebugValue(
+						a_entries,
+						BodyMorphRegionName(index),
+						index,
+						FormatFloat((*a_npc.morphRegionSliderValues)[index]));
+				}
+			}
+
+			if (a_npc.morphSliderValues) {
+				for (const auto& entry : *a_npc.morphSliderValues) {
+					AddFaceGenDebugValue(
+						a_entries,
+						ResolveMorphSliderCategory(race, sex, entry.first),
+						entry.first,
+						FormatFloat(entry.second));
+				}
+			}
+
+			if (a_npc.facialBoneRegionSliderValues) {
+				for (const auto& entry : *a_npc.facialBoneRegionSliderValues) {
+					AddFaceGenDebugValue(
+						a_entries,
+						ResolveFacialBoneRegionCategory(race, sex, entry.first),
+						entry.first,
+						FormatTransform(entry.second));
+				}
+			}
+
+			if (a_npc.tintingData) {
+				for (auto* entry : a_npc.tintingData->entriesA) {
+					if (!entry) {
+						continue;
+					}
+
+					std::string value = std::string("type=") + std::to_string(std::to_underlying(entry->GetType())) +
+					                    " amount=" + std::to_string(entry->tingingValue);
+					if (entry->GetType() == RE::BGSCharacterTint::EntryType::kPalette) {
+						const auto* palette = static_cast<const RE::BGSCharacterTint::PaletteEntry*>(entry);
+						char color[64]{};
+						std::snprintf(color, sizeof(color), " color=%08X swatch=%u", palette->tintingColor, palette->swatchID);
+						value += color;
+					}
+
+					AddFaceGenDebugValue(a_entries, "tint", entry->idLink, std::move(value));
+				}
+			}
+		}
+
+		[[nodiscard]] std::vector<Previewer::FaceGenSliderDebugInfo> CaptureLiveFaceGenEntries(RE::PlayerCharacter& a_player)
+		{
+			std::vector<Previewer::FaceGenSliderDebugInfo> entries;
+			auto* playerBase = a_player.GetObjectReference();
+			auto* npc = playerBase ? playerBase->As<RE::TESNPC>() : nullptr;
+			if (!npc) {
+				return entries;
+			}
+
+			CaptureFaceGenEntriesFromNPC(a_player, *npc, entries);
+			std::ranges::sort(entries, [](const auto& a_lhs, const auto& a_rhs) {
+				if (a_lhs.category != a_rhs.category) {
+					return a_lhs.category < a_rhs.category;
+				}
+				return a_lhs.id < a_rhs.id;
+			});
+			return entries;
+		}
+
+		[[nodiscard]] Previewer::FaceGenDebugSnapshot BuildFaceGenDebugSnapshot(RE::PlayerCharacter& a_player)
+		{
+			Previewer::FaceGenDebugSnapshot snapshot;
+			snapshot.sliders = CaptureLiveFaceGenEntries(a_player);
+
+			for (auto& liveEntry : snapshot.sliders) {
+				const auto previewIt = std::ranges::find_if(g_lastAppliedFaceGenEntries, [&](const auto& a_previewEntry) {
+					return a_previewEntry.category == liveEntry.category && a_previewEntry.id == liveEntry.id;
+				});
+				if (previewIt != g_lastAppliedFaceGenEntries.end()) {
+					liveEntry.previewValue = previewIt->liveValue;
+					liveEntry.hasPreview = true;
+				}
+			}
+
+			for (const auto& previewEntry : g_lastAppliedFaceGenEntries) {
+				const auto liveIt = std::ranges::find_if(snapshot.sliders, [&](const auto& a_liveEntry) {
+					return a_liveEntry.category == previewEntry.category && a_liveEntry.id == previewEntry.id;
+				});
+				if (liveIt != snapshot.sliders.end()) {
+					continue;
+				}
+
+				snapshot.sliders.push_back({
+					.category = previewEntry.category,
+					.id = previewEntry.id,
+					.previewValue = previewEntry.liveValue,
+					.hasPreview = true,
+				});
+			}
+
+			return snapshot;
+		}
 
 		[[nodiscard]] RE::BSFaceGenAnimationData* GetLiveFaceAnimationData(const RE::PlayerCharacter& a_player)
 		{
@@ -1215,6 +1444,7 @@ namespace TF3DHud
 		void ClearPreviewRebuildState()
 		{
 			g_rebuilder.Reset();
+			g_lastAppliedFaceGenEntries.clear();
 			g_pendingRendererAttach = false;
 			g_pendingFramingUpdate = false;
 			g_renderStateDirty = false;
@@ -1261,6 +1491,17 @@ namespace TF3DHud
 			const auto currentSignature = PreviewRebuilder::BuildMorphGeometrySignature(a_player);
 			if (const auto accepted = g_rebuilder.TryResolveMorphGeometrySignature(
 					currentSignature)) {
+				a_signature = *accepted;
+				return true;
+			}
+
+			return false;
+		}
+
+		[[nodiscard]] bool TryResolveFaceCustomizationSignature(RE::PlayerCharacter& a_player, std::uint64_t& a_signature)
+		{
+			const auto currentSignature = PreviewRebuilder::BuildFaceCustomizationSignature(a_player);
+			if (const auto accepted = g_rebuilder.TryResolveFaceCustomizationSignature(currentSignature)) {
 				a_signature = *accepted;
 				return true;
 			}
@@ -2023,6 +2264,56 @@ namespace TF3DHud
 			RestorePreviewShaderAlpha(a_previewRoot);
 		}
 
+		void ApplyPreviewFaceBoneRegionScales(RE::TESNPC& a_npc, RE::BSFaceGenNiNode& a_faceNode)
+		{
+			// IDA: CreateHeadForNPC applies facial bone regions by iterating the
+			// created head geometries and calling TESNPC::ScaleFaceBones on each
+			// BSSkin::Instance, not by traversing the face node transform tree.
+			ForEachGeometry(std::addressof(a_faceNode), [&](RE::BSGeometry& a_geometry) {
+				if (auto* skin = a_geometry.skinInstance.get(); skin) {
+					g_scaleFaceSkinBones(std::addressof(a_npc), skin);
+				}
+			});
+		}
+
+		bool ApplyPreviewFaceCustomization(RE::PlayerCharacter& a_player, const std::uint64_t a_signature)
+		{
+			if (!g_previewRoot || !g_previewFaceNode) {
+				return false;
+			}
+
+			auto* playerBase = a_player.GetObjectReference();
+			auto* npc = playerBase ? playerBase->As<RE::TESNPC>() : nullptr;
+			if (!npc) {
+				return false;
+			}
+
+			RE::BSScrapArray<RE::BGSHeadPart*> headParts;
+			g_generateFlattenedHeadPartArray(npc, headParts);
+
+			// IDA: CreateHeadForNPC runs these after headpart creation. This
+			// pass deliberately skips creating/replacing headparts and reapplies
+			// only the current TESNPC FaceGen customization payload.
+			g_applyWeightFaceMorph(npc, g_previewFaceNode.get());
+			ApplyPreviewFaceBoneRegionScales(*npc, *g_previewFaceNode);
+			g_applyAllCustomizationMorphs(npc, headParts, g_previewFaceNode.get());
+			g_updateAllChildrenMorphData(g_previewFaceNode.get(), true);
+			g_prepareHeadForShaders(headParts, g_previewFaceNode.get(), npc, nullptr);
+			ApplyPreviewBodyTint(*npc, *g_previewRoot);
+			g_lastAppliedFaceGenEntries = CaptureLiveFaceGenEntries(a_player);
+
+			if (auto* animationData = g_previewFaceNode->animationData; animationData) {
+				animationData->morphsDirty = true;
+				animationData->forceMorphUpdate = true;
+			}
+			g_previewFaceNode->faceGenFlags &= static_cast<std::uint16_t>(~0x4u);
+
+			RE::NiUpdateData updateData;
+			g_previewFaceNode->Update(updateData);
+			g_rebuilder.CommitFaceCustomization(a_signature);
+			return true;
+		}
+
 		bool RebuildPreview(
 			RE::PlayerCharacter& a_player,
 			const RE::BipedAnim& a_biped,
@@ -2085,10 +2376,14 @@ namespace TF3DHud
 				RetirePreviewObject(std::move(g_previewRoot));
 			}
 			g_previewRoot = previewRoot;
+			const auto faceCustomizationSignature = PreviewRebuilder::BuildFaceCustomizationSignature(a_player);
+			const bool faceCustomizationApplied =
+				ApplyPreviewFaceCustomization(a_player, faceCustomizationSignature);
 			g_rebuilder.CommitSkeletonBuild(
 				a_bipedSignature,
 				a_visualSignature,
-				PreviewRebuilder::BuildMorphGeometrySignature(a_player));
+				PreviewRebuilder::BuildMorphGeometrySignature(a_player),
+				faceCustomizationApplied ? faceCustomizationSignature : 0);
 
 			g_pendingRendererAttach = true;
 			g_pendingFramingUpdate = false;
@@ -2326,6 +2621,13 @@ namespace TF3DHud
 				}
 			}
 
+			if (!structuralCommandRan && g_postRebuildAdjustmentHoldFrames == 0) {
+				std::uint64_t faceCustomizationSignature = 0;
+				if (TryResolveFaceCustomizationSignature(*player, faceCustomizationSignature)) {
+					(void)ApplyPreviewFaceCustomization(*player, faceCustomizationSignature);
+				}
+			}
+
 			if (!g_previewRoot) {
 				return;
 			}
@@ -2467,6 +2769,17 @@ namespace TF3DHud
 		{
 			std::scoped_lock lock(g_stateLock);
 			LogPreviewRightHandBoneHierarchy();
+		}
+
+		FaceGenDebugSnapshot GetFaceGenDebugSnapshot()
+		{
+			std::scoped_lock lock(g_stateLock);
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player) {
+				return {};
+			}
+
+			return BuildFaceGenDebugSnapshot(*player);
 		}
 	}
 

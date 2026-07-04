@@ -3,6 +3,7 @@
 #include "RE/AnimationSpeedContour.h"
 #include "RE/BSAnimationUpdateData.h"
 #include "RE/BSFaceGenAnimationData.h"
+#include "RE/BSSkin.h"
 #include "RE/BShkbAnimationGraph.h"
 #include "RE/EquipEventSource.h"
 
@@ -18,6 +19,7 @@
 #include "RE/B/BSFixedString.h"
 #include "RE/B/BSGeometry.h"
 #include "RE/B/BSTObjectArena.h"
+#include "RE/B/BSTArray.h"
 #include "RE/B/BSTSmartPointer.h"
 #include "RE/B/BipedAnim.h"
 #include "RE/I/IAnimationGraphManagerHolder.h"
@@ -127,6 +129,7 @@ namespace TF3DHud::Address
 	using CreateHeadForNPC_t = bool(RE::TESNPC*, RE::NiPointer<RE::BSFaceGenNiNode>&, bool, bool, void*);
 	using DestroyAdjustmentArena_t = void(void*);
 	using DoAdjustSkinComplexion_t = std::uint64_t(SkinComplexionContext*, RE::NiAVObject*);
+	using GenerateFlattenedHeadPartArray_t = void(RE::TESNPC*, RE::BSScrapArray<RE::BGSHeadPart*>&);
 	using ForceUpgradeTextures_t = void(RE::NiAVObject*, bool, bool);
 	using GetActorBodyPart3D_t =
 		RE::NiAVObject*(RE::Actor*, RE::NiAVObject*, const std::uint32_t*, bool, bool);
@@ -160,6 +163,14 @@ namespace TF3DHud::Address
 		std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t);
 	using GetUserIndex_t = std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t);
 	using InitWornObject_t = bool(RE::TESNPC*, const BorrowedBipedPointer*, const RE::BGSObjectInstance*);
+	using ApplyAllCustomizationMorphs_t =
+		void(RE::TESNPC*, const RE::BSScrapArray<RE::BGSHeadPart*>&, RE::BSFaceGenNiNode*);
+	using ApplyWeightFaceMorph_t = void(RE::TESNPC*, RE::BSFaceGenNiNode*);
+	using PrepareHeadForShaders_t =
+		void(const RE::BSScrapArray<RE::BGSHeadPart*>&, RE::BSFaceGenNiNode*, RE::TESNPC*, void*);
+	using ScaleFaceBones_t = void(RE::TESNPC*, RE::NiAVObject*, bool);
+	using ScaleFaceSkinBones_t = void(RE::TESNPC*, RE::BSSkin::Instance*);
+	using UpdateAllChildrenMorphData_t = void(RE::BSFaceGenNiNode*, bool);
 	using InitializeSubGraph_t = bool(
 		void*,
 		RE::BShkbAnimationGraph*,
@@ -235,6 +246,7 @@ namespace TF3DHud::Address
 	extern REL::Relocation<CreateHeadForNPC_t*> CreateHeadForNPC;
 	extern REL::Relocation<DestroyAdjustmentArena_t*> DestroyAdjustmentArena;
 	extern REL::Relocation<DoAdjustSkinComplexion_t*> DoAdjustSkinComplexion;
+	extern REL::Relocation<GenerateFlattenedHeadPartArray_t*> GenerateFlattenedHeadPartArray;
 	extern REL::Relocation<ForceUpgradeTextures_t*> ForceUpgradeTextures;
 	extern REL::Relocation<GetActorBodyPart3D_t*> GetActorBodyPart3D;
 	extern REL::Relocation<GetActiveContourFromHolder_t*> GetActiveContourFromHolder;
@@ -257,6 +269,12 @@ namespace TF3DHud::Address
 	extern REL::Relocation<GetSubSegmentIndex_t*> GetSubSegmentIndex;
 	extern REL::Relocation<GetUserIndex_t*> GetUserIndex;
 	extern REL::Relocation<InitWornObject_t*> InitWornObject;
+	extern REL::Relocation<ApplyAllCustomizationMorphs_t*> ApplyAllCustomizationMorphs;
+	extern REL::Relocation<ApplyWeightFaceMorph_t*> ApplyWeightFaceMorph;
+	extern REL::Relocation<PrepareHeadForShaders_t*> PrepareHeadForShaders;
+	extern REL::Relocation<ScaleFaceBones_t*> ScaleFaceBones;
+	extern REL::Relocation<ScaleFaceSkinBones_t*> ScaleFaceSkinBones;
+	extern REL::Relocation<UpdateAllChildrenMorphData_t*> UpdateAllChildrenMorphData;
 	extern REL::Relocation<InitializeSubGraph_t*> InitializeSubGraph;
 	extern REL::Relocation<InterpretAction_t*> InterpretAction;
 	extern REL::Relocation<NotifyAnimationGraphImpl_t*> NotifyAnimationGraphImpl;

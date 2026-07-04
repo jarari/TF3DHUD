@@ -12,6 +12,9 @@
 #include "RE/T/TESObjectARMO.h"
 
 #include <algorithm>
+#include <bit>
+#include <utility>
+#include <vector>
 
 namespace TF3DHud::PreviewRebuilder
 {
@@ -23,6 +26,8 @@ namespace TF3DHud::PreviewRebuilder
 		constexpr std::uint32_t kMorphGeometryQuietFrames = 15;
 		constexpr std::uint32_t kEquipmentSignatureStableFrames = 3;
 		constexpr std::uint32_t kMorphSignatureStableFrames = 3;
+		constexpr std::uint32_t kFaceCustomizationQuietFrames = 3;
+		constexpr std::uint32_t kFaceCustomizationSignatureStableFrames = 3;
 
 		constexpr std::uint16_t kUpdateFlagHeadModel = 0x000C;
 		constexpr std::uint16_t kUpdateFlagScaleSkinBones = 0x0010;
@@ -38,6 +43,127 @@ namespace TF3DHud::PreviewRebuilder
 		void HashInteger(std::uint64_t& a_hash, const std::uintptr_t a_value)
 		{
 			HashValue(a_hash, reinterpret_cast<void*>(a_value));
+		}
+
+		void HashFloat(std::uint64_t& a_hash, const float a_value)
+		{
+			HashInteger(a_hash, std::bit_cast<std::uint32_t>(a_value));
+		}
+
+		void HashTransform(std::uint64_t& a_hash, const RE::BGSCharacterMorph::Transform& a_transform)
+		{
+			HashFloat(a_hash, a_transform.position.x);
+			HashFloat(a_hash, a_transform.position.y);
+			HashFloat(a_hash, a_transform.position.z);
+			HashFloat(a_hash, a_transform.rotation.x);
+			HashFloat(a_hash, a_transform.rotation.y);
+			HashFloat(a_hash, a_transform.rotation.z);
+			HashFloat(a_hash, a_transform.scale.x);
+			HashFloat(a_hash, a_transform.scale.y);
+			HashFloat(a_hash, a_transform.scale.z);
+		}
+
+		void HashMorphRegionSliderValues(std::uint64_t& a_hash, const RE::BSTArray<float>* a_values)
+		{
+			HashValue(a_hash, a_values);
+			if (!a_values) {
+				return;
+			}
+
+			HashInteger(a_hash, a_values->size());
+			for (const float value : *a_values) {
+				HashFloat(a_hash, value);
+			}
+		}
+
+		void HashFacialBoneRegionSliderValues(
+			std::uint64_t& a_hash,
+			const RE::BSTHashMap<std::uint32_t, RE::BGSCharacterMorph::Transform>* a_values)
+		{
+			HashValue(a_hash, a_values);
+			if (!a_values) {
+				return;
+			}
+
+			std::vector<std::pair<std::uint32_t, RE::BGSCharacterMorph::Transform>> entries;
+			entries.reserve(a_values->size());
+			for (const auto& entry : *a_values) {
+				entries.emplace_back(entry.first, entry.second);
+			}
+			std::ranges::sort(entries, {}, &std::pair<std::uint32_t, RE::BGSCharacterMorph::Transform>::first);
+
+			HashInteger(a_hash, entries.size());
+			for (const auto& [key, transform] : entries) {
+				HashInteger(a_hash, key);
+				HashTransform(a_hash, transform);
+			}
+		}
+
+		void HashMorphSliderValues(
+			std::uint64_t& a_hash,
+			const RE::BSTHashMap<std::uint32_t, float>* a_values)
+		{
+			HashValue(a_hash, a_values);
+			if (!a_values) {
+				return;
+			}
+
+			std::vector<std::pair<std::uint32_t, float>> entries;
+			entries.reserve(a_values->size());
+			for (const auto& entry : *a_values) {
+				entries.emplace_back(entry.first, entry.second);
+			}
+			std::ranges::sort(entries, {}, &std::pair<std::uint32_t, float>::first);
+
+			HashInteger(a_hash, entries.size());
+			for (const auto& [key, value] : entries) {
+				HashInteger(a_hash, key);
+				HashFloat(a_hash, value);
+			}
+		}
+
+		void HashTintingData(std::uint64_t& a_hash, const RE::BGSCharacterTint::Entries* a_tintingData)
+		{
+			HashValue(a_hash, a_tintingData);
+			if (!a_tintingData) {
+				return;
+			}
+
+			HashInteger(a_hash, a_tintingData->entriesA.size());
+			for (auto* entry : a_tintingData->entriesA) {
+				HashValue(a_hash, entry);
+				if (!entry) {
+					continue;
+				}
+
+				HashValue(a_hash, entry->templateEntry);
+				HashInteger(a_hash, entry->idLink);
+				HashInteger(a_hash, entry->tingingValue);
+
+				const auto type = entry->GetType();
+				HashInteger(a_hash, static_cast<std::uintptr_t>(type));
+				if (type == RE::BGSCharacterTint::EntryType::kPalette) {
+					const auto* paletteEntry = static_cast<const RE::BGSCharacterTint::PaletteEntry*>(entry);
+					HashInteger(a_hash, paletteEntry->tintingColor);
+					HashInteger(a_hash, paletteEntry->swatchID);
+				}
+			}
+		}
+
+		void HashNPCFaceCustomization(std::uint64_t& a_hash, const RE::TESNPC& a_npc)
+		{
+			HashValue(a_hash, std::addressof(a_npc));
+			HashInteger(a_hash, static_cast<std::uint8_t>(a_npc.bodyTintColorR));
+			HashInteger(a_hash, static_cast<std::uint8_t>(a_npc.bodyTintColorG));
+			HashInteger(a_hash, static_cast<std::uint8_t>(a_npc.bodyTintColorB));
+			HashInteger(a_hash, static_cast<std::uint8_t>(a_npc.bodyTintColorA));
+			HashFloat(a_hash, a_npc.morphWeight.x);
+			HashFloat(a_hash, a_npc.morphWeight.y);
+			HashFloat(a_hash, a_npc.morphWeight.z);
+			HashMorphRegionSliderValues(a_hash, a_npc.morphRegionSliderValues);
+			HashFacialBoneRegionSliderValues(a_hash, a_npc.facialBoneRegionSliderValues);
+			HashMorphSliderValues(a_hash, a_npc.morphSliderValues);
+			HashTintingData(a_hash, a_npc.tintingData);
 		}
 
 		struct GeometryDataView
@@ -77,8 +203,6 @@ namespace TF3DHud::PreviewRebuilder
 		HashValue(hash, npc ? npc->GetRootFaceNPC() : nullptr);
 		HashValue(hash, a_player.GetVisualsRace());
 		HashValue(hash, a_player.charGenRace);
-		HashValue(hash, a_player.complexion);
-		HashValue(hash, a_player.tintingData);
 		HashValue(hash, GetSourceFaceNode(a_player));
 		HashInteger(hash, static_cast<std::uintptr_t>(a_player.GetSex()));
 
@@ -88,18 +212,31 @@ namespace TF3DHud::PreviewRebuilder
 			HashValue(hash, npc->faceNPC);
 			HashValue(hash, g_getSkin(npc));
 			HashValue(hash, npc->headParts);
-			HashValue(hash, npc->morphRegionSliderValues);
-			HashValue(hash, npc->facialBoneRegionSliderValues);
-			HashValue(hash, npc->morphSliderValues);
-			HashValue(hash, npc->tintingData);
 			HashInteger(hash, static_cast<std::uintptr_t>(npc->GetSex()));
 			HashInteger(hash, static_cast<std::uintptr_t>(npc->numHeadParts));
-			HashInteger(hash, static_cast<std::uint8_t>(npc->bodyTintColorR));
-			HashInteger(hash, static_cast<std::uint8_t>(npc->bodyTintColorG));
-			HashInteger(hash, static_cast<std::uint8_t>(npc->bodyTintColorB));
-			HashInteger(hash, static_cast<std::uint8_t>(npc->bodyTintColorA));
 			for (std::int32_t i = 0; i < npc->numHeadParts && npc->headParts; ++i) {
 				HashValue(hash, npc->headParts[i]);
+			}
+		}
+
+		return hash;
+	}
+
+	std::uint64_t BuildFaceCustomizationSignature(RE::PlayerCharacter& a_player)
+	{
+		std::uint64_t hash = 1469598103934665603ull;
+
+		auto* playerBase = a_player.GetObjectReference();
+		auto* npc = playerBase ? playerBase->As<RE::TESNPC>() : nullptr;
+		HashValue(hash, npc);
+		HashValue(hash, npc ? npc->GetRootFaceNPC() : nullptr);
+		HashValue(hash, a_player.complexion);
+		HashTintingData(hash, a_player.tintingData);
+
+		if (npc) {
+			HashNPCFaceCustomization(hash, *npc);
+			if (auto* rootFaceNPC = npc->GetRootFaceNPC(); rootFaceNPC && rootFaceNPC != npc) {
+				HashNPCFaceCustomization(hash, *rootFaceNPC);
 			}
 		}
 
@@ -182,6 +319,7 @@ namespace TF3DHud::PreviewRebuilder
 		}
 		if ((a_updateFlags & kUpdateFlagHeadModel) != 0 || a_updateEditorDeadModel) {
 			Request(DirtyFlag::kFaceStructure);
+			Request(DirtyFlag::kFaceCustomization);
 			Request(DirtyFlag::kMorphGeometry);
 		}
 		if ((a_updateFlags & kUpdateFlagFull3D) != 0) {
@@ -205,6 +343,12 @@ namespace TF3DHud::PreviewRebuilder
 			pendingMorphSignature_ = 0;
 			pendingMorphSignatureFrames_ = 0;
 		}
+		if ((requested & ToMask(DirtyFlag::kFaceStructure)) != 0) {
+			committedVisualSignature_ = 0;
+			faceCustomizationQuietFrames_ = kFaceCustomizationQuietFrames;
+			pendingFaceCustomizationSignature_ = 0;
+			pendingFaceCustomizationSignatureFrames_ = 0;
+		}
 		if ((requested & ToMask(DirtyFlag::kMorphGeometry)) != 0) {
 			morphAuditFrames_ = std::max(morphAuditFrames_, kMorphGeometryAuditFrames);
 			morphQuietFrames_ = kMorphGeometryQuietFrames;
@@ -213,6 +357,11 @@ namespace TF3DHud::PreviewRebuilder
 		}
 		if ((requested & ToMask(DirtyFlag::kSkeletonAdjust)) != 0) {
 			skeletonAdjustmentRequested_ = true;
+		}
+		if ((requested & ToMask(DirtyFlag::kFaceCustomization)) != 0) {
+			faceCustomizationQuietFrames_ = kFaceCustomizationQuietFrames;
+			pendingFaceCustomizationSignature_ = 0;
+			pendingFaceCustomizationSignatureFrames_ = 0;
 		}
 		if ((requested & ToMask(DirtyFlag::kBehaviorGraph)) != 0) {
 			behaviorGraphRefreshRequested_ = true;
@@ -231,6 +380,9 @@ namespace TF3DHud::PreviewRebuilder
 		morphQuietFrames_ = 0;
 		pendingMorphSignature_ = 0;
 		pendingMorphSignatureFrames_ = 0;
+		faceCustomizationQuietFrames_ = 0;
+		pendingFaceCustomizationSignature_ = 0;
+		pendingFaceCustomizationSignatureFrames_ = 0;
 		ClearCommittedSignatures();
 		skeletonAdjustmentRequested_ = false;
 		behaviorGraphRefreshRequested_ = false;
@@ -241,6 +393,7 @@ namespace TF3DHud::PreviewRebuilder
 		committedEquipmentSignature_ = 0;
 		committedVisualSignature_ = 0;
 		committedMorphGeometrySignature_ = 0;
+		committedFaceCustomizationSignature_ = 0;
 	}
 
 	bool Controller::NeedsSkeletonBuild(const std::uint64_t a_currentVisualSignature, const bool a_hasPreviewRoot) const
@@ -328,14 +481,49 @@ namespace TF3DHud::PreviewRebuilder
 		return a_currentSignature;
 	}
 
+	std::optional<std::uint64_t> Controller::TryResolveFaceCustomizationSignature(
+		const std::uint64_t a_currentSignature)
+	{
+		if (HasRequested(DirtyFlag::kEquipment) ||
+			HasRequested(DirtyFlag::kFaceStructure) ||
+			HasRequested(DirtyFlag::kFaceCustomization) ||
+			equipmentAuditFrames_ != 0) {
+			faceCustomizationQuietFrames_ = kFaceCustomizationQuietFrames;
+			pendingFaceCustomizationSignature_ = 0;
+			pendingFaceCustomizationSignatureFrames_ = 0;
+			return std::nullopt;
+		}
+		if (faceCustomizationQuietFrames_ != 0) {
+			--faceCustomizationQuietFrames_;
+			pendingFaceCustomizationSignature_ = 0;
+			pendingFaceCustomizationSignatureFrames_ = 0;
+			return std::nullopt;
+		}
+
+		if (!TryAcceptStableChangedSignature(
+				a_currentSignature,
+				committedFaceCustomizationSignature_,
+				pendingFaceCustomizationSignature_,
+				pendingFaceCustomizationSignatureFrames_,
+				kFaceCustomizationSignatureStableFrames)) {
+			return std::nullopt;
+		}
+
+		pendingFaceCustomizationSignature_ = 0;
+		pendingFaceCustomizationSignatureFrames_ = 0;
+		return a_currentSignature;
+	}
+
 	void Controller::CommitSkeletonBuild(
 		const std::uint64_t a_equipmentSignature,
 		const std::uint64_t a_visualSignature,
-		const std::uint64_t a_morphGeometrySignature)
+		const std::uint64_t a_morphGeometrySignature,
+		const std::uint64_t a_faceCustomizationSignature)
 	{
 		committedEquipmentSignature_ = a_equipmentSignature;
 		committedVisualSignature_ = a_visualSignature;
 		committedMorphGeometrySignature_ = a_morphGeometrySignature;
+		committedFaceCustomizationSignature_ = a_faceCustomizationSignature;
 	}
 
 	void Controller::CommitEquipmentLayer(
@@ -345,6 +533,11 @@ namespace TF3DHud::PreviewRebuilder
 		committedEquipmentSignature_ = a_equipmentSignature;
 		committedMorphGeometrySignature_ = a_morphGeometrySignature;
 		RequestBehaviorGraphRefresh();
+	}
+
+	void Controller::CommitFaceCustomization(const std::uint64_t a_faceCustomizationSignature)
+	{
+		committedFaceCustomizationSignature_ = a_faceCustomizationSignature;
 	}
 
 	void Controller::RequestSkeletonAdjustment()

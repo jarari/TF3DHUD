@@ -481,10 +481,6 @@ namespace TF3DHud::Imgui
 
 		void DrawSubgraphState(const Animations::DebugSnapshot& a_snapshot)
 		{
-			if (!ImGui::CollapsingHeader("Subgraphs", ImGuiTreeNodeFlags_DefaultOpen)) {
-				return;
-			}
-
 			ImGui::Text(
 				"swapData=%p slots=%u/%u requested=%u linked=%u pendingRemove=%u useCountTotal=%u stateMachine=%p behavior=%p",
 				reinterpret_cast<void*>(a_snapshot.subgraphSwapData),
@@ -615,6 +611,110 @@ namespace TF3DHud::Imgui
 				speed.contourResponse,
 				speed.adjustmentCount,
 				speed.contourApplied ? "true" : "false");
+		}
+
+		void DrawActiveNodesTable(const Animations::DebugSnapshot& a_snapshot);
+
+		void DrawGraphInfoTab(const Animations::DebugSnapshot& a_snapshot)
+		{
+			if (!a_snapshot.lastDiagnostic.empty()) {
+				ImGui::Text("Last diagnostic: %s", a_snapshot.lastDiagnostic.c_str());
+			}
+			if (ImGui::Button("Log Right-Hand Bone Hierarchy")) {
+				Previewer::LogRightHandBoneHierarchy();
+			}
+			ImGui::Separator();
+
+			ImGui::Text("Project: %s", a_snapshot.project.empty() ? "(none)" : a_snapshot.project.c_str());
+			ImGui::Text(
+				"Manager=%p Graph=%p Behavior=%p ActiveGraph=%u/%u",
+				reinterpret_cast<void*>(a_snapshot.manager),
+				reinterpret_cast<void*>(a_snapshot.graph),
+				reinterpret_cast<void*>(a_snapshot.behaviorGraph),
+				a_snapshot.activeGraphIndex,
+				a_snapshot.graphCount);
+			ImGui::Text(
+				"Behavior active=%s linked=%s updateActiveNodes=%s stateOrTransitionChanged=%s activeNodes=%u shown=%zu",
+				a_snapshot.behaviorActive ? "true" : "false",
+				a_snapshot.behaviorLinked ? "true" : "false",
+				a_snapshot.updateActiveNodes ? "true" : "false",
+				a_snapshot.stateOrTransitionChanged ? "true" : "false",
+				a_snapshot.activeNodeCount,
+				a_snapshot.activeNodes.size());
+			ImGui::Text(
+				"generateHavokBones=%s ragdollInterface=%s physicsWorld=%s windowActive=%s",
+				a_snapshot.generateHavokBones ? "true" : "false",
+				a_snapshot.hasRagdollInterface ? "true" : "false",
+				a_snapshot.hasPhysicsWorld ? "true" : "false",
+				g_windowActive ? "true" : "false");
+			ImGui::Text(
+				"Live sync active=%s time=%.4f/%.4f speed=%.4f points=%u",
+				a_snapshot.liveSync.active ? "true" : "false",
+				a_snapshot.liveSync.currentTime,
+				a_snapshot.liveSync.totalTime,
+				a_snapshot.liveSync.speed,
+				a_snapshot.liveSync.syncPointCount);
+			ImGui::Text(
+				"Preview sync active=%s time=%.4f/%.4f speed=%.4f points=%u",
+				a_snapshot.previewSync.active ? "true" : "false",
+				a_snapshot.previewSync.currentTime,
+				a_snapshot.previewSync.totalTime,
+				a_snapshot.previewSync.speed,
+				a_snapshot.previewSync.syncPointCount);
+			DrawSpeedChannelState(a_snapshot);
+		}
+
+		void DrawActiveNodesTab(const Animations::DebugSnapshot& a_snapshot)
+		{
+			DrawActiveClip(a_snapshot);
+			ImGui::Separator();
+			DrawActiveNodesTable(a_snapshot);
+		}
+
+		void DrawFaceGenTab()
+		{
+			const auto snapshot = Previewer::GetFaceGenDebugSnapshot();
+			if (snapshot.sliders.empty()) {
+				ImGui::TextDisabled("No FaceGen slider data.");
+				return;
+			}
+
+			constexpr ImGuiTableFlags tableFlags =
+				ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+				ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg |
+				ImGuiTableFlags_SizingStretchProp;
+
+			if (!ImGui::BeginTable("facegen_sliders", 4, tableFlags)) {
+				return;
+			}
+
+			ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthStretch, 1.3F);
+			ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 54.0F);
+			ImGui::TableSetupColumn("Live", ImGuiTableColumnFlags_WidthStretch, 1.5F);
+			ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch, 1.5F);
+			ImGui::TableHeadersRow();
+
+			for (const auto& slider : snapshot.sliders) {
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TextUnformatted(slider.category.c_str());
+				ImGui::TableSetColumnIndex(1);
+				ImGui::Text("%u", slider.id);
+				ImGui::TableSetColumnIndex(2);
+				if (slider.hasLive) {
+					ImGui::TextUnformatted(slider.liveValue.c_str());
+				} else {
+					ImGui::TextDisabled("-");
+				}
+				ImGui::TableSetColumnIndex(3);
+				if (slider.hasPreview) {
+					ImGui::TextUnformatted(slider.previewValue.c_str());
+				} else {
+					ImGui::TextDisabled("-");
+				}
+			}
+
+			ImGui::EndTable();
 		}
 
 		void DrawActiveNodesTable(const Animations::DebugSnapshot& a_snapshot)
@@ -951,60 +1051,28 @@ namespace TF3DHud::Imgui
 
 		void DrawDebugTab()
 		{
-			const auto snapshot = Animations::GetDebugSnapshot();
-
-			ImGui::Text("Project: %s", snapshot.project.empty() ? "(none)" : snapshot.project.c_str());
-			if (!snapshot.lastDiagnostic.empty()) {
-				ImGui::Text("Last diagnostic: %s", snapshot.lastDiagnostic.c_str());
+			if (ImGui::BeginTabBar("debug_tabs")) {
+				if (ImGui::BeginTabItem("Graph Info")) {
+					const auto snapshot = Animations::GetDebugSnapshot();
+					DrawGraphInfoTab(snapshot);
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem("Subgraphs")) {
+					const auto snapshot = Animations::GetDebugSnapshot();
+					DrawSubgraphState(snapshot);
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem("Active Nodes")) {
+					const auto snapshot = Animations::GetDebugSnapshot();
+					DrawActiveNodesTab(snapshot);
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem("FaceGen")) {
+					DrawFaceGenTab();
+					ImGui::EndTabItem();
+				}
+				ImGui::EndTabBar();
 			}
-			if (ImGui::Button("Log Right-Hand Bone Hierarchy")) {
-				Previewer::LogRightHandBoneHierarchy();
-			}
-			ImGui::Separator();
-
-			ImGui::Text(
-				"Manager=%p Graph=%p Behavior=%p ActiveGraph=%u/%u",
-				reinterpret_cast<void*>(snapshot.manager),
-				reinterpret_cast<void*>(snapshot.graph),
-				reinterpret_cast<void*>(snapshot.behaviorGraph),
-				snapshot.activeGraphIndex,
-				snapshot.graphCount);
-			ImGui::Text(
-				"Behavior active=%s linked=%s updateActiveNodes=%s stateOrTransitionChanged=%s activeNodes=%u shown=%zu",
-				snapshot.behaviorActive ? "true" : "false",
-				snapshot.behaviorLinked ? "true" : "false",
-				snapshot.updateActiveNodes ? "true" : "false",
-				snapshot.stateOrTransitionChanged ? "true" : "false",
-				snapshot.activeNodeCount,
-				snapshot.activeNodes.size());
-			ImGui::Text(
-				"generateHavokBones=%s ragdollInterface=%s physicsWorld=%s windowActive=%s",
-				snapshot.generateHavokBones ? "true" : "false",
-				snapshot.hasRagdollInterface ? "true" : "false",
-				snapshot.hasPhysicsWorld ? "true" : "false",
-				g_windowActive ? "true" : "false");
-			ImGui::Text(
-				"Live sync active=%s time=%.4f/%.4f speed=%.4f points=%u",
-				snapshot.liveSync.active ? "true" : "false",
-				snapshot.liveSync.currentTime,
-				snapshot.liveSync.totalTime,
-				snapshot.liveSync.speed,
-				snapshot.liveSync.syncPointCount);
-			ImGui::Text(
-				"Preview sync active=%s time=%.4f/%.4f speed=%.4f points=%u",
-				snapshot.previewSync.active ? "true" : "false",
-				snapshot.previewSync.currentTime,
-				snapshot.previewSync.totalTime,
-				snapshot.previewSync.speed,
-				snapshot.previewSync.syncPointCount);
-			DrawSpeedChannelState(snapshot);
-			ImGui::Separator();
-
-			DrawSubgraphState(snapshot);
-			ImGui::Separator();
-			DrawActiveClip(snapshot);
-			ImGui::Separator();
-			DrawActiveNodesTable(snapshot);
 		}
 
 		void DrawMainWindow()

@@ -22,6 +22,7 @@ namespace TF3DHud::Address
 	REL::Relocation<CreateHeadForNPC_t*> CreateHeadForNPC{ REL::ID(1455012) };
 	REL::Relocation<DestroyAdjustmentArena_t*> DestroyAdjustmentArena{ REL::ID(1000046) };
 	REL::Relocation<DoAdjustSkinComplexion_t*> DoAdjustSkinComplexion{ REL::ID(1295935) };
+	REL::Relocation<GenerateFlattenedHeadPartArray_t*> GenerateFlattenedHeadPartArray{ REL::ID(72114) };
 	REL::Relocation<ForceUpgradeTextures_t*> ForceUpgradeTextures{ REL::ID{ 1417022, 2229490 } };
 	REL::Relocation<GetActorBodyPart3D_t*> GetActorBodyPart3D{ REL::ID(157573) };
 	REL::Relocation<GetActiveContourFromHolder_t*> GetActiveContourFromHolder{ REL::ID(1388221) };
@@ -46,6 +47,15 @@ namespace TF3DHud::Address
 	REL::Relocation<GetSubSegmentIndex_t*> GetSubSegmentIndex{ REL::ID(453731) };
 	REL::Relocation<GetUserIndex_t*> GetUserIndex{ REL::ID(985810) };
 	REL::Relocation<InitWornObject_t*> InitWornObject{ REL::ID(1374346) };
+	// IDA OG 1.10.163: BSFaceGenUtils::CreateHeadForNPC applies these after
+	// headpart creation. The preview customization pass reuses that apply half
+	// without replacing the existing BSFaceGenNiNode/headpart tree.
+	REL::Relocation<ApplyAllCustomizationMorphs_t*> ApplyAllCustomizationMorphs{ REL::ID(877425) };
+	REL::Relocation<ApplyWeightFaceMorph_t*> ApplyWeightFaceMorph{ REL::ID(1582451) };
+	REL::Relocation<PrepareHeadForShaders_t*> PrepareHeadForShaders{ REL::ID(305300) };
+	REL::Relocation<ScaleFaceBones_t*> ScaleFaceBones{ REL::ID{ 839112, 2207358 } };
+	REL::Relocation<ScaleFaceSkinBones_t*> ScaleFaceSkinBones{ REL::ID(1011655) };
+	REL::Relocation<UpdateAllChildrenMorphData_t*> UpdateAllChildrenMorphData{ REL::ID{ 213436, 2209481 } };
 	// IDA OG 1.10.163: BSBehaviorGraphSwapSingleton::InitializeSubGraph at 0x1416F3890.
 	// The AE ID is not present in the local OG->AE mapping CSV yet.
 	REL::Relocation<InitializeSubGraph_t*> InitializeSubGraph{ REL::ID(649876) };
