@@ -115,9 +115,6 @@ namespace TF3DHud::PreviewRenderTree
 	void PreparePreviewTree(RE::NiAVObject& a_previewRoot)
 	{
 		ForEachAVObject(std::addressof(a_previewRoot), [&](RE::NiAVObject& a_object) {
-			if (a_object.GetAppCulled()) {
-				a_object.SetAppCulled(false);
-			}
 			a_object.fadeAmount = 1.0F;
 			if (auto* fadeNode = a_object.IsFadeNode()) {
 				MakePreviewFadeNodeVisible(*fadeNode);
