@@ -6,14 +6,17 @@
 #include "RE/M/MenuOpenCloseEvent.h"
 #include "RE/U/UI.h"
 
+#include <atomic>
 #include <string_view>
 
 namespace TF3DHud::Events
 {
 	namespace
 	{
+		constexpr std::string_view kHUDMenuName{ "HUDMenu" };
 		constexpr std::string_view kLooksMenuName{ "LooksMenu" };
 		bool g_registered{ false };
+		std::atomic_bool g_hudMenuOpen{ true };
 
 		[[nodiscard]] bool IsMenu(const RE::BSFixedString& a_menuName, const std::string_view a_expected)
 		{
@@ -29,6 +32,11 @@ namespace TF3DHud::Events
 				const RE::MenuOpenCloseEvent& a_event,
 				RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
 			{
+				if (IsMenu(a_event.menuName, kHUDMenuName)) {
+					g_hudMenuOpen.store(a_event.opening, std::memory_order_release);
+					return RE::BSEventNotifyControl::kContinue;
+				}
+
 				if (!IsMenu(a_event.menuName, kLooksMenuName)) {
 					return RE::BSEventNotifyControl::kContinue;
 				}
@@ -44,6 +52,11 @@ namespace TF3DHud::Events
 		};
 
 		MenuOpenCloseSink g_menuOpenCloseSink;
+	}
+
+	bool IsHUDMenuOpen()
+	{
+		return g_hudMenuOpen.load(std::memory_order_acquire);
 	}
 
 	void Register()

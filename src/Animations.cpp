@@ -65,7 +65,6 @@ namespace TF3DHud::Animations
 			"reloadStart",
 			"reloadStateEnter",
 			"reloadStateExit",
-			"reloadStartSlaveLoop",
 			"reloadReserveStart",
 			"attackStart",
 			"attackStartAuto",
@@ -99,7 +98,6 @@ namespace TF3DHud::Animations
 			"sightedStateEnter",
 			"sightedStateExit",
 			"boltChargeStart",
-			"boltChargeStartSlave",
 			"UpdateSighted",
 			"jumpStart",
 			"jumpStartFromWalk",
@@ -127,8 +125,6 @@ namespace TF3DHud::Animations
 			"moveStart",
 			"moveStartAnimated",
 			"moveStop",
-			"moveStartSlave",
-			"moveStopSlave",
 			"sprintStart",
 			"sprintStop",
 			"walkStart",
@@ -274,6 +270,13 @@ namespace TF3DHud::Animations
 
 		using SyncPointType = Address::SyncPointType;
 		using SubgraphPreloadArena = RE::BSTObjectArena<RE::BSFixedString, RE::BSTObjectArenaScrapAlloc, 32>;
+
+		struct LiveGraphRequest
+		{
+			RE::BSAnimationGraphManager* manager{ nullptr };
+			RE::BSFixedString eventName;
+			std::uint32_t result{ 0 };
+		};
 
 		auto& g_constructBShkbAnimationGraph = Address::ConstructBShkbAnimationGraph;
 		auto& g_notifyAnimationGraphImpl = Address::NotifyAnimationGraphImpl;
@@ -2383,6 +2386,8 @@ namespace TF3DHud::Animations
 		std::string g_lastDiagnostic;
 		std::uint64_t g_liveSubgraphSignature{ 0 };
 		std::recursive_mutex g_stateLock;
+		std::mutex g_pendingLiveGraphRequestsLock;
+		std::vector<LiveGraphRequest> g_pendingLiveGraphRequests;
 
 		void LogDiagnostic(std::string a_message)
 		{
@@ -2457,6 +2462,31 @@ namespace TF3DHud::Animations
 			g_holder.reset();
 			g_project.clear();
 			g_liveSubgraphSignature = 0;
+
+			std::scoped_lock lock(g_pendingLiveGraphRequestsLock);
+			g_pendingLiveGraphRequests.clear();
+		}
+
+		void DrainPendingLiveGraphRequests()
+		{
+			std::vector<LiveGraphRequest> requests;
+			{
+				std::scoped_lock lock(g_pendingLiveGraphRequestsLock);
+				if (g_pendingLiveGraphRequests.empty()) {
+					return;
+				}
+				requests.swap(g_pendingLiveGraphRequests);
+			}
+
+			if (!g_holder) {
+				return;
+			}
+
+			for (const auto& request : requests) {
+				if (g_holder->IsLiveSourceManager(request.manager)) {
+					g_holder->ObserveLiveGraphRequest(request.eventName.c_str(), request.result);
+				}
+			}
 		}
 
 		[[nodiscard]] bool EnsureGraph(RE::PlayerCharacter& a_player, RE::NiAVObject& a_previewRoot)
@@ -2549,6 +2579,7 @@ namespace TF3DHud::Animations
 		if (!EnsureGraph(a_player, a_previewRoot) || !g_holder) {
 			return;
 		}
+		DrainPendingLiveGraphRequests();
 		g_holder->SyncWhitelistedGraphVariablesFromLive();
 		g_holder->RefreshPendingSubgraphLoads();
 		g_holder->TryApplyInitialAnimationState();
@@ -2573,18 +2604,18 @@ namespace TF3DHud::Animations
 
 	void ObserveGraphRequest(RE::BSAnimationGraphManager* a_manager, const char* a_eventName, const std::uint32_t a_result)
 	{
+		if (!a_manager || !a_eventName || a_eventName[0] == '\0') {
+			return;
+		}
+
 		// This hook runs while vanilla graph event dispatch owns its event-source lock.
-		// Do not wait on the render-boundary animation mutex from that context.
-		std::unique_lock lock(g_stateLock, std::try_to_lock);
-		if (!lock.owns_lock()) {
-			return;
-		}
-
-		if (!g_holder || !g_holder->IsLiveSourceManager(a_manager)) {
-			return;
-		}
-
-		g_holder->ObserveLiveGraphRequest(a_eventName, a_result);
+		// Copy the request and let the preview update thread apply filtering/mirroring.
+		std::scoped_lock lock(g_pendingLiveGraphRequestsLock);
+		g_pendingLiveGraphRequests.push_back({
+			.manager = a_manager,
+			.eventName = RE::BSFixedString(a_eventName),
+			.result = a_result,
+		});
 	}
 
 	DebugSnapshot GetDebugSnapshot()

@@ -1,9 +1,9 @@
 #include "PreviewVisibility.h"
 
 #include "Config.h"
+#include "Events.h"
 #include "PreviewRebuilder.h"
 
-#include "RE/H/HUDMenu.h"
 #include "RE/P/PlayerCamera.h"
 #include "RE/P/PlayerControls.h"
 #include "RE/P/PowerArmor.h"
@@ -17,21 +17,8 @@ namespace TF3DHud::PreviewVisibility
 	{
 		[[nodiscard]] bool IsHudAvailable(std::string& a_reason)
 		{
-			const auto ui = RE::UI::GetSingleton();
-			if (!ui) {
-				a_reason = "UI singleton is null";
-				return false;
-			}
-
-			const auto hudMenu = ui->GetMenu<RE::HUDMenu>();
-			if (!hudMenu) {
-				a_reason = "HUDMenu is null";
-				return false;
-			}
-
-			if (hudMenu->hudShowMenuState != RE::HUDMenu::ShowMenuState::kShown) {
-				a_reason = "HUDMenu is hidden by show state " +
-				           std::to_string(std::to_underlying(hudMenu->hudShowMenuState.get()));
+			if (!Events::IsHUDMenuOpen()) {
+				a_reason = "HUDMenu is closed";
 				return false;
 			}
 

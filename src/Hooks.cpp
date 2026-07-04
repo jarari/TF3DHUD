@@ -20,7 +20,6 @@
 #include "RE/P/PlayerCharacter.h"
 #include "RE/T/TESEquipEvent.h"
 #include "RE/T/TESForm.h"
-#include "REX/FModule.h"
 
 #include <cstdint>
 
@@ -33,7 +32,6 @@ namespace TF3DHud
 		using Update3DModel_t = Address::Update3DModel_t;
 		using RenderSceneDeferred_t = Address::RenderSceneDeferred_t;
 		using RenderPrepassesAndMenus_t = Address::RenderPrepassesAndMenus_t;
-		using Interface3DRendererCreate_t = Address::Interface3DRendererCreate_t;
 
 		const auto& g_runActorUpdatesCall = Address::RunActorUpdatesCall;
 		auto& g_processGraphEventTarget = Address::ProcessGraphEventTarget;
@@ -60,14 +58,7 @@ namespace TF3DHud
 		auto& g_qTiledLighting = Address::QTiledLighting;
 		RenderSceneDeferred_t* g_renderSceneDeferred{ nullptr };
 		RenderPrepassesAndMenus_t* g_renderPrepassesAndMenus{ nullptr };
-		Interface3DRendererCreate_t* g_powerArmorGeometryCreateRenderer{ nullptr };
 		bool g_equipWatcherRegistered{ false };
-
-		struct BSReadWriteLockState
-		{
-			volatile std::uint32_t writerThread;
-			volatile std::uint32_t lock;
-		};
 
 		class EquipWatcher :
 			public RE::BSTEventSink<RE::TESEquipEvent>
@@ -115,13 +106,6 @@ namespace TF3DHud
 			source->RegisterSink(EquipWatcher::GetSingleton());
 			g_equipWatcherRegistered = true;
 			REX::INFO("Registered TESEquipEvent watcher");
-		}
-
-		[[nodiscard]] bool IsInterface3DRendererRegistryReadLocked()
-		{
-			const auto* const lock = reinterpret_cast<const BSReadWriteLockState*>(
-				Address::Interface3DRenderersRWLock.address());
-			return lock && lock->writerThread == 0 && lock->lock != 0;
 		}
 
 		[[nodiscard]] bool IsTF3DHudOffscreenRender(RE::ShadowSceneNode* a_shadowSceneNode)
@@ -213,25 +197,6 @@ namespace TF3DHud
 			}
 		}
 
-		RE::Interface3D::Renderer* HookedPowerArmorGeometryCreateRenderer(
-			const RE::BSFixedString& a_name,
-			RE::UI_DEPTH_PRIORITY a_depth,
-			float a_fov,
-			bool a_alwaysRenderWhenEnabled)
-		{
-			// IDA: PowerArmorGeometry::~PowerArmorGeometry can run from HUDMenu destruction
-			// inside Interface3D::Renderer::RenderAll, while RenderersRWLock is held for
-			// read. Let the existing destructor fallback skip Create/Release instead of
-			// self-deadlocking in Interface3D::Renderer::Create.
-			if (IsInterface3DRendererRegistryReadLocked()) {
-				return nullptr;
-			}
-
-			return g_powerArmorGeometryCreateRenderer ?
-				g_powerArmorGeometryCreateRenderer(a_name, a_depth, a_fov, a_alwaysRenderWhenEnabled) :
-				nullptr;
-		}
-
 		void F4SEMessageHandler(F4SE::MessagingInterface::Message* a_message)
 		{
 			if (!a_message) {
@@ -303,20 +268,5 @@ namespace TF3DHud
 			"Installed Interface3D deferred render hook at {:X}",
 			g_interface3DDrawModelRenderSceneDeferredCall.address());
 
-		if (REX::FModule::IsRuntimeOG()) {
-			g_powerArmorGeometryCreateRenderer = reinterpret_cast<Interface3DRendererCreate_t*>(
-				trampoline.write_call<5>(
-					Address::PowerArmorGeometryPowerArmorRendererCreateCall.address(),
-					&HookedPowerArmorGeometryCreateRenderer));
-			trampoline.write_call<5>(
-				Address::PowerArmorGeometryHUDRainRendererCreateCall.address(),
-				&HookedPowerArmorGeometryCreateRenderer);
-			REX::INFO(
-				"Installed PowerArmorGeometry renderer create guards at {:X} and {:X}",
-				Address::PowerArmorGeometryPowerArmorRendererCreateCall.address(),
-				Address::PowerArmorGeometryHUDRainRendererCreateCall.address());
-		} else {
-			REX::WARN("Skipped PowerArmorGeometry renderer create guards: AE call sites need IDA validation");
-		}
 	}
 }
