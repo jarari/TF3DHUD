@@ -32,6 +32,22 @@ namespace TF3DHud
 		bool followZ{ true };
 	};
 
+	struct AnimationMirrorEventSettings
+	{
+		bool locomotion{ true };
+		bool sneak{ true };
+		bool jump{ true };
+		bool weaponFire{ true };
+		bool weaponReload{ true };
+		bool melee{ true };
+		bool throwable{ true };
+	};
+
+	struct AnimationSettings
+	{
+		AnimationMirrorEventSettings mirrorEvents;
+	};
+
 	struct Config
 	{
 		bool enabled{ true };
@@ -43,6 +59,7 @@ namespace TF3DHud
 		float yawDegrees{ 160.0F };
 		std::int32_t anchor{ 1 };
 		CameraFramingSettings camera;
+		AnimationSettings animation;
 		ClipRectSettings clipRect;
 		bool hideInPowerArmor{ true };
 		std::uint32_t uiMenuKey{ 0xDE };

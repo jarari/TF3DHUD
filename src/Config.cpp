@@ -146,6 +146,13 @@ namespace TF3DHud
 			a_ini.SetBoolValue("Camera", "FollowX", g_config.camera.followX);
 			a_ini.SetBoolValue("Camera", "FollowY", g_config.camera.followY);
 			a_ini.SetBoolValue("Camera", "FollowZ", g_config.camera.followZ);
+			a_ini.SetBoolValue("Animation", "MirrorLocomotion", g_config.animation.mirrorEvents.locomotion);
+			a_ini.SetBoolValue("Animation", "MirrorSneak", g_config.animation.mirrorEvents.sneak);
+			a_ini.SetBoolValue("Animation", "MirrorJump", g_config.animation.mirrorEvents.jump);
+			a_ini.SetBoolValue("Animation", "MirrorWeaponFire", g_config.animation.mirrorEvents.weaponFire);
+			a_ini.SetBoolValue("Animation", "MirrorWeaponReload", g_config.animation.mirrorEvents.weaponReload);
+			a_ini.SetBoolValue("Animation", "MirrorMelee", g_config.animation.mirrorEvents.melee);
+			a_ini.SetBoolValue("Animation", "MirrorThrow", g_config.animation.mirrorEvents.throwable);
 			a_ini.SetDoubleValue("ClipRect", "Left", g_config.clipRect.left);
 			a_ini.SetDoubleValue("ClipRect", "Top", g_config.clipRect.top);
 			a_ini.SetDoubleValue("ClipRect", "Right", g_config.clipRect.right);
@@ -170,6 +177,13 @@ namespace TF3DHud
 			a_ini.SetBoolValue("Camera", "FollowX", a_config.camera.followX);
 			a_ini.SetBoolValue("Camera", "FollowY", a_config.camera.followY);
 			a_ini.SetBoolValue("Camera", "FollowZ", a_config.camera.followZ);
+			a_ini.SetBoolValue("Animation", "MirrorLocomotion", a_config.animation.mirrorEvents.locomotion);
+			a_ini.SetBoolValue("Animation", "MirrorSneak", a_config.animation.mirrorEvents.sneak);
+			a_ini.SetBoolValue("Animation", "MirrorJump", a_config.animation.mirrorEvents.jump);
+			a_ini.SetBoolValue("Animation", "MirrorWeaponFire", a_config.animation.mirrorEvents.weaponFire);
+			a_ini.SetBoolValue("Animation", "MirrorWeaponReload", a_config.animation.mirrorEvents.weaponReload);
+			a_ini.SetBoolValue("Animation", "MirrorMelee", a_config.animation.mirrorEvents.melee);
+			a_ini.SetBoolValue("Animation", "MirrorThrow", a_config.animation.mirrorEvents.throwable);
 			a_ini.SetDoubleValue("ClipRect", "Left", a_config.clipRect.left);
 			a_ini.SetDoubleValue("ClipRect", "Right", a_config.clipRect.right);
 			a_ini.SetDoubleValue("ClipRect", "Top", a_config.clipRect.top);
@@ -361,6 +375,20 @@ namespace TF3DHud
 		g_config.camera.followX = ini.GetBoolValue("Camera", "FollowX", g_config.camera.followX);
 		g_config.camera.followY = ini.GetBoolValue("Camera", "FollowY", g_config.camera.followY);
 		g_config.camera.followZ = ini.GetBoolValue("Camera", "FollowZ", g_config.camera.followZ);
+		g_config.animation.mirrorEvents.locomotion =
+			ini.GetBoolValue("Animation", "MirrorLocomotion", g_config.animation.mirrorEvents.locomotion);
+		g_config.animation.mirrorEvents.sneak =
+			ini.GetBoolValue("Animation", "MirrorSneak", g_config.animation.mirrorEvents.sneak);
+		g_config.animation.mirrorEvents.jump =
+			ini.GetBoolValue("Animation", "MirrorJump", g_config.animation.mirrorEvents.jump);
+		g_config.animation.mirrorEvents.weaponFire =
+			ini.GetBoolValue("Animation", "MirrorWeaponFire", g_config.animation.mirrorEvents.weaponFire);
+		g_config.animation.mirrorEvents.weaponReload =
+			ini.GetBoolValue("Animation", "MirrorWeaponReload", g_config.animation.mirrorEvents.weaponReload);
+		g_config.animation.mirrorEvents.melee =
+			ini.GetBoolValue("Animation", "MirrorMelee", g_config.animation.mirrorEvents.melee);
+		g_config.animation.mirrorEvents.throwable =
+			ini.GetBoolValue("Animation", "MirrorThrow", g_config.animation.mirrorEvents.throwable);
 		g_config.clipRect.left = static_cast<float>(ini.GetDoubleValue("ClipRect", "Left", g_config.clipRect.left));
 		g_config.clipRect.top = static_cast<float>(ini.GetDoubleValue("ClipRect", "Top", g_config.clipRect.top));
 		g_config.clipRect.right = static_cast<float>(ini.GetDoubleValue("ClipRect", "Right", g_config.clipRect.right));

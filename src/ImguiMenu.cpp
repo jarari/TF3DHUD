@@ -1056,6 +1056,20 @@ namespace TF3DHud::Imgui
 			}
 		}
 
+		void DrawAnimationTab()
+		{
+			auto& mirrorEvents = GetMutableConfig().animation.mirrorEvents;
+
+			ImGui::TextUnformatted("Mirror Events / Graph Variables");
+			ImGui::Checkbox("Locomotion", &mirrorEvents.locomotion);
+			ImGui::Checkbox("Sneak", &mirrorEvents.sneak);
+			ImGui::Checkbox("Jump", &mirrorEvents.jump);
+			ImGui::Checkbox("Weapon Fire", &mirrorEvents.weaponFire);
+			ImGui::Checkbox("Weapon Reload", &mirrorEvents.weaponReload);
+			ImGui::Checkbox("Melee", &mirrorEvents.melee);
+			ImGui::Checkbox("Throw", &mirrorEvents.throwable);
+		}
+
 		[[nodiscard]] bool LightNameExists(const Config& a_config, const std::string& a_name, const std::size_t a_ignoreIndex)
 		{
 			for (std::size_t index = 0; index < a_config.lights.size(); ++index) {
@@ -1248,6 +1262,10 @@ namespace TF3DHud::Imgui
 				if (ImGui::BeginTabItem("Layout")) {
 					DrawLayoutTab();
 					DrawClipRectOverlay();
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem("Animation")) {
+					DrawAnimationTab();
 					ImGui::EndTabItem();
 				}
 				if (ImGui::BeginTabItem("Light")) {

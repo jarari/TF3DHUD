@@ -1,6 +1,7 @@
 #include "Animations.h"
 
 #include "Address.h"
+#include "Config.h"
 #include "Utils.h"
 
 #include "RE/AnimationSpeedContour.h"
@@ -61,11 +62,42 @@ namespace TF3DHud::Animations
 	{
 		constexpr std::size_t kBShkbAnimationGraphSize = 0x3D0;
 		constexpr std::size_t kBShkbAnimationGraphAlignment = 0x10;
-		constexpr auto kLiveMirrorEventWhitelist = std::to_array<std::string_view>({
-			"reloadStart",
-			"reloadStateEnter",
-			"reloadStateExit",
-			"reloadReserveStart",
+		constexpr auto kLiveMirrorLocomotionEvents = std::to_array<std::string_view>({
+			"moveStart",
+			"moveStartAnimated",
+			"moveStop",
+			"sprintStart",
+			"sprintStop",
+			"walkStart",
+			"runStart",
+			"walkRunBlendStart",
+		});
+
+		constexpr auto kLiveMirrorSneakEvents = std::to_array<std::string_view>({
+			"sneakStart",
+			"sneakStop",
+			"sneakStateEnter",
+			"sneakStateExit",
+		});
+
+		constexpr auto kLiveMirrorJumpEvents = std::to_array<std::string_view>({
+			"jumpStart",
+			"jumpStartFromWalk",
+			"jumpFall",
+			"jumpLand",
+			"jumpLandSoft",
+			"jumpLandToWalk",
+			"jumpLandToRun",
+			"jumpEnd",
+			"jumpEndToRun",
+			"JumpUp",
+			"JumpDown",
+			"JumpFullBody",
+			"JumpPartialBody",
+			"g_jumpStartFromSprint",
+		});
+
+		constexpr auto kLiveMirrorWeaponFireEvents = std::to_array<std::string_view>({
 			"attackStart",
 			"attackStartAuto",
 			"attackRelease",
@@ -76,11 +108,29 @@ namespace TF3DHud::Animations
 			"AttackEnd",
 			"attackStartChargingHold",
 			"attackReleaseChargingHold",
+			"boltChargeStart",
+		});
+
+		constexpr auto kLiveMirrorWeaponReloadEvents = std::to_array<std::string_view>({
+			"reloadStart",
+			"reloadStateEnter",
+			"reloadStateExit",
+			"reloadReserveStart",
+		});
+
+		constexpr auto kLiveMirrorMeleeEvents = std::to_array<std::string_view>({
 			"meleeattackStart",
 			"meleeattackSprintStart",
 			"meleeAttackGun",
-			"grenadeThrowStart",
 			"blockStart",
+		});
+
+		constexpr auto kLiveMirrorThrowEvents = std::to_array<std::string_view>({
+			"grenadeThrowStart",
+			"mineThrowStart",
+		});
+
+		constexpr auto kLiveMirrorAlwaysEvents = std::to_array<std::string_view>({
 			"weapEquip",
 			"weapUnequip",
 			"Unequip",
@@ -97,73 +147,67 @@ namespace TF3DHud::Animations
 			"rifleSightedStartOver",
 			"sightedStateEnter",
 			"sightedStateExit",
-			"boltChargeStart",
 			"UpdateSighted",
-			"jumpStart",
-			"jumpStartFromWalk",
-			"jumpFall",
-			"jumpLand",
-			"jumpLandSoft",
-			"jumpLandToWalk",
-			"jumpLandToRun",
-			"jumpEnd",
-			"jumpEndToRun",
-			"JumpUp",
-			"JumpDown",
-			"JumpFullBody",
-			"JumpPartialBody",
-			"g_jumpStartFromSprint",
-			"sneakStart",
-			"sneakStop",
-			"sneakStateEnter",
-			"sneakStateExit",
 			"SyncLeft",
 			"SyncRight",
 			"SyncCycleEnd",
 			"syncIdleStart",
 			"syncIdleStop",
-			"moveStart",
-			"moveStartAnimated",
-			"moveStop",
-			"sprintStart",
-			"sprintStop",
-			"walkStart",
-			"runStart",
-			"walkRunBlendStart",
 		});
 
-		constexpr auto kIntGraphVariableWhitelist = std::to_array<std::string_view>({
-			"iSyncJumpState",
+		constexpr auto kAlwaysIntGraphVariables = std::to_array<std::string_view>({
 			"iSyncWeaponDrawState",
 			"iSyncSightedState",
 			"iSyncGunDown",
 			"iSyncChargeState",
 			"iWeaponChargeMode",
 			"iAttackState",
-			"CurrentJumpState",
-			"iIsInSneak",
+		});
+
+		constexpr auto kLocomotionIntGraphVariables = std::to_array<std::string_view>({
 			"iLocomotionSpeedState",
 			"iSyncSprintState",
 			"iSyncIdleLocomotion",
 			"iSyncSneakWalkRun",
 		});
 
-		constexpr auto kBoolGraphVariableWhitelist = std::to_array<std::string_view>({
-			"isReloading",
+		constexpr auto kJumpIntGraphVariables = std::to_array<std::string_view>({
+			"iSyncJumpState",
+			"CurrentJumpState",
+		});
+
+		constexpr auto kSneakIntGraphVariables = std::to_array<std::string_view>({
+			"iIsInSneak",
+		});
+
+		constexpr auto kAlwaysBoolGraphVariables = std::to_array<std::string_view>({
 			"isAttacking",
 			"IsAttackReady",
 			"isAttackNotReady",
-			"isJumping",
-			"bInJumpState",
-			"IsSneaking",
-			"bIsSneaking",
 			"bEquipOk",
 		});
 
-		constexpr auto kFloatGraphVariableWhitelist = std::to_array<std::string_view>({
+		constexpr auto kJumpBoolGraphVariables = std::to_array<std::string_view>({
+			"isJumping",
+			"bInJumpState",
+		});
+
+		constexpr auto kSneakBoolGraphVariables = std::to_array<std::string_view>({
+			"IsSneaking",
+			"bIsSneaking",
+		});
+
+		constexpr auto kWeaponReloadBoolGraphVariables = std::to_array<std::string_view>({
+			"isReloading",
+		});
+
+		constexpr auto kAlwaysFloatGraphVariables = std::to_array<std::string_view>({
 			"weaponSpeedMult",
 			"reloadSpeedMult",
 			"sightedSpeedMult",
+		});
+
+		constexpr auto kLocomotionFloatGraphVariables = std::to_array<std::string_view>({
 			"SpeedSmoothed",
 			"WalkSpeedMult",
 			"fSpeedWalk",
@@ -260,7 +304,19 @@ namespace TF3DHud::Animations
 			// Graph requests are BSFixedString values. Compare in the same domain
 			// so vanilla event casing such as "WeapEquip" matches the intended
 			// whitelist entry without raw string case heuristics.
-			return ContainsEngineFixedString(RE::BSFixedString(a_event), kLiveMirrorEventWhitelist);
+			const RE::BSFixedString eventName(a_event);
+			if (ContainsEngineFixedString(eventName, kLiveMirrorAlwaysEvents)) {
+				return true;
+			}
+
+			const auto& mirrorEvents = GetConfig().animation.mirrorEvents;
+			return (mirrorEvents.locomotion && ContainsEngineFixedString(eventName, kLiveMirrorLocomotionEvents)) ||
+				   (mirrorEvents.sneak && ContainsEngineFixedString(eventName, kLiveMirrorSneakEvents)) ||
+				   (mirrorEvents.jump && ContainsEngineFixedString(eventName, kLiveMirrorJumpEvents)) ||
+				   (mirrorEvents.weaponFire && ContainsEngineFixedString(eventName, kLiveMirrorWeaponFireEvents)) ||
+				   (mirrorEvents.weaponReload && ContainsEngineFixedString(eventName, kLiveMirrorWeaponReloadEvents)) ||
+				   (mirrorEvents.melee && ContainsEngineFixedString(eventName, kLiveMirrorMeleeEvents)) ||
+				   (mirrorEvents.throwable && ContainsEngineFixedString(eventName, kLiveMirrorThrowEvents));
 		}
 
 		[[nodiscard]] bool IsSuppressedAnimationChannel(const RE::BSAnimationGraphChannel& a_channel)
@@ -1807,6 +1863,11 @@ namespace TF3DHud::Animations
 
 			void ReconcileJumpLandingFromLive()
 			{
+				if (!GetConfig().animation.mirrorEvents.jump) {
+					lastLiveSyncJumpState_ = 0;
+					return;
+				}
+
 				if (!sourceHolder_) {
 					return;
 				}
@@ -1959,28 +2020,55 @@ namespace TF3DHud::Animations
 					return;
 				}
 
-				for (const auto& variableName : kIntGraphVariableWhitelist) {
-					std::int32_t value{ 0 };
-					if (TryGetLiveGraphVariableInt(variableName.data(), value)) {
-						SetGraphVariableInt(variableName.data(), value);
-						if (variableName == std::string_view{ "iSyncWeaponDrawState" }) {
-							ApplyPreviewWeaponDrawState(value);
+				const auto syncIntVariables = [&](const auto& a_variables) {
+					for (const auto& variableName : a_variables) {
+						std::int32_t value{ 0 };
+						if (TryGetLiveGraphVariableInt(variableName.data(), value)) {
+							SetGraphVariableInt(variableName.data(), value);
+							if (variableName == std::string_view{ "iSyncWeaponDrawState" }) {
+								ApplyPreviewWeaponDrawState(value);
+							}
 						}
 					}
-				}
+				};
 
-				for (const auto& variableName : kBoolGraphVariableWhitelist) {
-					bool value{ false };
-					if (TryGetLiveGraphVariableBool(variableName.data(), value)) {
-						SetGraphVariableBool(variableName.data(), value);
+				const auto syncBoolVariables = [&](const auto& a_variables) {
+					for (const auto& variableName : a_variables) {
+						bool value{ false };
+						if (TryGetLiveGraphVariableBool(variableName.data(), value)) {
+							SetGraphVariableBool(variableName.data(), value);
+						}
 					}
-				}
+				};
 
-				for (const auto& variableName : kFloatGraphVariableWhitelist) {
-					float value{ 0.0F };
-					if (TryGetLiveGraphVariableFloat(variableName.data(), value)) {
-						SetGraphVariableFloat(variableName.data(), value);
+				const auto syncFloatVariables = [&](const auto& a_variables) {
+					for (const auto& variableName : a_variables) {
+						float value{ 0.0F };
+						if (TryGetLiveGraphVariableFloat(variableName.data(), value)) {
+							SetGraphVariableFloat(variableName.data(), value);
+						}
 					}
+				};
+
+				syncIntVariables(kAlwaysIntGraphVariables);
+				syncBoolVariables(kAlwaysBoolGraphVariables);
+				syncFloatVariables(kAlwaysFloatGraphVariables);
+
+				const auto& mirrorEvents = GetConfig().animation.mirrorEvents;
+				if (mirrorEvents.locomotion) {
+					syncIntVariables(kLocomotionIntGraphVariables);
+					syncFloatVariables(kLocomotionFloatGraphVariables);
+				}
+				if (mirrorEvents.jump) {
+					syncIntVariables(kJumpIntGraphVariables);
+					syncBoolVariables(kJumpBoolGraphVariables);
+				}
+				if (mirrorEvents.sneak) {
+					syncIntVariables(kSneakIntGraphVariables);
+					syncBoolVariables(kSneakBoolGraphVariables);
+				}
+				if (mirrorEvents.weaponReload) {
+					syncBoolVariables(kWeaponReloadBoolGraphVariables);
 				}
 			}
 
