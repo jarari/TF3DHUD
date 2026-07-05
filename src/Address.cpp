@@ -100,6 +100,10 @@ namespace TF3DHud::Address
 		REL::ID{ 224250, 4492363 },
 		VariantOffset{ 0x419, 0x410 }
 	};
+	const IDOffset RenderSceneDeferredCompositePassCtorCall{
+		REL::ID{ 73644, 2317577 },
+		VariantOffset{ 0x158B, 0x158B }
+	};
 	const IDOffset Interface3DDrawModelRenderSceneDeferredCall{
 		REL::ID{ 917134, 2222570 },
 		VariantOffset{ 0x51A, 0x51A }

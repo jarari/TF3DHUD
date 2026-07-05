@@ -30,6 +30,7 @@ namespace TF3DHud
 		using RunActorUpdates_t = Address::RunActorUpdates_t;
 		using ProcessGraphEvent_t = Address::ProcessGraphEvent_t;
 		using Update3DModel_t = Address::Update3DModel_t;
+		using BSRenderPassCtor_t = Address::BSRenderPassCtor_t;
 		using RenderSceneDeferred_t = Address::RenderSceneDeferred_t;
 		using RenderPrepassesAndMenus_t = Address::RenderPrepassesAndMenus_t;
 
@@ -50,15 +51,23 @@ namespace TF3DHud
 		// and toggles bit 0x10000, selecting the tiled composite variant that samples t11/t12.
 		const auto& g_interface3DDrawModelRenderSceneDeferredCall =
 			Address::Interface3DDrawModelRenderSceneDeferredCall;
+		// IDA OG 1.10.163: BSShaderUtil::RenderSceneDeferred builds the first
+		// BSDFCompositeShader pass at +0x1560 and calls BSRenderPass::BSRenderPass
+		// at +0x158B. Live ENB classified flags 0x68 as hash 0xCB4B0457/mode 1,
+		// while flags 0x48 did not hit mode 1 before the preview render returned.
+		const auto& g_renderSceneDeferredCompositePassCtorCall =
+			Address::RenderSceneDeferredCompositePassCtorCall;
 		// IDA/Ghidra: Interface3D::Renderer::RenderAll calls RenderPrepassesAndMenus
 		// immediately before RenderMain for the selected renderer. Hook this entry so
 		// preview scenegraph commits happen at the DrawWorld/Interface3D boundary.
 		auto& g_renderPrepassesAndMenusTarget = Address::RenderPrepassesAndMenusTarget;
 		auto& g_setDoTiledLighting = Address::SetDoTiledLighting;
 		auto& g_qTiledLighting = Address::QTiledLighting;
+		BSRenderPassCtor_t* g_bsRenderPassCtor{ nullptr };
 		RenderSceneDeferred_t* g_renderSceneDeferred{ nullptr };
 		RenderPrepassesAndMenus_t* g_renderPrepassesAndMenus{ nullptr };
 		bool g_equipWatcherRegistered{ false };
+		thread_local bool g_inTF3DHudDeferredRender{ false };
 
 		class EquipWatcher :
 			public RE::BSTEventSink<RE::TESEquipEvent>
@@ -161,6 +170,8 @@ namespace TF3DHud
 
 			if (IsTF3DHudOffscreenRender(a_shadowSceneNode)) {
 				const bool oldTiledLighting = g_qTiledLighting();
+				const bool oldInDeferredRender = g_inTF3DHudDeferredRender;
+				g_inTF3DHudDeferredRender = true;
 				g_setDoTiledLighting(false);
 				g_renderSceneDeferred(
 					a_camera,
@@ -172,6 +183,7 @@ namespace TF3DHud
 					a_arg7,
 					a_arg8);
 				g_setDoTiledLighting(oldTiledLighting);
+				g_inTF3DHudDeferredRender = oldInDeferredRender;
 				return;
 			}
 
@@ -184,6 +196,26 @@ namespace TF3DHud
 				a_depth,
 				a_arg7,
 				a_arg8);
+		}
+
+		void HookedCompositePassCtor(
+			void* a_renderPass,
+			void* a_shader,
+			void* a_property,
+			void* a_geometry,
+			std::uint32_t a_flags,
+			std::uint8_t a_pass,
+			void* a_lights)
+		{
+			if (!g_bsRenderPassCtor) {
+				return;
+			}
+
+			if (g_inTF3DHudDeferredRender && a_flags == 0x68) {
+				a_flags = 0x48;
+			}
+
+			g_bsRenderPassCtor(a_renderPass, a_shader, a_property, a_geometry, a_flags, a_pass, a_lights);
 		}
 
 		void HookedRenderPrepassesAndMenus(RE::Interface3D::Renderer* a_renderer)
@@ -268,5 +300,10 @@ namespace TF3DHud
 			"Installed Interface3D deferred render hook at {:X}",
 			g_interface3DDrawModelRenderSceneDeferredCall.address());
 
+		g_bsRenderPassCtor = reinterpret_cast<BSRenderPassCtor_t*>(
+			trampoline.write_call<5>(g_renderSceneDeferredCompositePassCtorCall.address(), &HookedCompositePassCtor));
+		REX::INFO(
+			"Installed Interface3D composite pass flag hook at {:X}",
+			g_renderSceneDeferredCompositePassCtorCall.address());
 	}
 }
