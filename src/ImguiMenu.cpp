@@ -1006,6 +1006,31 @@ namespace TF3DHud::Imgui
 			}
 
 			ImGui::Separator();
+			ImGui::TextUnformatted("Camera");
+			const char* targets[] = { "Head", "Chest", "Pelvis", "Root" };
+			int target = static_cast<int>(config.camera.target);
+			if (ImGui::Combo("Target", &target, targets, static_cast<int>(std::size(targets)))) {
+				config.camera.target = static_cast<CameraFramingTarget>(target);
+				ApplyLayoutEdit();
+			}
+			ImGui::SameLine();
+			if (ImGui::Checkbox("Follow", &config.camera.follow)) {
+				ApplyLayoutEdit();
+			}
+			ImGui::TextUnformatted("Follow Axis");
+			if (ImGui::Checkbox("X", &config.camera.followX)) {
+				ApplyLayoutEdit();
+			}
+			ImGui::SameLine();
+			if (ImGui::Checkbox("Y", &config.camera.followY)) {
+				ApplyLayoutEdit();
+			}
+			ImGui::SameLine();
+			if (ImGui::Checkbox("Z", &config.camera.followZ)) {
+				ApplyLayoutEdit();
+			}
+
+			ImGui::Separator();
 			ImGui::TextUnformatted("ClipRect");
 			if (DrawIntSliderEdit("Left", config.clipRect.left, -100, 200, 1)) {
 				ApplyLayoutEdit(true);

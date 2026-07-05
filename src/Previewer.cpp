@@ -1907,7 +1907,7 @@ namespace TF3DHud
 			RebindPreviewSkinInstances(*previewRoot, a_biped);
 
 			SanitizePreviewRenderTree(*previewRoot);
-			PreviewFraming::ApplyHeadCentered(*previewRoot, g_previewFlattenedBoneTree);
+			PreviewFraming::ApplyTargetCentered(*previewRoot, g_previewFlattenedBoneTree);
 			PrepareForInterface3DOffscreen(*previewRoot);
 
 			// Do not detach children from the old root here. DrawModel can have
@@ -1963,7 +1963,7 @@ namespace TF3DHud
 
 			RebindPreviewSkinInstances(*g_previewRoot, a_biped);
 			SanitizePreviewRenderTree(*g_previewRoot);
-			PreviewFraming::ApplyHeadCentered(*g_previewRoot, g_previewFlattenedBoneTree);
+			PreviewFraming::ApplyTargetCentered(*g_previewRoot, g_previewFlattenedBoneTree);
 			PrepareForInterface3DOffscreen(*g_previewRoot);
 
 			g_rebuilder.CommitEquipmentLayer(
@@ -2118,7 +2118,7 @@ namespace TF3DHud
 			}
 
 			if (g_pendingFramingUpdate) {
-				PreviewFraming::ApplyHeadCentered(*g_previewRoot, g_previewFlattenedBoneTree);
+				PreviewFraming::ApplyTargetCentered(*g_previewRoot, g_previewFlattenedBoneTree);
 				g_pendingFramingUpdate = false;
 			}
 
@@ -2178,7 +2178,7 @@ namespace TF3DHud
 			}
 			Animations::Update(*player, *g_previewRoot, renderDelta);
 			SyncPreviewFacialExpression(*player);
-			PreviewFraming::ApplyHeadFollowTranslation(*g_previewRoot, g_previewFlattenedBoneTree);
+			PreviewFraming::ApplyTargetFollowTranslation(*g_previewRoot, g_previewFlattenedBoneTree);
 
 			if (g_pendingRendererAttach) {
 				Renderer::AttachPreviewRoot(*g_previewRoot);

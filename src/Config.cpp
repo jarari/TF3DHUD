@@ -73,6 +73,21 @@ namespace TF3DHud
 			return "Directional";
 		}
 
+		[[nodiscard]] const char* FramingTargetName(const CameraFramingTarget a_target)
+		{
+			switch (a_target) {
+			case CameraFramingTarget::kHead:
+				return "Head";
+			case CameraFramingTarget::kChest:
+				return "Chest";
+			case CameraFramingTarget::kPelvis:
+				return "Pelvis";
+			case CameraFramingTarget::kRoot:
+				return "Root";
+			}
+			return "Head";
+		}
+
 		void WriteFixedLight(CSimpleIniA& a_ini, const char* a_section, const FixedLightSettings& a_settings, const char* a_prefix)
 		{
 			const std::string prefix{ a_prefix };
@@ -126,6 +141,11 @@ namespace TF3DHud
 			a_ini.SetDoubleValue("View", "ModelScale", g_config.modelScale);
 			a_ini.SetDoubleValue("View", "YawDegrees", g_config.yawDegrees);
 			a_ini.SetLongValue("View", "Anchor", g_config.anchor);
+			a_ini.SetValue("Camera", "Target", FramingTargetName(g_config.camera.target));
+			a_ini.SetBoolValue("Camera", "Follow", g_config.camera.follow);
+			a_ini.SetBoolValue("Camera", "FollowX", g_config.camera.followX);
+			a_ini.SetBoolValue("Camera", "FollowY", g_config.camera.followY);
+			a_ini.SetBoolValue("Camera", "FollowZ", g_config.camera.followZ);
 			a_ini.SetDoubleValue("ClipRect", "Left", g_config.clipRect.left);
 			a_ini.SetDoubleValue("ClipRect", "Top", g_config.clipRect.top);
 			a_ini.SetDoubleValue("ClipRect", "Right", g_config.clipRect.right);
@@ -145,6 +165,11 @@ namespace TF3DHud
 			a_ini.SetDoubleValue("View", "ModelScale", a_config.modelScale);
 			a_ini.SetDoubleValue("View", "YawDegrees", a_config.yawDegrees);
 			a_ini.SetLongValue("View", "Anchor", a_config.anchor);
+			a_ini.SetValue("Camera", "Target", FramingTargetName(a_config.camera.target));
+			a_ini.SetBoolValue("Camera", "Follow", a_config.camera.follow);
+			a_ini.SetBoolValue("Camera", "FollowX", a_config.camera.followX);
+			a_ini.SetBoolValue("Camera", "FollowY", a_config.camera.followY);
+			a_ini.SetBoolValue("Camera", "FollowZ", a_config.camera.followZ);
 			a_ini.SetDoubleValue("ClipRect", "Left", a_config.clipRect.left);
 			a_ini.SetDoubleValue("ClipRect", "Right", a_config.clipRect.right);
 			a_ini.SetDoubleValue("ClipRect", "Top", a_config.clipRect.top);
@@ -185,6 +210,35 @@ namespace TF3DHud
 			}
 
 			REX::WARN("Invalid light type '{}'; using Directional", value);
+			return a_default;
+		}
+
+		[[nodiscard]] CameraFramingTarget ReadFramingTarget(
+			CSimpleIniA& a_ini,
+			const char* a_section,
+			const char* a_key,
+			const CameraFramingTarget a_default)
+		{
+			const auto* value = a_ini.GetValue(a_section, a_key, nullptr);
+			if (!value || value[0] == '\0') {
+				return a_default;
+			}
+
+			const std::string_view target{ value };
+			if (target == "Head" || target == "head" || target == "0") {
+				return CameraFramingTarget::kHead;
+			}
+			if (target == "Chest" || target == "chest" || target == "1") {
+				return CameraFramingTarget::kChest;
+			}
+			if (target == "Pelvis" || target == "pelvis" || target == "2") {
+				return CameraFramingTarget::kPelvis;
+			}
+			if (target == "Root" || target == "root" || target == "3") {
+				return CameraFramingTarget::kRoot;
+			}
+
+			REX::WARN("Invalid camera framing target '{}'; using {}", value, FramingTargetName(a_default));
 			return a_default;
 		}
 
@@ -302,6 +356,11 @@ namespace TF3DHud
 		g_config.modelScale = static_cast<float>(ini.GetDoubleValue("View", "ModelScale", g_config.modelScale));
 		g_config.yawDegrees = static_cast<float>(ini.GetDoubleValue("View", "YawDegrees", g_config.yawDegrees));
 		g_config.anchor = static_cast<std::int32_t>(ini.GetLongValue("View", "Anchor", g_config.anchor));
+		g_config.camera.target = ReadFramingTarget(ini, "Camera", "Target", g_config.camera.target);
+		g_config.camera.follow = ini.GetBoolValue("Camera", "Follow", g_config.camera.follow);
+		g_config.camera.followX = ini.GetBoolValue("Camera", "FollowX", g_config.camera.followX);
+		g_config.camera.followY = ini.GetBoolValue("Camera", "FollowY", g_config.camera.followY);
+		g_config.camera.followZ = ini.GetBoolValue("Camera", "FollowZ", g_config.camera.followZ);
 		g_config.clipRect.left = static_cast<float>(ini.GetDoubleValue("ClipRect", "Left", g_config.clipRect.left));
 		g_config.clipRect.top = static_cast<float>(ini.GetDoubleValue("ClipRect", "Top", g_config.clipRect.top));
 		g_config.clipRect.right = static_cast<float>(ini.GetDoubleValue("ClipRect", "Right", g_config.clipRect.right));
@@ -312,7 +371,7 @@ namespace TF3DHud
 		ClampConfig(g_config);
 
 		REX::INFO(
-			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, clipRect=({}, {}, {}, {}), hideInPowerArmor={}, uiMenuKey=0x{:02X}, lights={}",
+			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, cameraTarget={}, cameraFollow={} axes=({}, {}, {}), clipRect=({}, {}, {}, {}), hideInPowerArmor={}, uiMenuKey=0x{:02X}, lights={}",
 			g_config.enabled,
 			g_config.fov,
 			g_config.placementX,
@@ -321,6 +380,11 @@ namespace TF3DHud
 			g_config.modelScale,
 			g_config.yawDegrees,
 			g_config.anchor,
+			FramingTargetName(g_config.camera.target),
+			g_config.camera.follow,
+			g_config.camera.followX,
+			g_config.camera.followY,
+			g_config.camera.followZ,
 			g_config.clipRect.left,
 			g_config.clipRect.top,
 			g_config.clipRect.right,

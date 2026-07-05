@@ -6,10 +6,27 @@
 
 #include "RE/N/NiUpdateData.h"
 
+#include <string_view>
+
 namespace TF3DHud::PreviewFraming
 {
 	namespace
 	{
+		[[nodiscard]] const char* TargetName(const CameraFramingTarget a_target)
+		{
+			switch (a_target) {
+			case CameraFramingTarget::kHead:
+				return "Head";
+			case CameraFramingTarget::kChest:
+				return "Chest";
+			case CameraFramingTarget::kPelvis:
+				return "Pelvis";
+			case CameraFramingTarget::kRoot:
+				return "Root";
+			}
+			return "Head";
+		}
+
 		[[nodiscard]] RE::BSFlattenedBoneTree* ResolveFlattenedTree(
 			RE::NiAVObject& a_previewRoot,
 			RE::BSFlattenedBoneTree*& a_flattenedCache)
@@ -20,51 +37,57 @@ namespace TF3DHud::PreviewFraming
 			return a_flattenedCache;
 		}
 
-		[[nodiscard]] bool TryGetPreviewHeadWorld(
+		[[nodiscard]] bool TryGetNamedTargetWorld(
+			RE::NiAVObject& a_previewRoot,
+			RE::BSFlattenedBoneTree*& a_flattenedCache,
+			const std::string_view a_name,
+			RE::NiPoint3& a_out)
+		{
+			auto* flattened = ResolveFlattenedTree(a_previewRoot, a_flattenedCache);
+			if (flattened) {
+				const RE::BSFixedString targetName(a_name.data());
+				if (auto* object = flattened->GetObjectByName(targetName)) {
+					a_out = object->world.translate;
+					return true;
+				}
+
+				if (auto* bone = FindFlattenedBoneByName(*flattened, a_name)) {
+					a_out = bone->node ? bone->node->world.translate : bone->world.translate;
+					return true;
+				}
+			}
+
+			if (auto* object = a_previewRoot.GetObjectByName(RE::BSFixedString(a_name.data()))) {
+				a_out = object->world.translate;
+				return true;
+			}
+
+			return false;
+		}
+
+		[[nodiscard]] bool TryGetFramingTargetWorld(
 			RE::NiAVObject& a_previewRoot,
 			RE::BSFlattenedBoneTree*& a_flattenedCache,
 			RE::NiPoint3& a_out)
 		{
-			auto* flattened = ResolveFlattenedTree(a_previewRoot, a_flattenedCache);
-			if (!flattened) {
-				return false;
-			}
-
-			if (auto* headObject = flattened->GetObjectByName(RE::BSFixedString("HEAD"))) {
-				a_out = headObject->world.translate;
+			switch (GetConfig().camera.target) {
+			case CameraFramingTarget::kHead:
+				return TryGetNamedTargetWorld(a_previewRoot, a_flattenedCache, "Head", a_out);
+			case CameraFramingTarget::kChest:
+				return TryGetNamedTargetWorld(a_previewRoot, a_flattenedCache, "Chest", a_out);
+			case CameraFramingTarget::kPelvis:
+				return TryGetNamedTargetWorld(a_previewRoot, a_flattenedCache, "Pelvis", a_out);
+			case CameraFramingTarget::kRoot:
+				a_out = a_previewRoot.world.translate;
 				return true;
 			}
 
-			auto* head = FindFlattenedBoneByName(*flattened, "HEAD");
-			if (!head) {
-				return false;
-			}
-
-			a_out = head->node ? head->node->world.translate : head->world.translate;
-			return true;
+			return TryGetNamedTargetWorld(a_previewRoot, a_flattenedCache, "Head", a_out);
 		}
 	}
 
-	bool ApplyHeadCentered(RE::NiAVObject& a_previewRoot, RE::BSFlattenedBoneTree*& a_flattenedCache)
+	bool ApplyTargetCentered(RE::NiAVObject& a_previewRoot, RE::BSFlattenedBoneTree*& a_flattenedCache)
 	{
-		auto* flattened = ResolveFlattenedTree(a_previewRoot, a_flattenedCache);
-		if (!flattened) {
-			Renderer::ApplyOffscreenFraming(a_previewRoot);
-			REX::WARN("head-centered framing fell back to bounds: no cached BSFlattenedBoneTree");
-			return false;
-		}
-
-		auto* headObject = flattened->GetObjectByName(RE::BSFixedString("HEAD"));
-		auto* head = headObject ? nullptr : FindFlattenedBoneByName(*flattened, "HEAD");
-		if (!headObject && !head) {
-			Renderer::ApplyOffscreenFraming(a_previewRoot);
-			REX::WARN(
-				"head-centered framing fell back to bounds: HEAD bone not found in flattenedTree='{}', bones={}",
-				flattened->GetName(),
-				flattened->boneCount);
-			return false;
-		}
-
 		const auto& config = GetConfig();
 		RE::NiTransform transform = RE::NiTransform::IDENTITY;
 		transform.scale = config.modelScale;
@@ -74,13 +97,28 @@ namespace TF3DHud::PreviewFraming
 		RE::NiUpdateData updateData;
 		a_previewRoot.Update(updateData);
 
-		const auto headWorld =
-			headObject ? headObject->world.translate : (head->node ? head->node->world.translate : head->world.translate);
+		RE::NiPoint3 targetWorld;
+		if (!TryGetFramingTargetWorld(a_previewRoot, a_flattenedCache, targetWorld)) {
+			Renderer::ApplyOffscreenFraming(a_previewRoot);
+			if (auto* flattened = ResolveFlattenedTree(a_previewRoot, a_flattenedCache)) {
+				REX::WARN(
+					"target-centered framing fell back to bounds: {} target not found in flattenedTree='{}', bones={}",
+					TargetName(config.camera.target),
+					flattened->GetName(),
+					flattened->boneCount);
+			} else {
+				REX::WARN(
+					"target-centered framing fell back to bounds: {} target not found and no cached BSFlattenedBoneTree",
+					TargetName(config.camera.target));
+			}
+			return false;
+		}
+
 		auto centeredTransform = a_previewRoot.GetLocalTransform();
 		centeredTransform.translate = {
-			-headWorld.x,
-			-headWorld.y + config.cameraDistance,
-			-headWorld.z
+			-targetWorld.x,
+			-targetWorld.y + config.cameraDistance,
+			-targetWorld.z
 		};
 		a_previewRoot.SetLocalTransform(centeredTransform);
 		a_previewRoot.Update(updateData);
@@ -88,18 +126,28 @@ namespace TF3DHud::PreviewFraming
 		return true;
 	}
 
-	void ApplyHeadFollowTranslation(RE::NiAVObject& a_previewRoot, RE::BSFlattenedBoneTree*& a_flattenedCache)
+	void ApplyTargetFollowTranslation(RE::NiAVObject& a_previewRoot, RE::BSFlattenedBoneTree*& a_flattenedCache)
 	{
-		RE::NiPoint3 headWorld;
-		if (!TryGetPreviewHeadWorld(a_previewRoot, a_flattenedCache, headWorld)) {
+		const auto& config = GetConfig();
+		if (!config.camera.follow || (!config.camera.followX && !config.camera.followY && !config.camera.followZ)) {
 			return;
 		}
 
-		const auto& config = GetConfig();
+		RE::NiPoint3 targetWorld;
+		if (!TryGetFramingTargetWorld(a_previewRoot, a_flattenedCache, targetWorld)) {
+			return;
+		}
+
 		auto transform = a_previewRoot.GetLocalTransform();
-		transform.translate.x += -headWorld.x;
-		transform.translate.y += config.cameraDistance - headWorld.y;
-		transform.translate.z += -headWorld.z;
+		if (config.camera.followX) {
+			transform.translate.x += -targetWorld.x;
+		}
+		if (config.camera.followY) {
+			transform.translate.y += config.cameraDistance - targetWorld.y;
+		}
+		if (config.camera.followZ) {
+			transform.translate.z += -targetWorld.z;
+		}
 		a_previewRoot.SetLocalTransform(transform);
 
 		RE::NiUpdateData updateData;

@@ -15,6 +15,23 @@ namespace TF3DHud
 		float bottom{ 60.0F };
 	};
 
+	enum class CameraFramingTarget : std::uint32_t
+	{
+		kHead,
+		kChest,
+		kPelvis,
+		kRoot
+	};
+
+	struct CameraFramingSettings
+	{
+		CameraFramingTarget target{ CameraFramingTarget::kHead };
+		bool follow{ true };
+		bool followX{ true };
+		bool followY{ true };
+		bool followZ{ true };
+	};
+
 	struct Config
 	{
 		bool enabled{ true };
@@ -25,6 +42,7 @@ namespace TF3DHud
 		float modelScale{ 0.45F };
 		float yawDegrees{ 160.0F };
 		std::int32_t anchor{ 1 };
+		CameraFramingSettings camera;
 		ClipRectSettings clipRect;
 		bool hideInPowerArmor{ true };
 		std::uint32_t uiMenuKey{ 0xDE };

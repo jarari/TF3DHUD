@@ -5,6 +5,6 @@
 
 namespace TF3DHud::PreviewFraming
 {
-	bool ApplyHeadCentered(RE::NiAVObject& a_previewRoot, RE::BSFlattenedBoneTree*& a_flattenedCache);
-	void ApplyHeadFollowTranslation(RE::NiAVObject& a_previewRoot, RE::BSFlattenedBoneTree*& a_flattenedCache);
+	bool ApplyTargetCentered(RE::NiAVObject& a_previewRoot, RE::BSFlattenedBoneTree*& a_flattenedCache);
+	void ApplyTargetFollowTranslation(RE::NiAVObject& a_previewRoot, RE::BSFlattenedBoneTree*& a_flattenedCache);
 }
