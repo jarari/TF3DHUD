@@ -10,6 +10,7 @@ namespace RE
 	class BipedAnim;
 	class NiAVObject;
 	class PlayerCharacter;
+	class TESForm;
 }
 
 namespace TF3DHud::PreviewRebuilder
@@ -17,7 +18,10 @@ namespace TF3DHud::PreviewRebuilder
 	[[nodiscard]] RE::NiAVObject* GetSourceFaceNode(RE::Actor& a_sourceActor);
 	[[nodiscard]] std::uint64_t BuildVisualSignature(RE::PlayerCharacter& a_player);
 	[[nodiscard]] std::uint64_t BuildFaceCustomizationSignature(RE::PlayerCharacter& a_player);
-	[[nodiscard]] std::uint64_t BuildEquipmentSignature(const RE::BipedAnim* a_biped, std::uint32_t a_editorSlotMask);
+	[[nodiscard]] std::uint64_t BuildEquipmentSignature(
+		const RE::BipedAnim* a_biped,
+		std::uint32_t a_editorSlotMask,
+		const RE::TESForm* a_fallbackForm = nullptr);
 	[[nodiscard]] std::uint64_t BuildMorphGeometrySignature(RE::PlayerCharacter& a_player);
 
 	enum class DirtyFlag : std::uint32_t

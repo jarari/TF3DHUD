@@ -8,6 +8,7 @@
 
 namespace TF3DHud::PreviewHeadParts
 {
+	void RestoreDisabledSlotVisibility(RE::NiAVObject& a_root, std::uint32_t a_editorSlotMask);
 	void ApplyBipedVisibility(
 		RE::TESNPC& a_npc,
 		RE::TESRace& a_race,

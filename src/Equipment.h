@@ -34,7 +34,8 @@ namespace TF3DHud::Equipment
 	[[nodiscard]] bool IsBipedObjectExcludedBySlotMask(
 		RE::BIPED_OBJECT a_slot,
 		const RE::BIPOBJECT& a_object,
-		std::uint32_t a_editorSlotMask);
+		std::uint32_t a_editorSlotMask,
+		const RE::TESForm* a_fallbackForm = nullptr);
 	[[nodiscard]] std::uint32_t EffectiveEditorSlotMask(const RE::TESObjectREFR& a_reference);
 	[[nodiscard]] std::vector<EquippedArmorInfo> CollectEquippedArmors(
 		RE::TESObjectREFR& a_reference,

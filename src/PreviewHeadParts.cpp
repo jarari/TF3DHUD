@@ -78,7 +78,7 @@ namespace TF3DHud::PreviewHeadParts
 
 				const auto filledSlots = form->GetFilledSlots();
 				if (filledSlots != static_cast<std::uint32_t>(-1)) {
-					mask |= filledSlots;
+					mask |= filledSlots & a_editorSlotMask;
 				}
 			}
 			return mask;
@@ -106,12 +106,14 @@ namespace TF3DHud::PreviewHeadParts
 
 					const auto filledSlots = form->GetFilledSlots();
 					if (filledSlots != static_cast<std::uint32_t>(-1)) {
-						mask |= filledSlots;
+						mask |= filledSlots & a_editorSlotMask;
 						continue;
 					}
 				}
 
-				if (object.partClone && !IsRaceHeadPartSlot(a_race, i)) {
+				if (object.partClone &&
+					Equipment::IsSlotEnabled(a_editorSlotMask, static_cast<std::uint32_t>(i)) &&
+					!IsRaceHeadPartSlot(a_race, i)) {
 					const auto fallbackSlot = 1u << static_cast<std::uint32_t>(i);
 					mask |= fallbackSlot;
 				}
@@ -206,6 +208,7 @@ namespace TF3DHud::PreviewHeadParts
 		[[nodiscard]] bool ShouldEnableBipedUserIndex(
 			const RE::BipedAnim& a_biped,
 			const RE::BIPED_OBJECT a_activeSlot,
+			const std::uint32_t a_editorSlotMask,
 			const std::uint32_t a_userIndex)
 		{
 			if (a_userIndex < 30 || a_userIndex > 61) {
@@ -213,6 +216,10 @@ namespace TF3DHud::PreviewHeadParts
 			}
 
 			const auto indexedSlot = static_cast<std::int32_t>(a_userIndex - 30);
+			if (!Equipment::IsSlotEnabled(a_editorSlotMask, static_cast<std::uint32_t>(indexedSlot))) {
+				return true;
+			}
+
 			const auto activeSlot = std::to_underlying(a_activeSlot);
 			return indexedSlot == activeSlot || BipedPartModelMatches(a_biped, indexedSlot, activeSlot);
 		}
@@ -221,6 +228,7 @@ namespace TF3DHud::PreviewHeadParts
 			RE::BSGeometry& a_geometry,
 			const RE::BipedAnim& a_biped,
 			const RE::BIPED_OBJECT a_activeSlot,
+			const std::uint32_t a_editorSlotMask,
 			HeadPartVisibilityStats& a_stats)
 		{
 			auto* segmentData = a_geometry.GetSegmentData();
@@ -235,7 +243,7 @@ namespace TF3DHud::PreviewHeadParts
 					const auto userIndex = g_getUserIndex(segmentData, segment, subSegment);
 					if (userIndex >= 30 && userIndex <= 61) {
 						g_setSegmentDisableCount(segmentData, segment, subSegment, 0);
-						if (ShouldEnableBipedUserIndex(a_biped, a_activeSlot, userIndex)) {
+						if (ShouldEnableBipedUserIndex(a_biped, a_activeSlot, a_editorSlotMask, userIndex)) {
 							g_enableSegment(segmentData, segment, subSegment, false);
 						} else {
 							g_disableSegment(segmentData, segment, subSegment, false);
@@ -254,12 +262,13 @@ namespace TF3DHud::PreviewHeadParts
 			RE::NiAVObject& a_root,
 			const RE::BipedAnim& a_biped,
 			const RE::BIPED_OBJECT a_activeSlot,
+			const std::uint32_t a_editorSlotMask,
 			HeadPartVisibilityStats& a_stats)
 		{
 			// IDA OG 1.10.163: BipedAnim::HideShowBufferedSkin recurses to
 			// geometries, then HideShowSkinParts processes user indices 30..61.
 			ForEachGeometry(std::addressof(a_root), [&](RE::BSGeometry& a_geometry) {
-				ApplyBipedSkinPartsVisibility(a_geometry, a_biped, a_activeSlot, a_stats);
+				ApplyBipedSkinPartsVisibility(a_geometry, a_biped, a_activeSlot, a_editorSlotMask, a_stats);
 			});
 		}
 
@@ -272,6 +281,10 @@ namespace TF3DHud::PreviewHeadParts
 			const bool editedSegment = ApplyBipedSlotSegmentVisibility(a_object, a_slot, a_hide, a_stats);
 			if (!editedSegment) {
 				a_object.SetAppCulled(a_hide);
+				++a_stats.objectCulls;
+			} else if (!a_hide) {
+				a_object.SetAppCulled(false);
+				a_object.fadeAmount = 1.0F;
 				++a_stats.objectCulls;
 			}
 		}
@@ -337,6 +350,40 @@ namespace TF3DHud::PreviewHeadParts
 		}
 	}
 
+	void RestoreDisabledSlotVisibility(RE::NiAVObject& a_root, const std::uint32_t a_editorSlotMask)
+	{
+		ForEachAVObject(std::addressof(a_root), [](RE::NiAVObject& a_object) {
+			a_object.SetAppCulled(false);
+			a_object.fadeAmount = 1.0F;
+		});
+
+		ForEachGeometry(std::addressof(a_root), [&](RE::BSGeometry& a_geometry) {
+			auto* segmentData = a_geometry.GetSegmentData();
+			if (!segmentData) {
+				return;
+			}
+
+			const auto segmentCount = g_getNumSegments(segmentData);
+			for (std::uint32_t segment = 0; segment < segmentCount; ++segment) {
+				const auto subSegmentCount = g_getSubSegmentCount(segmentData, segment);
+				for (std::uint32_t subSegment = 0; subSegment < subSegmentCount; ++subSegment) {
+					const auto userIndex = g_getUserIndex(segmentData, segment, subSegment);
+					if (userIndex < 30 || userIndex > 61) {
+						continue;
+					}
+
+					const auto slotIndex = userIndex - 30;
+					if (Equipment::IsSlotEnabled(a_editorSlotMask, slotIndex)) {
+						continue;
+					}
+
+					g_setSegmentDisableCount(segmentData, segment, subSegment, 0);
+					g_enableSegment(segmentData, segment, subSegment, false);
+				}
+			}
+		});
+	}
+
 	void ApplyBipedVisibility(
 		RE::TESNPC& a_npc,
 		RE::TESRace& a_race,
@@ -344,6 +391,7 @@ namespace TF3DHud::PreviewHeadParts
 		RE::TESObjectREFR& a_reference,
 		const RE::BipedAnim& a_sourceBiped)
 	{
+		const auto editorSlotMask = Equipment::EffectiveEditorSlotMask(a_reference);
 		const auto equippedMask = BuildEquippedBipedMask(a_reference, a_sourceBiped, a_race);
 		auto* hairPart = GetDisplayedHeadPart(a_npc, a_race, RE::BGSHeadPart::HeadPartType::kHair);
 		auto* facialHairPart = GetDisplayedHeadPart(a_npc, a_race, RE::BGSHeadPart::HeadPartType::kFacialHair);
@@ -362,7 +410,7 @@ namespace TF3DHud::PreviewHeadParts
 		a_faceNode.SetAppCulled(hideHead);
 		(void)ApplyFaceGenHeadObjectVisibility(a_faceNode, a_race, equippedMask, stats);
 		if (hideHead) {
-			ApplyBipedSkinPartsVisibilityRecursive(a_faceNode, a_sourceBiped, a_race.data.headObject, stats);
+			ApplyBipedSkinPartsVisibilityRecursive(a_faceNode, a_sourceBiped, a_race.data.headObject, editorSlotMask, stats);
 			return;
 		}
 

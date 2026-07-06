@@ -122,18 +122,18 @@ namespace TF3DHud::Equipment
 	bool IsBipedObjectExcludedBySlotMask(
 		const RE::BIPED_OBJECT a_slot,
 		const RE::BIPOBJECT& a_object,
-		const std::uint32_t a_editorSlotMask)
+		const std::uint32_t a_editorSlotMask,
+		const RE::TESForm* a_fallbackForm)
 	{
 		const auto slotIndex = std::to_underlying(a_slot);
 		if (!IsEditorSlotIndex(slotIndex)) {
 			return false;
 		}
 
-		if (!IsSlotEnabled(a_editorSlotMask, static_cast<std::uint32_t>(slotIndex))) {
-			return true;
-		}
-
 		auto* form = a_object.parent.object;
+		if (form && form == a_fallbackForm) {
+			return false;
+		}
 		return form && IsArmorExcludedBySlotMask(*form, a_editorSlotMask);
 	}
 

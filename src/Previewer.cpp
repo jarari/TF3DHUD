@@ -20,6 +20,7 @@
 #include "RE/B/BSFlattenedBoneTree.h"
 #include "RE/B/BSGeometry.h"
 #include "RE/B/BGSMod.h"
+#include "RE/B/BGSObjectInstance.h"
 #include "RE/B/BGSObjectInstanceExtra.h"
 #include "RE/B/BSModelDB.h"
 #include "RE/B/BipedAnim.h"
@@ -39,10 +40,12 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -57,6 +60,9 @@ namespace TF3DHud
 	{
 		using SkinComplexionContext = Address::SkinComplexionContext;
 
+		auto& g_addArmorToBiped = Address::AddArmorToBiped;
+		auto& g_bipedAnimCtor = Address::BipedAnimCtor;
+		auto& g_bipedAnimDtor = Address::BipedAnimDtor;
 		auto& g_createBoneMap = Address::CreateBoneMap;
 		auto& g_createHeadForNPC = Address::CreateHeadForNPC;
 		auto& g_calculateBodyTintColor = Address::CalculateBodyTintColor;
@@ -64,6 +70,7 @@ namespace TF3DHud
 		auto& g_doAdjustSkinComplexion = Address::DoAdjustSkinComplexion;
 		auto& g_convertNodeTree = Address::ConvertNodeTree;
 		auto& g_getActorBodyPart3D = Address::GetActorBodyPart3D;
+		auto& g_getSkin = Address::GetSkin;
 		auto& g_fixFaceGenHeadSkinInstances = Address::FixFaceGenHeadSkinInstances;
 		auto& g_resetFaceGenCurrentMorphs = Address::ResetFaceGenCurrentMorphs;
 		auto& g_generateFlattenedHeadPartArray = Address::GenerateFlattenedHeadPartArray;
@@ -90,6 +97,32 @@ namespace TF3DHud
 			RE::BSFixedString editorID;
 			RE::NiPointer<RE::NiAVObject> object;
 			RE::NiNode* parent{ nullptr };
+		};
+
+		struct ScopedBipedAnim
+		{
+			explicit ScopedBipedAnim(RE::TESObjectREFR& a_reference)
+			{
+				biped = g_bipedAnimCtor(reinterpret_cast<RE::BipedAnim*>(storage), std::addressof(a_reference), false);
+			}
+
+			~ScopedBipedAnim()
+			{
+				if (biped) {
+					g_bipedAnimDtor(biped);
+				}
+			}
+
+			ScopedBipedAnim(const ScopedBipedAnim&) = delete;
+			ScopedBipedAnim& operator=(const ScopedBipedAnim&) = delete;
+
+			[[nodiscard]] RE::BipedAnim* get() const
+			{
+				return biped;
+			}
+
+			alignas(RE::BipedAnim) std::byte storage[sizeof(RE::BipedAnim)]{};
+			RE::BipedAnim* biped{ nullptr };
 		};
 
 		enum class EquipmentSyncResult
@@ -814,6 +847,35 @@ namespace TF3DHud
 					a_skins.insert(a_geometry.skinInstance.get());
 				}
 			});
+		}
+
+		[[nodiscard]] RE::TESObjectARMO* ResolveDefaultSkin(RE::PlayerCharacter& a_player)
+		{
+			auto* playerBase = a_player.GetObjectReference();
+			auto* npc = playerBase ? playerBase->As<RE::TESNPC>() : nullptr;
+			return npc ? g_getSkin(npc) : nullptr;
+		}
+
+		[[nodiscard]] RE::BipedAnim* BuildDefaultSkinBiped(
+			ScopedBipedAnim& a_storage,
+			RE::PlayerCharacter& a_player,
+			RE::TESRace& a_race,
+			RE::TESObjectARMO& a_defaultSkin)
+		{
+			auto* biped = a_storage.get();
+			if (!biped) {
+				return nullptr;
+			}
+
+			RE::BGSObjectInstance skinInstance(std::addressof(a_defaultSkin), nullptr);
+			Address::BorrowedBipedPointer borrowedBiped{ biped };
+			g_addArmorToBiped(
+				std::addressof(skinInstance),
+				std::addressof(a_race),
+				std::addressof(borrowedBiped),
+				a_player.GetSex(),
+				a_defaultSkin.armorData.index);
+			return biped;
 		}
 
 		void RefreshPreviewHeadPartVisibility(RE::PlayerCharacter& a_player, const RE::BipedAnim& a_sourceBiped)
@@ -1571,13 +1633,14 @@ namespace TF3DHud
 		}
 
 		[[nodiscard]] bool TryBuildBipedSignature(
-			const RE::PlayerCharacter& a_player,
+			RE::PlayerCharacter& a_player,
 			const RE::BipedAnim& a_biped,
 			std::uint64_t& a_signature)
 		{
 			a_signature = PreviewRebuilder::BuildEquipmentSignature(
 				std::addressof(a_biped),
-				Equipment::EffectiveEditorSlotMask(a_player));
+				Equipment::EffectiveEditorSlotMask(a_player),
+				ResolveDefaultSkin(a_player));
 			if (a_signature == 0) {
 				LogDiagnostic("third-person biped has empty signature");
 				return false;
@@ -1586,7 +1649,7 @@ namespace TF3DHud
 		}
 
 		[[nodiscard]] bool TryResolveAuditedEquipmentSignature(
-			const RE::PlayerCharacter& a_player,
+			RE::PlayerCharacter& a_player,
 			const RE::BipedAnim& a_biped,
 			std::uint64_t& a_signature)
 		{
@@ -1829,25 +1892,50 @@ namespace TF3DHud
 			std::unordered_set<RE::NiAVObject*> seenSourceObjects;
 			std::uint32_t attachedObjects = 0;
 			const auto editorSlotMask = Equipment::EffectiveEditorSlotMask(a_player);
+			auto* fallbackSkin = ResolveDefaultSkin(a_player);
+			RE::TESNPC* playerNPC = nullptr;
+			RE::BipedAnim* fallbackBiped = nullptr;
+			std::optional<ScopedBipedAnim> fallbackBipedStorage;
+			if (auto* playerBase = a_player.GetObjectReference(); playerBase) {
+				playerNPC = playerBase->As<RE::TESNPC>();
+			}
+			if (editorSlotMask != Equipment::kAllEditorSlotsMask && fallbackSkin && playerNPC) {
+				if (auto* previewRace = ResolvePreviewRace(a_player, *playerNPC)) {
+					fallbackBipedStorage.emplace(a_player);
+					fallbackBiped = BuildDefaultSkinBiped(*fallbackBipedStorage, a_player, *previewRace, *fallbackSkin);
+				}
+			}
 			const auto externalBoneAttachmentsBefore = CountPreviewAttachmentsForSlot(RE::BIPED_OBJECT::kNone);
 
-			auto mirrorObject = [&](const RE::BIPED_OBJECT a_slot, const RE::BIPOBJECT& a_sourceObject) {
-				if (Equipment::IsBipedObjectExcludedBySlotMask(a_slot, a_sourceObject, editorSlotMask)) {
+			auto mirrorObject = [&](
+									const RE::BIPED_OBJECT a_slot,
+									const RE::BIPOBJECT& a_sourceObject,
+									const RE::BipedAnim& a_complexionBiped,
+									const bool a_useLoadedModel) {
+				if (Equipment::IsBipedObjectExcludedBySlotMask(a_slot, a_sourceObject, editorSlotMask, fallbackSkin)) {
 					return;
 				}
 
-				auto* sourceClone = a_sourceObject.partClone.get();
-				if (!sourceClone || !seenSourceObjects.insert(sourceClone).second) {
-					return;
-				}
-
+				RE::NiAVObject* sourceClone = a_sourceObject.partClone.get();
+				RE::NiPointer<RE::NiAVObject> previewClone;
 				std::unordered_set<RE::BSSkin::Instance*> sourceSkins;
-				CollectSkinInstances(sourceClone, sourceSkins);
+				if (a_useLoadedModel) {
+					const auto* modelPath = a_sourceObject.part ? a_sourceObject.part->GetModel() : nullptr;
+					previewClone = LoadPreviewModel(modelPath);
+					sourceClone = previewClone.get();
+				} else {
+					if (!sourceClone || !seenSourceObjects.insert(sourceClone).second) {
+						return;
+					}
 
-				auto previewClone = PreviewClone::CloneObject(*sourceClone, std::addressof(a_previewRoot), std::addressof(previewNodes));
-				if (!previewClone) {
+					CollectSkinInstances(sourceClone, sourceSkins);
+					previewClone = PreviewClone::CloneObject(*sourceClone, std::addressof(a_previewRoot), std::addressof(previewNodes));
+				}
+
+				if (!sourceClone || !previewClone) {
 					return;
 				}
+
 				StripControllerChains(*previewClone);
 
 				const auto isWeaponAttach = IsEngineWeaponAttachSlot(a_slot);
@@ -1865,6 +1953,13 @@ namespace TF3DHud
 				RE::bhkWorld::RemoveObjects(previewClone.get(), true, true);
 				StripControllerChains(*previewClone);
 				PreparePreviewTree(*previewClone);
+				const auto slotIndex = std::to_underlying(a_slot);
+				const bool ownerSlotDisabled =
+					Equipment::IsEditorSlotIndex(slotIndex) &&
+					!Equipment::IsSlotEnabled(editorSlotMask, static_cast<std::uint32_t>(slotIndex));
+				if (ownerSlotDisabled) {
+					PreviewHeadParts::RestoreDisabledSlotVisibility(*previewClone, editorSlotMask);
+				}
 				(void)PreviewCloth::Initialize(
 					a_player,
 					*previewClone,
@@ -1900,7 +1995,7 @@ namespace TF3DHud
 				PrepareAttachmentSkinComplexion(
 					*previewClone,
 					a_slot,
-					a_sourceBiped);
+					a_complexionBiped);
 				ReplayEngineWeaponPostAttachLayout(
 					a_slot,
 					*previewClone,
@@ -1920,7 +2015,22 @@ namespace TF3DHud
 			for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kTotal); ++i) {
 				const auto slot = static_cast<RE::BIPED_OBJECT>(i);
 				const auto& sourceObject = a_sourceBiped.object[i];
-				mirrorObject(slot, sourceObject);
+				mirrorObject(slot, sourceObject, a_sourceBiped, false);
+			}
+
+			if (fallbackBiped) {
+				for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kEditorTotal); ++i) {
+					if (Equipment::IsSlotEnabled(editorSlotMask, static_cast<std::uint32_t>(i))) {
+						continue;
+					}
+
+					const auto slot = static_cast<RE::BIPED_OBJECT>(i);
+					if (!Equipment::IsBipedObjectExcludedBySlotMask(slot, a_sourceBiped.object[i], editorSlotMask, fallbackSkin)) {
+						continue;
+					}
+
+					mirrorObject(slot, fallbackBiped->object[i], *fallbackBiped, true);
+				}
 			}
 
 			RefreshPreviewBoneLookup(a_previewRoot);

@@ -253,7 +253,10 @@ namespace TF3DHud::PreviewRebuilder
 		return hash;
 	}
 
-	std::uint64_t BuildEquipmentSignature(const RE::BipedAnim* a_biped, const std::uint32_t a_editorSlotMask)
+	std::uint64_t BuildEquipmentSignature(
+		const RE::BipedAnim* a_biped,
+		const std::uint32_t a_editorSlotMask,
+		const RE::TESForm* a_fallbackForm)
 	{
 		if (!a_biped) {
 			return 0;
@@ -263,7 +266,7 @@ namespace TF3DHud::PreviewRebuilder
 		for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kTotal); ++i) {
 			const auto slot = static_cast<RE::BIPED_OBJECT>(i);
 			const auto& object = a_biped->object[i];
-			if (Equipment::IsBipedObjectExcludedBySlotMask(slot, object, a_editorSlotMask)) {
+			if (Equipment::IsBipedObjectExcludedBySlotMask(slot, object, a_editorSlotMask, a_fallbackForm)) {
 				continue;
 			}
 
