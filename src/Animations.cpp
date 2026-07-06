@@ -199,8 +199,10 @@ namespace TF3DHud::Animations
 
 		constexpr auto kJumpIntGraphVariables = std::to_array<std::string_view>({
 			"iSyncJumpState",
-			"CurrentJumpState",
 		});
+		// WeaponBehavior.xml binds JumpStateMachine.currentStateId to CurrentJumpState.
+		// Keep that output preview-owned; forcing the live value back onto the
+		// preview graph can immediately disable the lower-body jump layer.
 
 		constexpr auto kSneakIntGraphVariables = std::to_array<std::string_view>({
 			"iIsInSneak",
