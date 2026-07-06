@@ -64,6 +64,8 @@ namespace TF3DHud::Imgui
 		bool g_clipCursorHookInstalled{ false };
 		bool g_imguiInitialized{ false };
 		bool g_menuOpen{ false };
+		bool g_isDirty{ false };
+		bool g_savePromptOpen{ false };
 		bool g_windowActive{ true };
 		std::string g_editingValueId;
 		bool g_focusEditInput{ false };
@@ -76,6 +78,7 @@ namespace TF3DHud::Imgui
 		constexpr float kVanillaDisplayTop = 79.875F;
 		constexpr float kVanillaDisplayRight = 148.125F;
 		constexpr float kVanillaDisplayBottom = -79.875F;
+		constexpr const char* kSavePromptPopup = "Save changes?";
 
 		struct DisplayBounds
 		{
@@ -86,6 +89,40 @@ namespace TF3DHud::Imgui
 		};
 
 		[[nodiscard]] DisplayBounds GetOverlayScreenPlaneBounds(const Config& a_config);
+
+		void MarkDirty()
+		{
+			g_isDirty = true;
+		}
+
+		[[nodiscard]] bool SaveConfigFromMenu()
+		{
+			if (!SaveConfig()) {
+				return false;
+			}
+
+			g_isDirty = false;
+			return true;
+		}
+
+		void CloseMenu()
+		{
+			g_menuOpen = false;
+			g_savePromptOpen = false;
+			g_editingValueId.clear();
+			::ShowCursor(FALSE);
+		}
+
+		void RequestCloseMenu()
+		{
+			if (g_isDirty) {
+				g_savePromptOpen = true;
+				g_menuOpen = true;
+				return;
+			}
+
+			CloseMenu();
+		}
 
 		[[nodiscard]] DisplayBounds GetOverlayDisplayBounds(const Config& a_config)
 		{
@@ -212,10 +249,50 @@ namespace TF3DHud::Imgui
 
 		void ApplyLayoutEdit(const bool a_clipRectChanged = false)
 		{
+			MarkDirty();
 			if (a_clipRectChanged) {
 				g_clipRectDirty = true;
 			}
 			Previewer::ApplyConfigChanges();
+		}
+
+		void ApplyConfigEdit()
+		{
+			MarkDirty();
+			Previewer::ApplyConfigChanges();
+		}
+
+		void DrawSavePromptModal()
+		{
+			if (g_savePromptOpen) {
+				ImGui::OpenPopup(kSavePromptPopup);
+			}
+
+			if (!ImGui::BeginPopupModal(kSavePromptPopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+				return;
+			}
+
+			ImGui::TextUnformatted("Save changes to TF3DHud.ini?");
+			ImGui::Separator();
+
+			if (ImGui::Button("Save", ImVec2(96.0F, 0.0F))) {
+				if (SaveConfigFromMenu()) {
+					ImGui::CloseCurrentPopup();
+					CloseMenu();
+				}
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Close", ImVec2(96.0F, 0.0F))) {
+				ImGui::CloseCurrentPopup();
+				CloseMenu();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel", ImVec2(96.0F, 0.0F))) {
+				g_savePromptOpen = false;
+				ImGui::CloseCurrentPopup();
+			}
+
+			ImGui::EndPopup();
 		}
 
 		void FlushClipRectEdit()
@@ -330,8 +407,12 @@ namespace TF3DHud::Imgui
 			case WM_KEYDOWN:
 			case WM_SYSKEYDOWN:
 				if ((a_lparam & 0x40000000) == 0 && static_cast<std::uint32_t>(a_wparam) == GetConfig().uiMenuKey) {
-					g_menuOpen = !g_menuOpen;
-					::ShowCursor(g_menuOpen);
+					if (g_menuOpen) {
+						RequestCloseMenu();
+					} else {
+						g_menuOpen = true;
+						::ShowCursor(TRUE);
+					}
 					return 0;
 				}
 				break;
@@ -1113,6 +1194,7 @@ namespace TF3DHud::Imgui
 			}
 
 			a_animation.dynamicActivationIdle = key;
+			MarkDirty();
 			Animations::StopIdleAnimation();
 			Previewer::ClearAnimationObjects();
 		}
@@ -1141,6 +1223,7 @@ namespace TF3DHud::Imgui
 			const bool wasUsingLiveAnimation = animation.useLiveAnimation;
 			if (ImGui::Checkbox("Use Live Animation", &animation.useLiveAnimation) &&
 				wasUsingLiveAnimation != animation.useLiveAnimation) {
+				MarkDirty();
 				if (animation.useLiveAnimation) {
 					Animations::StopIdleAnimation();
 					Previewer::ClearAnimationObjects();
@@ -1151,13 +1234,17 @@ namespace TF3DHud::Imgui
 			ImGui::Separator();
 			if (animation.useLiveAnimation) {
 				ImGui::TextUnformatted("Mirror Events / Graph Variables");
-				ImGui::Checkbox("Locomotion", &mirrorEvents.locomotion);
-				ImGui::Checkbox("Sneak", &mirrorEvents.sneak);
-				ImGui::Checkbox("Jump", &mirrorEvents.jump);
-				ImGui::Checkbox("Weapon Fire", &mirrorEvents.weaponFire);
-				ImGui::Checkbox("Weapon Reload", &mirrorEvents.weaponReload);
-				ImGui::Checkbox("Melee", &mirrorEvents.melee);
-				ImGui::Checkbox("Throw", &mirrorEvents.throwable);
+				bool changed = false;
+				changed |= ImGui::Checkbox("Locomotion", &mirrorEvents.locomotion);
+				changed |= ImGui::Checkbox("Sneak", &mirrorEvents.sneak);
+				changed |= ImGui::Checkbox("Jump", &mirrorEvents.jump);
+				changed |= ImGui::Checkbox("Weapon Fire", &mirrorEvents.weaponFire);
+				changed |= ImGui::Checkbox("Weapon Reload", &mirrorEvents.weaponReload);
+				changed |= ImGui::Checkbox("Melee", &mirrorEvents.melee);
+				changed |= ImGui::Checkbox("Throw", &mirrorEvents.throwable);
+				if (changed) {
+					MarkDirty();
+				}
 				return;
 			}
 
@@ -1175,11 +1262,14 @@ namespace TF3DHud::Imgui
 				ImGui::Button(">##IdleAnimationNext");
 				ImGui::EndDisabled();
 				ImGui::SameLine();
-				ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation);
+				if (ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation)) {
+					MarkDirty();
+				}
 				ImGui::SameLine();
 				const bool wasSheathingWeapon = animation.sheatheWeaponDuringIdleAnimation;
 				if (ImGui::Checkbox("Sheathe Weapon", &animation.sheatheWeaponDuringIdleAnimation) &&
 					wasSheathingWeapon != animation.sheatheWeaponDuringIdleAnimation) {
+					MarkDirty();
 					Animations::ResetGraphPreservingIdlePlayback();
 				}
 				return;
@@ -1212,6 +1302,7 @@ namespace TF3DHud::Imgui
 			if (animation.dynamicActivationIdle.empty()) {
 				if (auto* idle = fileIdles[selectedIndex]) {
 					animation.dynamicActivationIdle = DynamicActivationIdleKey(*idle);
+					MarkDirty();
 				}
 			}
 
@@ -1263,11 +1354,14 @@ namespace TF3DHud::Imgui
 				}
 			}
 			ImGui::SameLine();
-			ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation);
+			if (ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation)) {
+				MarkDirty();
+			}
 			ImGui::SameLine();
 			const bool wasSheathingWeapon = animation.sheatheWeaponDuringIdleAnimation;
 			if (ImGui::Checkbox("Sheathe Weapon", &animation.sheatheWeaponDuringIdleAnimation) &&
 				wasSheathingWeapon != animation.sheatheWeaponDuringIdleAnimation) {
+				MarkDirty();
 				Animations::ResetGraphPreservingIdlePlayback();
 			}
 		}
@@ -1312,7 +1406,7 @@ namespace TF3DHud::Imgui
 				light.fixed.position = {};
 				light.fixed.intensity = 1.0F;
 				config.lights.push_back(light);
-				Previewer::ApplyConfigChanges();
+				ApplyConfigEdit();
 			}
 
 			std::optional<std::size_t> deleteIndex;
@@ -1331,19 +1425,21 @@ namespace TF3DHud::Imgui
 					std::memcpy(nameBuffer.data(), light.name.data(), copySize);
 					if (ImGui::InputText("Name", nameBuffer.data(), nameBuffer.size())) {
 						light.name = nameBuffer.data();
+						MarkDirty();
 					}
 					if (ImGui::IsItemDeactivatedAfterEdit()) {
 						light.name = MakeUniqueLightName(config, light.name, index);
+						MarkDirty();
 					}
 
 					int type = static_cast<int>(light.type);
 					const char* types[] = { "Directional", "Fixed", "ToD" };
 					if (ImGui::Combo("Type", &type, types, static_cast<int>(std::size(types)))) {
 						light.type = static_cast<LightType>(type);
-						Previewer::ApplyConfigChanges();
+						ApplyConfigEdit();
 					}
 					if (light.type != LightType::kDirectional && ImGui::Checkbox("UseInInterior", &light.useInInterior)) {
-						Previewer::ApplyConfigChanges();
+						ApplyConfigEdit();
 					}
 
 					const auto drawFixedControls = [&](FixedLightSettings& a_settings) {
@@ -1371,28 +1467,28 @@ namespace TF3DHud::Imgui
 						    DrawIntSliderEdit("PositionY", light.fixed.position.y, -300, 300, 1) ||
 						    DrawIntSliderEdit("PositionZ", light.fixed.position.z, -300, 300, 1) ||
 						    DrawFloatSliderEdit("Intensity", light.fixed.intensity, 0.01F, 10.0F, 0.01F)) {
-							Previewer::ApplyConfigChanges();
+							ApplyConfigEdit();
 						}
 						break;
 					case LightType::kFixed:
 						if (drawFixedControls(light.fixed)) {
-							Previewer::ApplyConfigChanges();
+							ApplyConfigEdit();
 						}
 						break;
 					case LightType::kTimeOfDay:
 						if (DrawFloatSliderEdit("StartToD", light.timeOfDay.startTimeOfDay, 0.0F, 24.0F, 0.01F) ||
 						    DrawFloatSliderEdit("EndToD", light.timeOfDay.endTimeOfDay, 0.0F, 24.0F, 0.01F)) {
-							Previewer::ApplyConfigChanges();
+							ApplyConfigEdit();
 						}
 						if (ImGui::TreeNode("Start")) {
 							if (drawFixedControls(light.timeOfDay.start)) {
-								Previewer::ApplyConfigChanges();
+								ApplyConfigEdit();
 							}
 							ImGui::TreePop();
 						}
 						if (ImGui::TreeNode("End")) {
 							if (drawFixedControls(light.timeOfDay.end)) {
-								Previewer::ApplyConfigChanges();
+								ApplyConfigEdit();
 							}
 							ImGui::TreePop();
 						}
@@ -1405,7 +1501,7 @@ namespace TF3DHud::Imgui
 
 			if (deleteIndex && *deleteIndex < config.lights.size()) {
 				config.lights.erase(config.lights.begin() + static_cast<std::ptrdiff_t>(*deleteIndex));
-				Previewer::ApplyConfigChanges();
+				ApplyConfigEdit();
 			}
 		}
 
@@ -1442,18 +1538,25 @@ namespace TF3DHud::Imgui
 			ImGui::SetNextWindowSize(ImVec2((std::min)(920.0F, io.DisplaySize.x - 40.0F), 620.0F), ImGuiCond_FirstUseEver);
 			ImGui::SetNextWindowBgAlpha(0.92F);
 
-			if (!ImGui::Begin("TF3DHud", nullptr, ImGuiWindowFlags_MenuBar)) {
+			bool windowOpen = true;
+			const char* windowTitle = g_isDirty ? "TF3DHud*###TF3DHud" : "TF3DHud###TF3DHud";
+			if (!ImGui::Begin(windowTitle, &windowOpen, ImGuiWindowFlags_MenuBar)) {
 				ImGui::End();
+				if (!windowOpen) {
+					RequestCloseMenu();
+				}
+				DrawSavePromptModal();
 				return;
 			}
 
 			if (ImGui::BeginMenuBar()) {
 				if (ImGui::BeginMenu("File")) {
 					if (ImGui::MenuItem("Save")) {
-						(void)SaveConfig();
+						(void)SaveConfigFromMenu();
 					}
 					if (ImGui::MenuItem("Reload")) {
 						Previewer::ReloadConfig();
+						g_isDirty = false;
 					}
 					ImGui::EndMenu();
 				}
@@ -1482,6 +1585,10 @@ namespace TF3DHud::Imgui
 			}
 
 			ImGui::End();
+			if (!windowOpen) {
+				RequestCloseMenu();
+			}
+			DrawSavePromptModal();
 		}
 
 		[[nodiscard]] bool Initialize()
