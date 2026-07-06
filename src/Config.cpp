@@ -151,6 +151,10 @@ namespace TF3DHud
 				"Animation",
 				"HideWeaponDuringIdleAnimation",
 				g_config.animation.hideWeaponDuringIdleAnimation);
+			a_ini.SetBoolValue(
+				"Animation",
+				"SheatheWeaponDuringIdleAnimation",
+				g_config.animation.sheatheWeaponDuringIdleAnimation);
 			a_ini.SetValue("Animation", "DynamicActivationIdle", g_config.animation.dynamicActivationIdle.c_str());
 			a_ini.SetBoolValue("Animation", "MirrorLocomotion", g_config.animation.mirrorEvents.locomotion);
 			a_ini.SetBoolValue("Animation", "MirrorSneak", g_config.animation.mirrorEvents.sneak);
@@ -188,6 +192,10 @@ namespace TF3DHud
 				"Animation",
 				"HideWeaponDuringIdleAnimation",
 				a_config.animation.hideWeaponDuringIdleAnimation);
+			a_ini.SetBoolValue(
+				"Animation",
+				"SheatheWeaponDuringIdleAnimation",
+				a_config.animation.sheatheWeaponDuringIdleAnimation);
 			a_ini.SetValue("Animation", "DynamicActivationIdle", a_config.animation.dynamicActivationIdle.c_str());
 			a_ini.SetBoolValue("Animation", "MirrorLocomotion", a_config.animation.mirrorEvents.locomotion);
 			a_ini.SetBoolValue("Animation", "MirrorSneak", a_config.animation.mirrorEvents.sneak);
@@ -393,6 +401,10 @@ namespace TF3DHud
 			"Animation",
 			"HideWeaponDuringIdleAnimation",
 			g_config.animation.hideWeaponDuringIdleAnimation);
+		g_config.animation.sheatheWeaponDuringIdleAnimation = ini.GetBoolValue(
+			"Animation",
+			"SheatheWeaponDuringIdleAnimation",
+			g_config.animation.sheatheWeaponDuringIdleAnimation);
 		g_config.animation.dynamicActivationIdle =
 			ini.GetValue("Animation", "DynamicActivationIdle", g_config.animation.dynamicActivationIdle.c_str());
 		g_config.animation.mirrorEvents.locomotion =

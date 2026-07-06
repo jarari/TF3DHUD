@@ -96,10 +96,6 @@ namespace TF3DHud::Address
 	REL::Relocation<void**> AnimationSubGraphDataSingleton{ REL::ID(1363506) };
 	REL::Relocation<void**> BehaviorGraphSwapSingleton{ REL::ID(153510) };
 	REL::Relocation<RE::EquipEventSource*> EquipEventSourceSingleton{ REL::ID{ 485633, 2691240, 4798533 } };
-	// IDA OG 1.10.163: AnimationFileManagerSingleton dynamic idle loaded-entry array.
-	REL::Relocation<RE::BSTArray<LoadedIdleAnimData>*> LoadedHandleAndBindingA{ REL::ID(762973) };
-	// IDA OG 1.10.163: anonymous LoadedIdleLock guarding loaded/loading dynamic idle arrays.
-	REL::Relocation<RE::BSReadWriteLock*> LoadedIdleLock{ REL::ID(1420624) };
 	REL::Relocation<std::uintptr_t> ClipCursor{ REL::ID{ 641385, 4823626 } };
 	REL::Relocation<std::uintptr_t> ProcessGraphEventTarget{ REL::ID(1199489) };
 	REL::Relocation<std::uintptr_t> RenderPrepassesAndMenusTarget{ REL::ID(1189309) };

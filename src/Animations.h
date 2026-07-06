@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,8 @@ namespace RE
 
 namespace TF3DHud::Animations
 {
+	using DynamicActivationIdleMap = std::map<std::string, std::vector<RE::TESIdleForm*>>;
+
 	inline constexpr std::uint32_t kMaxSubgraphDebugRequestEntries = 4;
 	inline constexpr std::uint32_t kMaxSubgraphDebugSlots = 16;
 	inline constexpr std::uint32_t kMaxSubgraphDebugFiles = 12;
@@ -155,9 +158,10 @@ namespace TF3DHud::Animations
 
 	void Reset();
 	void ResetGraph();
+	void ResetGraphPreservingIdlePlayback();
 	void ResetInitialState();
 	void ObserveLoadedIdle(RE::TESIdleForm* a_idle);
-	[[nodiscard]] const std::vector<RE::TESIdleForm*>& GetDynamicActivationIdles();
+	[[nodiscard]] const DynamicActivationIdleMap& GetDynamicActivationIdles();
 	void StopIdleAnimation();
 	void Update(RE::PlayerCharacter& a_player, RE::NiAVObject& a_previewRoot, float a_deltaTime);
 	void ObserveGraphRequest(RE::BSAnimationGraphManager* a_manager, const char* a_eventName, std::uint32_t a_result);

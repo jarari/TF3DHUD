@@ -53,7 +53,6 @@
 #include <cctype>
 #include <cstdio>
 #include <limits>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -67,9 +66,6 @@ namespace TF3DHud::Animations
 	{
 		constexpr std::size_t kBShkbAnimationGraphSize = 0x3D0;
 		constexpr std::size_t kBShkbAnimationGraphAlignment = 0x10;
-		constexpr float kIdleStopFastForwardDelta = 0.5F;
-		constexpr std::uint32_t kIdleStopFastForwardMaxSteps = 6;
-		constexpr std::uintptr_t kDynamicIdleFreeMarker = 0xFFFFFFFFull;
 		constexpr auto kDynamicActivationBehaviorGraphs = std::to_array<std::string_view>({
 			"actors\\Character\\Behaviors\\RaiderRootBehavior.hkx",
 			"Actors\\Character\\Behaviors\\MTBehavior.hkx",
@@ -177,20 +173,13 @@ namespace TF3DHud::Animations
 			"AnimObjDraw",
 			"AnimObjUnequip",
 		});
-		constexpr auto kDynamicIdleStopActiveNodeNames = std::to_array<std::string_view>({
-			"DynamicLoopAnimation",
-			"DynamicLoopAnimation StateMachine",
-			"DynamicLoopAnimation_A",
-			"DynamicLoopAnimation_A_MG",
-			"Set_iDynamicLoopStartState_to_1",
-			"DynamicLoop_DynamicAnimationGenerator_A",
-			"DynamicLoopIdle_A",
-			"DynamicLoopAnimation_B",
-			"DynamicLoopAnimation_B_MG",
-			"Set_iDynamicLoopStartState_to_0",
-			"DynamicLoop_DynamicAnimationGenerator_B",
-			"DynamicLoopIdle_B",
-		});
+
+		constexpr std::string_view kWeaponDrawSyncVariable{ "iSyncWeaponDrawState" };
+		constexpr std::string_view kReadyAlertRelaxedSyncVariable{ "iSyncReadyAlertRelaxed" };
+		constexpr std::string_view kBaseStateStartInstantEvent{ "g_archetypeBaseStateStartInstant" };
+		constexpr std::string_view kRelaxedStateStartInstantEvent{ "g_archetypeRelaxedStateStartInstant" };
+		constexpr std::string_view kBaseStateStartEvent{ "g_archetypeBaseStateStart" };
+		constexpr std::string_view kRelaxedStateStartEvent{ "g_archetypeRelaxedStateStart" };
 
 		constexpr auto kAlwaysIntGraphVariables = std::to_array<std::string_view>({
 			"iSyncWeaponDrawState",
@@ -271,6 +260,12 @@ namespace TF3DHud::Animations
 			"DirectionDegrees",
 			"fControllerXSum",
 			"fControllerYSum",
+		});
+
+		constexpr auto kIdlePreviewSuppressedAnimationChannels = std::to_array<std::string_view>({
+			"bEquipOk",
+			"iSyncReadyAlertRelaxed",
+			"iSyncWeaponDrawState",
 		});
 
 		constexpr auto kPreviewNeutralBoolGraphVariables = std::to_array<std::string_view>({
@@ -365,21 +360,6 @@ namespace TF3DHud::Animations
 			return ContainsEngineFixedString(RE::BSFixedString(a_event), kIdleAnimationMirrorEvents);
 		}
 
-		[[nodiscard]] bool IsDynamicIdleStopActiveNodeName(const char* a_name)
-		{
-			if (!a_name || a_name[0] == '\0') {
-				return false;
-			}
-
-			const std::string_view name{ a_name };
-			return std::any_of(
-				kDynamicIdleStopActiveNodeNames.begin(),
-				kDynamicIdleStopActiveNodeNames.end(),
-				[&](const std::string_view candidate) {
-					return name == candidate;
-				});
-		}
-
 		[[nodiscard]] bool IsSuppressedAnimationChannel(const RE::BSAnimationGraphChannel& a_channel)
 		{
 			return ContainsEngineFixedString(a_channel.variableName, kPreviewSuppressedAnimationChannels);
@@ -428,8 +408,6 @@ namespace TF3DHud::Animations
 		auto& g_destroyAdjustmentArena = Address::DestroyAdjustmentArena;
 		auto& g_calculateSpeedAdjustToSyncAnimationCycles = Address::CalculateSpeedAdjustToSyncAnimationCycles;
 		auto& g_requestIdles = Address::RequestIdles;
-		auto& g_loadedHandleAndBindingA = Address::LoadedHandleAndBindingA;
-		auto& g_loadedIdleLock = Address::LoadedIdleLock;
 		auto& g_retrieveSubGraphData = Address::RetrieveSubGraphData;
 		auto& g_initializeSubGraph = Address::InitializeSubGraph;
 		auto& g_behaviorGraphSwapSingleton = Address::BehaviorGraphSwapSingleton;
@@ -1020,14 +998,6 @@ namespace TF3DHud::Animations
 			float duration{ 0.0F };
 		};
 
-		struct DynamicIdleStopState
-		{
-			bool graphReadable{ false };
-			bool graphSettled{ false };
-			bool clipPresent{ false };
-			bool dynamicLoopNodePresent{ false };
-		};
-
 		[[nodiscard]] bool PathMatchesResolvedPath(const std::string& a_authoredPath, const std::string& a_targetPath)
 		{
 			const auto targetPath = ToLowerNormalized(NormalizeSeparators(a_targetPath));
@@ -1048,122 +1018,10 @@ namespace TF3DHud::Animations
 			return PathMatchesResolvedPath(SafeString(ReadTaggedString(a_clip + 0x90)), a_targetPath);
 		}
 
-		[[nodiscard]] std::string FormatHex(const std::uintptr_t a_value)
-		{
-			std::array<char, 2 + sizeof(std::uintptr_t) * 2 + 1> buffer{};
-			std::snprintf(buffer.data(), buffer.size(), "0x%llX", static_cast<unsigned long long>(a_value));
-			return buffer.data();
-		}
-
-		class ScopedWriteLock
-		{
-		public:
-			explicit ScopedWriteLock(RE::BSReadWriteLock* a_lock) :
-				lock_(a_lock)
-			{
-				if (lock_) {
-					lock_->lock_write();
-				}
-			}
-
-			ScopedWriteLock(const ScopedWriteLock&) = delete;
-			ScopedWriteLock& operator=(const ScopedWriteLock&) = delete;
-
-			~ScopedWriteLock()
-			{
-				if (lock_) {
-					lock_->unlock_write();
-				}
-			}
-
-		private:
-			RE::BSReadWriteLock* lock_{ nullptr };
-		};
-
-		[[nodiscard]] bool MarkLoadedDynamicIdleEntryFree(
-			RE::BShkbAnimationGraph& a_graph,
-			const std::string& a_resolvedPath)
-		{
-			auto* loadedIdles = g_loadedHandleAndBindingA.get();
-			auto* loadedIdleLock = g_loadedIdleLock.get();
-			if (!loadedIdles || !loadedIdleLock || a_resolvedPath.empty()) {
-				return false;
-			}
-
-			ScopedWriteLock lock(loadedIdleLock);
-			for (auto& entry : *loadedIdles) {
-				if (entry.graph != std::addressof(a_graph)) {
-					continue;
-				}
-				if (!PathMatchesResolvedPath(SafeString(entry.path.c_str()), a_resolvedPath)) {
-					continue;
-				}
-
-				const auto previousMarker = entry.nodeTemplateOrFreeMarker;
-				entry.nodeTemplateOrFreeMarker = kDynamicIdleFreeMarker;
-				LogDiagnostic(
-					"idle stop marked loaded dynamic idle free for '" + a_resolvedPath +
-					"' previousMarker=" + FormatHex(previousMarker));
-				return true;
-			}
-
-			LogDiagnostic("idle stop found no loaded dynamic idle entry for '" + a_resolvedPath + "'");
-			return false;
-		}
-
 		[[nodiscard]] HkbBehaviorGraphDiagnostic* GetBehaviorGraphDiagnostic(RE::BShkbAnimationGraph& a_graph)
 		{
 			const auto* const graphBase = reinterpret_cast<const std::byte*>(std::addressof(a_graph));
 			return *reinterpret_cast<HkbBehaviorGraphDiagnostic* const*>(graphBase + 0x378);
-		}
-
-		[[nodiscard]] DynamicIdleStopState QueryDynamicIdleStopState(
-			RE::BShkbAnimationGraph& a_graph,
-			const std::string& a_resolvedPath)
-		{
-			DynamicIdleStopState result;
-			auto* behavior = GetBehaviorGraphDiagnostic(a_graph);
-			if (!behavior) {
-				return result;
-			}
-
-			result.graphReadable = true;
-			result.graphSettled = !behavior->updateActiveNodes && !behavior->stateOrTransitionChanged;
-
-			auto* activeNodes = behavior->activeNodes;
-			if (!activeNodes || !activeNodes->data || activeNodes->size <= 0 || activeNodes->size > 1024) {
-				return result;
-			}
-
-			for (std::int32_t index = 0; index < activeNodes->size; ++index) {
-				const auto entry = reinterpret_cast<std::uintptr_t>(activeNodes->data[index]);
-				const auto node = ReadActiveNodePointer(entry);
-				if (node && IsDynamicIdleStopActiveNodeName(ReadTaggedString(node + 0x38))) {
-					result.dynamicLoopNodePresent = true;
-				}
-
-				const auto clip = SelectActiveClip(entry);
-				if (!clip) {
-					continue;
-				}
-
-				if (IsDynamicIdleStopActiveNodeName(ReadTaggedString(clip + 0x38))) {
-					result.dynamicLoopNodePresent = true;
-				}
-				if (!a_resolvedPath.empty() && ClipMatchesResolvedPath(clip, a_resolvedPath)) {
-					result.clipPresent = true;
-				}
-			}
-
-			return result;
-		}
-
-		[[nodiscard]] bool IsDynamicIdleStopComplete(const DynamicIdleStopState& a_state)
-		{
-			return a_state.graphReadable &&
-			       a_state.graphSettled &&
-			       !a_state.clipPresent &&
-			       !a_state.dynamicLoopNodePresent;
 		}
 
 		[[nodiscard]] ActiveClipTiming FindActiveClipTiming(
@@ -1699,8 +1557,11 @@ namespace TF3DHud::Animations
 					return false;
 				}
 
+				const bool idlePreviewMode = !GetConfig().animation.useLiveAnimation;
 				for (const auto& channel : sourceChannels) {
-					if (channel && !IsSuppressedAnimationChannel(*channel)) {
+					if (channel && !IsSuppressedAnimationChannel(*channel) &&
+						(!idlePreviewMode ||
+						 !ContainsEngineFixedString(channel->variableName, kIdlePreviewSuppressedAnimationChannels))) {
 						a_channels.push_back(channel);
 					}
 				}
@@ -1742,6 +1603,9 @@ namespace TF3DHud::Animations
 
 			bool GetGraphVariableImplInt(const RE::BSFixedString& a_variable, std::int32_t& a_out) const override
 			{
+				if (TryGetIdlePreviewIntGraphVariable(a_variable, a_out)) {
+					return true;
+				}
 				if (auto graph = GetActivePreviewGraph(); graph && g_getBShkbGraphVariableInt(graph.get(), a_variable, a_out)) {
 					return true;
 				}
@@ -1945,10 +1809,13 @@ namespace TF3DHud::Animations
 				return g_activateAnimationGraphManager(manager_.get());
 			}
 
-			bool IsDefaultSubgraphLinked() const
+			bool IsSubgraphLinked(
+				const RE::BSTSmallArray<RE::SubgraphHandle, 2>& a_handles,
+				const RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_identifiers,
+				const std::uint32_t a_fallbackSlot) const
 			{
 				auto graph = GetActivePreviewGraph();
-				if (!graph || defaultSubgraphHandles_.empty()) {
+				if (!graph || a_handles.empty()) {
 					return false;
 				}
 
@@ -1958,12 +1825,12 @@ namespace TF3DHud::Animations
 					return false;
 				}
 
-				const auto* const defaultHandles = GetSubgraphHandleStorage(defaultSubgraphHandles_);
-				if (defaultHandles && defaultHandles[0].handle != 0) {
-					const auto defaultHandle = defaultHandles[0].handle;
+				const auto* const handles = GetSubgraphHandleStorage(a_handles);
+				if (handles && handles[0].handle != 0) {
+					const auto handle = handles[0].handle;
 					for (std::uint32_t index = 0; index < swapData->size; ++index) {
 						const auto& entry = swapData->entries[index];
-						if (entry.handle.handle == defaultHandle && entry.sharedData) {
+						if (entry.handle.handle == handle && entry.sharedData) {
 							return true;
 						}
 					}
@@ -1972,16 +1839,31 @@ namespace TF3DHud::Animations
 				// IDA: BSBehaviorGraphSwapSingleton::UpdateForManager/
 				// OnActivateImpl relinks swap entries as state index+1.
 				// RequestInitialSubgraphs requests default first, then weapon,
-				// so slot 0/state 1 is the selected default subgraph state.
-				return swapData->size > 0 &&
-				       swapData->entries[0].sharedData &&
-				       swapData->entries[0].useCount != 0 &&
-				       defaultSubgraphIds_.size() > 0;
+				// so the fallback slot matches the request order.
+				return swapData->size > a_fallbackSlot &&
+				       swapData->entries[a_fallbackSlot].sharedData &&
+				       swapData->entries[a_fallbackSlot].useCount != 0 &&
+				       a_identifiers.size() > 0;
+			}
+
+			bool IsDefaultSubgraphLinked() const
+			{
+				return IsSubgraphLinked(defaultSubgraphHandles_, defaultSubgraphIds_, 0);
+			}
+
+			bool IsWeaponSubgraphLinked() const
+			{
+				return IsSubgraphLinked(weaponSubgraphHandles_, weaponSubgraphIds_, 1);
+			}
+
+			bool AreRequestedSubgraphsLinked() const
+			{
+				return IsDefaultSubgraphLinked() && (weaponSubgraphHandles_.empty() || IsWeaponSubgraphLinked());
 			}
 
 			void RefreshPendingSubgraphLoads()
 			{
-				if (!manager_ || IsDefaultSubgraphLinked()) {
+				if (!manager_ || AreRequestedSubgraphsLinked()) {
 					return;
 				}
 
@@ -2039,6 +1921,26 @@ namespace TF3DHud::Animations
 				return processed;
 			}
 
+			bool UpdateGraphManagerPreservingPreviewRoot(const RE::BSAnimationUpdateData& a_updateData)
+			{
+				const auto previewRootLocal = targetRoot_ ? targetRoot_->GetLocalTransform() : RE::NiTransform{};
+				const bool updated = g_updateAnimationGraphManager(this, a_updateData);
+				if (targetRoot_) {
+					targetRoot_->SetLocalTransform(previewRootLocal);
+				}
+				return updated;
+			}
+
+			bool UpdateGraphManagerPreservingPreviewRoot(const float a_deltaTime)
+			{
+				const auto previewRootLocal = targetRoot_ ? targetRoot_->GetLocalTransform() : RE::NiTransform{};
+				const bool updated = g_updateAnimationGraphManagerFloat(this, a_deltaTime);
+				if (targetRoot_) {
+					targetRoot_->SetLocalTransform(previewRootLocal);
+				}
+				return updated;
+			}
+
 			[[nodiscard]] RE::BGSAction* GetDefaultAction(const RE::DEFAULT_OBJECT a_object)
 			{
 				auto* defaultObjectManager = RE::BGSDefaultObjectManager::GetSingleton();
@@ -2047,20 +1949,53 @@ namespace TF3DHud::Animations
 
 			void TryApplyInitialAnimationState()
 			{
-				if (initialStateApplied_ || !manager_ || !IsDefaultSubgraphLinked()) {
+				if (initialStateApplied_ || !manager_ || !AreRequestedSubgraphsLinked()) {
 					return;
 				}
 
 				ApplyPreviewGraphVariableOverrides();
 
-				// IDA: BGSAnimationSystemUtils::InitializeActorInstant scopes
-				// iSyncWeaponDrawState=2 only around the instant base-state
-				// action, then resets it after the tiny graph update.
-				SetGraphVariableInt("iSyncWeaponDrawState", 2);
+				if (!GetConfig().animation.useLiveAnimation) {
+					const auto& animation = GetConfig().animation;
+					const auto instantEvent = animation.sheatheWeaponDuringIdleAnimation ?
+						kBaseStateStartInstantEvent :
+						kRelaxedStateStartInstantEvent;
+					const auto fallbackEvent = animation.sheatheWeaponDuringIdleAnimation ?
+						kBaseStateStartEvent :
+						kRelaxedStateStartEvent;
+
+					bool processed = NotifyAnimationGraphImpl(RE::BSFixedString(instantEvent.data()));
+					if (!processed) {
+						processed = NotifyAnimationGraphImpl(RE::BSFixedString(fallbackEvent.data()));
+					}
+
+					RE::BSAnimationUpdateData updateData;
+					updateData.deltaTime = 0.0001F;
+					updateData.flags18 = 0xFFFF;
+					updateData.flags1C = 1;
+					(void)UpdateGraphManagerPreservingPreviewRoot(updateData);
+					if (processed) {
+						// The freshly selected base/weapon root needs one full
+						// settle tick before it reliably consumes dynamic-idle
+						// requests such as dyn_ActivationLoop.
+						(void)UpdateGraphManagerPreservingPreviewRoot(2.0F);
+					}
+					ApplyPreviewGraphVariableOverrides();
+
+					if (processed) {
+						initialStateApplied_ = true;
+					}
+					return;
+				}
+
+				// IDA: Actor::InitializeAnimationGraphVariables seeds
+				// iSyncWeaponDrawState=1. InitializeActorInstant replaces it with
+				// 2 only while selecting the drawn base state, then resets it.
+				SetGraphVariableInt(kWeaponDrawSyncVariable.data(), GetInitialWeaponDrawSyncState());
 				SetGraphVariableFloat("fRandomClipStartTimePercentage", RE::BSRandom::Float0To1());
 				bool processed = RunInitialBaseStateAction(g_getDefaultObjectForActionInstantInitializeToBaseState());
 				if (!processed) {
-					SetGraphVariableInt("iSyncWeaponDrawState", 0);
+					SetGraphVariableInt(kWeaponDrawSyncVariable.data(), 0);
 					processed = RunInitialBaseStateAction(g_getDefaultObjectForActionInitializeToBaseState());
 				}
 
@@ -2071,8 +2006,8 @@ namespace TF3DHud::Animations
 				updateData.deltaTime = 0.0001F;
 				updateData.flags18 = 0xFFFF;
 				updateData.flags1C = 1;
-				(void)g_updateAnimationGraphManager(this, updateData);
-				SetGraphVariableInt("iSyncWeaponDrawState", 0);
+				(void)UpdateGraphManagerPreservingPreviewRoot(updateData);
+				SetGraphVariableInt(kWeaponDrawSyncVariable.data(), 0);
 				ApplyPreviewGraphVariableOverrides();
 
 				if (processed) {
@@ -2424,6 +2359,8 @@ namespace TF3DHud::Animations
 					SetGraphVariableFloat(variableName.data(), 0.0F);
 				}
 
+				ApplyIdlePreviewWeaponGraphState();
+
 				if (!previewStopEventsApplied_) {
 					// WeaponBehavior.xml exposes these stop events for state machines.
 					// Do not send moveStop while the live graph is already in locomotion:
@@ -2453,6 +2390,25 @@ namespace TF3DHud::Animations
 				(void)SetPreviewBoneCulled(
 					RE::BSFixedString("Weapon"),
 					GetConfig().animation.hideWeaponDuringIdleAnimation);
+			}
+
+			void ApplyIdlePreviewWeaponGraphState()
+			{
+				const auto& animation = GetConfig().animation;
+				if (animation.useLiveAnimation) {
+					return;
+				}
+
+				// WeaponBehavior.xml: bEquipOkIsActiveMod reads bEquipOk and
+				// gates the drawn rifle branch under NoHandIKRelaxedWeapon.
+				const bool drawWeapon = !animation.sheatheWeaponDuringIdleAnimation;
+				SetGraphVariableBool("bEquipOk", drawWeapon);
+
+				// WeaponBehavior.xml: GunPlayBehavior syncs on
+				// iSyncReadyAlertRelaxed; state 2 is RelaxedState. Keep idle
+				// preview-owned so the weapon subgraph does not inherit the live
+				// actor's ready/alert/relaxed state after a graph reset.
+				SetGraphVariableInt(kReadyAlertRelaxedSyncVariable.data(), drawWeapon ? 2 : 0);
 			}
 
 			void ApplyPreviewWeaponDrawState(const std::int32_t a_state)
@@ -2506,7 +2462,7 @@ namespace TF3DHud::Animations
 			void RequestIdleAnimation(RE::PlayerCharacter& a_player)
 			{
 				auto* idle = ResolveConfiguredDynamicActivationIdle();
-				if (!idle || !manager_) {
+				if (!idle || !manager_ || !initialStateApplied_) {
 					return;
 				}
 
@@ -2526,8 +2482,7 @@ namespace TF3DHud::Animations
 				}
 
 				if (idleRequestSubmitted_ && (idleRequestedKey_ != key || idleRequestedGraph_ != graph.get())) {
-					StopIdleAnimation();
-					return;
+					ClearIdleRequestState();
 				}
 
 				if (idleRequestSubmitted_ && idleRequestedKey_ == key && idleRequestedGraph_ == graph.get()) {
@@ -2558,109 +2513,14 @@ namespace TF3DHud::Animations
 				idleClipObserved_ = false;
 			}
 
-			void StopIdleAnimation()
+			void ClearIdleRequestState()
 			{
-				const bool alreadyStopping = idleStopPending_;
-				if (!idleResolvedPath_.empty()) {
-					idleStoppingPath_ = idleResolvedPath_;
-				} else if (!alreadyStopping) {
-					idleStoppingPath_.clear();
-				}
-
-				if (manager_) {
-					auto* stopAction = GetDefaultAction(RE::DEFAULT_OBJECT::kActionIdleStopInstant);
-					if (!stopAction) {
-						stopAction = GetDefaultAction(RE::DEFAULT_OBJECT::kActionIdleStop);
-					}
-					if (stopAction) {
-						(void)NotifyPreviewActionEvent(stopAction, RE::ActionInput::ACTIONPRIORITY::kImperative);
-					} else {
-						(void)NotifyAnimationGraphImpl("idleStop");
-					}
-					idleStopPending_ = true;
-					FastForwardIdleStop();
-				} else {
-					idleStopPending_ = false;
-				}
-
 				idleRequestedKey_.clear();
 				idleResolvedPath_.clear();
 				idleRequestedGraph_ = nullptr;
 				idleRequestSubmitted_ = false;
 				idleSeekPending_ = false;
 				idleClipObserved_ = false;
-			}
-
-			[[nodiscard]] bool HasIdleStopPending() const
-			{
-				return idleStopPending_;
-			}
-
-			void TryFinishIdleStop()
-			{
-				if (!idleStopPending_) {
-					return;
-				}
-
-				auto graph = GetActivePreviewGraph();
-				if (!graph) {
-					idleStopPending_ = false;
-					idleStoppingPath_.clear();
-					return;
-				}
-
-				if (idleStoppingPath_.empty()) {
-					const auto state = QueryDynamicIdleStopState(*graph, idleStoppingPath_);
-					if (IsDynamicIdleStopComplete(state)) {
-						FinishIdleStopAfterDynamicExit(*graph);
-					}
-					return;
-				}
-
-				const auto state = QueryDynamicIdleStopState(*graph, idleStoppingPath_);
-				if (IsDynamicIdleStopComplete(state)) {
-					FinishIdleStopAfterDynamicExit(*graph);
-				}
-			}
-
-			void FinishIdleStopAfterDynamicExit(RE::BShkbAnimationGraph& a_graph)
-			{
-				if (!idleStoppingPath_.empty()) {
-					(void)MarkLoadedDynamicIdleEntryFree(a_graph, idleStoppingPath_);
-				}
-				idleStopPending_ = false;
-				idleStoppingPath_.clear();
-			}
-
-			void FastForwardIdleStop()
-			{
-				if (!manager_) {
-					return;
-				}
-
-				std::optional<RE::NiTransform> targetLocal;
-				if (targetRoot_) {
-					targetLocal = targetRoot_->GetLocalTransform();
-				}
-
-				for (std::uint32_t step = 0; step < kIdleStopFastForwardMaxSteps; ++step) {
-					(void)g_updateAnimationGraphManagerFloat(this, kIdleStopFastForwardDelta);
-
-					if (targetRoot_ && targetLocal) {
-						targetRoot_->SetLocalTransform(*targetLocal);
-					}
-
-					auto graph = GetActivePreviewGraph();
-					if (!graph || idleStoppingPath_.empty()) {
-						return;
-					}
-
-					const auto state = QueryDynamicIdleStopState(*graph, idleStoppingPath_);
-					if (IsDynamicIdleStopComplete(state)) {
-						FinishIdleStopAfterDynamicExit(*graph);
-						return;
-					}
-				}
 			}
 
 			void UpdateIdlePlaybackClock(const float a_deltaTime)
@@ -2849,12 +2709,37 @@ namespace TF3DHud::Animations
 			bool previewStopEventsApplied_{ false };
 			std::string idleRequestedKey_;
 			std::string idleResolvedPath_;
-			std::string idleStoppingPath_;
 			RE::BShkbAnimationGraph* idleRequestedGraph_{ nullptr };
 			bool idleRequestSubmitted_{ false };
 			bool idleSeekPending_{ false };
 			bool idleClipObserved_{ false };
-			bool idleStopPending_{ false };
+
+			[[nodiscard]] std::int32_t GetInitialWeaponDrawSyncState() const
+			{
+				const auto& animation = GetConfig().animation;
+				return !animation.useLiveAnimation && animation.sheatheWeaponDuringIdleAnimation ? 0 : 2;
+			}
+
+			[[nodiscard]] bool TryGetIdlePreviewIntGraphVariable(
+				const RE::BSFixedString& a_variable,
+				std::int32_t& a_out) const
+			{
+				const auto& animation = GetConfig().animation;
+				if (animation.useLiveAnimation) {
+					return false;
+				}
+
+				if (a_variable == kWeaponDrawSyncVariable) {
+					a_out = initialStateApplied_ ? 0 : GetInitialWeaponDrawSyncState();
+					return true;
+				}
+				if (a_variable == kReadyAlertRelaxedSyncVariable) {
+					a_out = animation.sheatheWeaponDuringIdleAnimation ? 0 : 2;
+					return true;
+				}
+
+				return false;
+			}
 
 			[[nodiscard]] RE::BSTSmartPointer<RE::BShkbAnimationGraph> GetActivePreviewGraph() const
 			{
@@ -3011,7 +2896,7 @@ namespace TF3DHud::Animations
 		std::string g_lastDiagnostic;
 		std::uint64_t g_liveSubgraphSignature{ 0 };
 		std::recursive_mutex g_stateLock;
-		std::vector<RE::TESIdleForm*> g_dynamicActivationIdles;
+		DynamicActivationIdleMap g_dynamicActivationIdles;
 		std::mutex g_pendingLiveGraphRequestsLock;
 		std::vector<LiveGraphRequest> g_pendingLiveGraphRequests;
 
@@ -3083,11 +2968,16 @@ namespace TF3DHud::Animations
 			return true;
 		}
 
-		void Clear()
+		void Clear(const bool a_preserveIdlePlayback = false)
 		{
 			g_holder.reset();
 			g_project.clear();
 			g_liveSubgraphSignature = 0;
+			if (!a_preserveIdlePlayback) {
+				g_idlePlaybackKey.clear();
+				g_idlePlaybackTime = 0.0F;
+				g_idleClipDuration = 0.0F;
+			}
 
 			std::scoped_lock lock(g_pendingLiveGraphRequestsLock);
 			g_pendingLiveGraphRequests.clear();
@@ -3169,14 +3059,22 @@ namespace TF3DHud::Animations
 
 			const auto& key = GetConfig().animation.dynamicActivationIdle;
 			if (!key.empty()) {
-				for (auto* idle : g_dynamicActivationIdles) {
-					if (idle && DynamicActivationIdleKey(*idle) == key) {
-						return idle;
+				for (const auto& [filename, idles] : g_dynamicActivationIdles) {
+					for (auto* idle : idles) {
+						if (idle && DynamicActivationIdleKey(*idle) == key) {
+							return idle;
+						}
 					}
 				}
 			}
 
-			return g_dynamicActivationIdles.front();
+			for (const auto& [filename, idles] : g_dynamicActivationIdles) {
+				if (!idles.empty()) {
+					return idles.front();
+				}
+			}
+
+			return nullptr;
 		}
 
 		[[nodiscard]] RE::TESIdleForm* ResolvePlayableIdle(RE::PlayerCharacter& a_player, RE::TESIdleForm& a_idle)
@@ -3316,6 +3214,12 @@ namespace TF3DHud::Animations
 		Clear();
 	}
 
+	void ResetGraphPreservingIdlePlayback()
+	{
+		std::scoped_lock lock(g_stateLock);
+		Clear(true);
+	}
+
 	void ResetInitialState()
 	{
 		std::scoped_lock lock(g_stateLock);
@@ -3336,13 +3240,19 @@ namespace TF3DHud::Animations
 			return;
 		}
 
-		const auto found = std::find(g_dynamicActivationIdles.begin(), g_dynamicActivationIdles.end(), a_idle);
-		if (found == g_dynamicActivationIdles.end()) {
-			g_dynamicActivationIdles.push_back(a_idle);
+		auto* file = a_idle->GetFile(0);
+		if (!file || file->filename[0] == '\0') {
+			return;
+		}
+
+		auto& idles = g_dynamicActivationIdles[file->filename];
+		const auto found = std::find(idles.begin(), idles.end(), a_idle);
+		if (found == idles.end()) {
+			idles.push_back(a_idle);
 		}
 	}
 
-	const std::vector<RE::TESIdleForm*>& GetDynamicActivationIdles()
+	const DynamicActivationIdleMap& GetDynamicActivationIdles()
 	{
 		return g_dynamicActivationIdles;
 	}
@@ -3350,19 +3260,18 @@ namespace TF3DHud::Animations
 	void StopIdleAnimation()
 	{
 		std::scoped_lock lock(g_stateLock);
-		if (g_holder) {
-			g_holder->StopIdleAnimation();
-		}
+		Clear();
 	}
 
 	void Update(RE::PlayerCharacter& a_player, RE::NiAVObject& a_previewRoot, const float a_deltaTime)
 	{
 		std::scoped_lock lock(g_stateLock);
+		const auto& animation = GetConfig().animation;
+
 		if (!EnsureGraph(a_player, a_previewRoot) || !g_holder) {
 			return;
 		}
 
-		const auto& animation = GetConfig().animation;
 		g_holder->RefreshPendingSubgraphLoads();
 		g_holder->TryApplyInitialAnimationState();
 
@@ -3377,9 +3286,8 @@ namespace TF3DHud::Animations
 			updateDelta = g_holder->GetActiveClipSynchronizedDeltaTime(a_deltaTime);
 		} else {
 			DrainPendingLiveGraphRequests(true);
-			if (!g_holder->HasIdleStopPending()) {
-				g_holder->RequestIdleAnimation(a_player);
-			}
+			g_holder->RequestIdleAnimation(a_player);
+			g_holder->ApplyIdlePreviewWeaponGraphState();
 		}
 
 		const bool updated = g_updateAnimationGraphManagerFloat(g_holder.get(), updateDelta);
@@ -3387,16 +3295,6 @@ namespace TF3DHud::Animations
 
 		if (animation.useLiveAnimation) {
 			g_holder->ProcessMirroredEvents();
-			if (g_holder->HasIdleStopPending()) {
-				g_holder->TryFinishIdleStop();
-			}
-		} else if (g_holder->HasIdleStopPending()) {
-			g_holder->ProcessMirroredEvents();
-			g_holder->ApplyIdleWeaponCullState();
-			g_holder->TryFinishIdleStop();
-			if (!g_holder->HasIdleStopPending()) {
-				g_holder->RequestIdleAnimation(a_player);
-			}
 		} else {
 			g_holder->ProcessMirroredEvents();
 			g_holder->ApplyIdleWeaponCullState();

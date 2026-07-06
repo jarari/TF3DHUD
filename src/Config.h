@@ -48,6 +48,7 @@ namespace TF3DHud
 	{
 		bool useLiveAnimation{ true };
 		bool hideWeaponDuringIdleAnimation{ false };
+		bool sheatheWeaponDuringIdleAnimation{ false };
 		std::string dynamicActivationIdle;
 		AnimationMirrorEventSettings mirrorEvents;
 	};

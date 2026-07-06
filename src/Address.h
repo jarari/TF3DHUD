@@ -87,21 +87,6 @@ namespace TF3DHud::Address
 	};
 	static_assert(sizeof(BorrowedBipedPointer) == sizeof(void*));
 
-	struct LoadedIdleAnimData
-	{
-		RE::BSFixedString path;
-		std::uintptr_t resourceHandle{ 0 };
-		std::uintptr_t bindingWithTriggers{ 0 };
-		std::uintptr_t nodeTemplateOrFreeMarker{ 0 };
-		RE::BShkbAnimationGraph* graph{ nullptr };
-	};
-	static_assert(sizeof(LoadedIdleAnimData) == 0x28);
-	static_assert(offsetof(LoadedIdleAnimData, path) == 0x0);
-	static_assert(offsetof(LoadedIdleAnimData, resourceHandle) == 0x8);
-	static_assert(offsetof(LoadedIdleAnimData, bindingWithTriggers) == 0x10);
-	static_assert(offsetof(LoadedIdleAnimData, nodeTemplateOrFreeMarker) == 0x18);
-	static_assert(offsetof(LoadedIdleAnimData, graph) == 0x20);
-
 	struct SkinComplexionContext
 	{
 		RE::BIPED_OBJECT slot{ RE::BIPED_OBJECT::kNone };
@@ -342,8 +327,6 @@ namespace TF3DHud::Address
 	extern REL::Relocation<void**> AnimationSubGraphDataSingleton;
 	extern REL::Relocation<void**> BehaviorGraphSwapSingleton;
 	extern REL::Relocation<RE::EquipEventSource*> EquipEventSourceSingleton;
-	extern REL::Relocation<RE::BSTArray<LoadedIdleAnimData>*> LoadedHandleAndBindingA;
-	extern REL::Relocation<RE::BSReadWriteLock*> LoadedIdleLock;
 	extern REL::Relocation<std::uintptr_t> ClipCursor;
 	extern REL::Relocation<std::uintptr_t> ProcessGraphEventTarget;
 	extern REL::Relocation<std::uintptr_t> RenderPrepassesAndMenusTarget;

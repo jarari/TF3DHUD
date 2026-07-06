@@ -1076,7 +1076,7 @@ namespace TF3DHud::Imgui
 		[[nodiscard]] std::string DynamicActivationIdleKey(RE::TESIdleForm& a_idle)
 		{
 			auto* file = a_idle.GetFile(0);
-			if (!file) {
+			if (!file || file->filename[0] == '\0') {
 				return {};
 			}
 
@@ -1085,12 +1085,19 @@ namespace TF3DHud::Imgui
 			return std::string{ file->filename } + "|" + localID.data();
 		}
 
-		[[nodiscard]] std::uint32_t ResolveDynamicActivationIdleIndex(
-			const std::vector<RE::TESIdleForm*>& a_idles,
+		[[nodiscard]] bool HasDynamicActivationIdles(const Animations::DynamicActivationIdleMap& a_idles)
+		{
+			return std::any_of(a_idles.begin(), a_idles.end(), [](const auto& entry) {
+				return !entry.second.empty();
+			});
+		}
+
+		[[nodiscard]] std::uint32_t ResolveDynamicActivationIdleIndexInFile(
+			const std::vector<RE::TESIdleForm*>& a_fileIdles,
 			const std::string& a_key)
 		{
-			for (std::size_t index = 0; index < a_idles.size(); ++index) {
-				auto* idle = a_idles[index];
+			for (std::size_t index = 0; index < a_fileIdles.size(); ++index) {
+				auto* idle = a_fileIdles[index];
 				if (idle && DynamicActivationIdleKey(*idle) == a_key) {
 					return static_cast<std::uint32_t>(index);
 				}
@@ -1110,6 +1117,22 @@ namespace TF3DHud::Imgui
 			Previewer::ClearAnimationObjects();
 		}
 
+		[[nodiscard]] std::size_t ResolveDynamicActivationIdleFileIndex(
+			const std::vector<const std::pair<const std::string, std::vector<RE::TESIdleForm*>>*>& a_files,
+			const std::string& a_key)
+		{
+			if (!a_key.empty()) {
+				for (std::size_t fileIndex = 0; fileIndex < a_files.size(); ++fileIndex) {
+					for (auto* idle : a_files[fileIndex]->second) {
+						if (idle && DynamicActivationIdleKey(*idle) == a_key) {
+							return fileIndex;
+						}
+					}
+				}
+			}
+			return 0;
+		}
+
 		void DrawAnimationTab()
 		{
 			auto& animation = GetMutableConfig().animation;
@@ -1117,9 +1140,13 @@ namespace TF3DHud::Imgui
 
 			const bool wasUsingLiveAnimation = animation.useLiveAnimation;
 			if (ImGui::Checkbox("Use Live Animation", &animation.useLiveAnimation) &&
-				!wasUsingLiveAnimation && animation.useLiveAnimation) {
-				Animations::StopIdleAnimation();
-				Previewer::ClearAnimationObjects();
+				wasUsingLiveAnimation != animation.useLiveAnimation) {
+				if (animation.useLiveAnimation) {
+					Animations::StopIdleAnimation();
+					Previewer::ClearAnimationObjects();
+				} else {
+					Animations::ResetGraphPreservingIdlePlayback();
+				}
 			}
 			ImGui::Separator();
 			if (animation.useLiveAnimation) {
@@ -1135,61 +1162,114 @@ namespace TF3DHud::Imgui
 			}
 
 			const auto& idles = Animations::GetDynamicActivationIdles();
-			if (idles.empty()) {
+			if (!HasDynamicActivationIdles(idles)) {
 				const char* none = "(none)";
 				int selected = 0;
 				ImGui::BeginDisabled();
+				ImGui::PushItemWidth(320.0F);
+				ImGui::Combo("File", &selected, &none, 1);
 				ImGui::Combo("Idle Animation", &selected, &none, 1);
+				ImGui::PopItemWidth();
+				ImGui::Button("<##IdleAnimationPrev");
 				ImGui::SameLine();
-				ImGui::Button("<");
-				ImGui::SameLine();
-				ImGui::Button(">");
+				ImGui::Button(">##IdleAnimationNext");
 				ImGui::EndDisabled();
+				ImGui::SameLine();
 				ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation);
+				ImGui::SameLine();
+				const bool wasSheathingWeapon = animation.sheatheWeaponDuringIdleAnimation;
+				if (ImGui::Checkbox("Sheathe Weapon", &animation.sheatheWeaponDuringIdleAnimation) &&
+					wasSheathingWeapon != animation.sheatheWeaponDuringIdleAnimation) {
+					Animations::ResetGraphPreservingIdlePlayback();
+				}
 				return;
 			}
 
-			std::vector<std::string> labels;
-			labels.reserve(idles.size());
-			std::vector<const char*> items;
-			items.reserve(idles.size());
-			for (auto* idle : idles) {
-				labels.push_back(idle ? DynamicActivationIdleLabel(*idle) : std::string{ "(null)" });
-				items.push_back(labels.back().c_str());
+			std::vector<const std::pair<const std::string, std::vector<RE::TESIdleForm*>>*> files;
+			files.reserve(idles.size());
+			std::vector<std::string> fileLabels;
+			fileLabels.reserve(idles.size());
+			std::vector<const char*> fileItems;
+			fileItems.reserve(idles.size());
+			for (const auto& entry : idles) {
+				if (entry.second.empty()) {
+					continue;
+				}
+				files.push_back(std::addressof(entry));
+				fileLabels.push_back(entry.first + " (" + std::to_string(entry.second.size()) + ")");
+				fileItems.push_back(fileLabels.back().c_str());
 			}
 
-			auto selectedIndex = ResolveDynamicActivationIdleIndex(idles, animation.dynamicActivationIdle);
+			if (files.empty()) {
+				return;
+			}
+
+			auto selectedFileIndex = ResolveDynamicActivationIdleFileIndex(files, animation.dynamicActivationIdle);
+			auto* selectedFile = files[selectedFileIndex];
+			const auto& fileIdles = selectedFile->second;
+			auto selectedIndex =
+				ResolveDynamicActivationIdleIndexInFile(fileIdles, animation.dynamicActivationIdle);
 			if (animation.dynamicActivationIdle.empty()) {
-				if (auto* idle = idles[selectedIndex]) {
+				if (auto* idle = fileIdles[selectedIndex]) {
 					animation.dynamicActivationIdle = DynamicActivationIdleKey(*idle);
 				}
 			}
 
-			int selected = static_cast<int>(selectedIndex);
 			ImGui::PushItemWidth(320.0F);
-			if (ImGui::Combo("Idle Animation", &selected, items.data(), static_cast<int>(items.size()))) {
-				if (auto* idle = idles[static_cast<std::size_t>(selected)]) {
+			int selectedFileComboIndex = static_cast<int>(selectedFileIndex);
+			if (ImGui::Combo("File", &selectedFileComboIndex, fileItems.data(), static_cast<int>(fileItems.size()))) {
+				selectedFileIndex = static_cast<std::size_t>(selectedFileComboIndex);
+				selectedFile = files[selectedFileIndex];
+				if (auto* idle = selectedFile->second.front()) {
+					SelectDynamicActivationIdle(animation, *idle);
+				}
+			}
+
+			selectedFileIndex = ResolveDynamicActivationIdleFileIndex(files, animation.dynamicActivationIdle);
+			selectedFile = files[selectedFileIndex];
+			const auto& selectedFileIdles = selectedFile->second;
+
+			std::vector<std::string> idleLabels;
+			idleLabels.reserve(selectedFileIdles.size());
+			std::vector<const char*> idleItems;
+			idleItems.reserve(selectedFileIdles.size());
+			for (auto* idle : selectedFileIdles) {
+				idleLabels.push_back(idle ? DynamicActivationIdleLabel(*idle) : std::string{ "(null)" });
+				idleItems.push_back(idleLabels.back().c_str());
+			}
+
+			selectedIndex =
+				ResolveDynamicActivationIdleIndexInFile(selectedFileIdles, animation.dynamicActivationIdle);
+			int selected = static_cast<int>(selectedIndex);
+			if (ImGui::Combo("Idle Animation", &selected, idleItems.data(), static_cast<int>(idleItems.size()))) {
+				if (auto* idle = selectedFileIdles[static_cast<std::size_t>(selected)]) {
 					SelectDynamicActivationIdle(animation, *idle);
 				}
 			}
 			ImGui::PopItemWidth();
-			ImGui::SameLine();
-			if (ImGui::Button("<")) {
+			if (ImGui::Button("<##IdleAnimationPrev")) {
 				selectedIndex = selectedIndex == 0 ?
-					static_cast<std::uint32_t>(idles.size() - 1) :
+					static_cast<std::uint32_t>(selectedFileIdles.size() - 1) :
 					selectedIndex - 1;
-				if (auto* idle = idles[selectedIndex]) {
+				if (auto* idle = selectedFileIdles[selectedIndex]) {
 					SelectDynamicActivationIdle(animation, *idle);
 				}
 			}
 			ImGui::SameLine();
-			if (ImGui::Button(">")) {
-				selectedIndex = static_cast<std::uint32_t>((selectedIndex + 1) % idles.size());
-				if (auto* idle = idles[selectedIndex]) {
+			if (ImGui::Button(">##IdleAnimationNext")) {
+				selectedIndex = static_cast<std::uint32_t>((selectedIndex + 1) % selectedFileIdles.size());
+				if (auto* idle = selectedFileIdles[selectedIndex]) {
 					SelectDynamicActivationIdle(animation, *idle);
 				}
 			}
+			ImGui::SameLine();
 			ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation);
+			ImGui::SameLine();
+			const bool wasSheathingWeapon = animation.sheatheWeaponDuringIdleAnimation;
+			if (ImGui::Checkbox("Sheathe Weapon", &animation.sheatheWeaponDuringIdleAnimation) &&
+				wasSheathingWeapon != animation.sheatheWeaponDuringIdleAnimation) {
+				Animations::ResetGraphPreservingIdlePlayback();
+			}
 		}
 
 		[[nodiscard]] bool LightNameExists(const Config& a_config, const std::string& a_name, const std::size_t a_ignoreIndex)
