@@ -64,6 +64,7 @@ namespace TF3DHud::Previewer
 	void MarkEquipmentDirty();
 	void ObserveUpdate3DModel(std::uint16_t a_updateFlags, bool a_updateEditorDeadModel);
 	void HandleAnimationObjectEvent(const RE::BSFixedString& a_tag, const RE::BSFixedString& a_payload);
+	void ClearAnimationObjects();
 	void ApplyConfigChanges();
 	void ReloadConfig();
 	void SuspendForLooksMenu();

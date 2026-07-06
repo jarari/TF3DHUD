@@ -1390,24 +1390,73 @@ namespace TF3DHud
 			// BipedAnim::AttachToParent; that path resolves the parent from the
 			// model's NiStringExtraData "Prn" and skips weapon-slot fallbacks.
 			auto* prn = FindStringExtraDataInTree(a_animObject, RE::BSFixedString("Prn"));
-			if (!prn || prn->GetValue().empty()) {
+			if (!prn) {
 				return nullptr;
 			}
 
-			return FindPreviewNodeByName(a_previewRoot, a_previewNodes, prn->GetValue());
+			const auto prnValue = prn->GetValue();
+			if (prnValue.empty()) {
+				return nullptr;
+			}
+
+			return FindPreviewNodeByName(a_previewRoot, a_previewNodes, prnValue);
 		}
 
-		void AttachPreviewAnimObject(const RE::BSFixedString& a_editorID)
+		void UncullPreviewAnimObjectAttachPath(
+			RE::NiNode& a_parent,
+			RE::NiAVObject& a_previewRoot)
 		{
-			if (a_editorID.empty() || !g_previewRoot) {
+			// IDA OG 1.10.163: BipedAnim::AttachToParent unculls the resolved
+			// attach parent and walks upward before attaching animation objects.
+			for (auto* object = static_cast<RE::NiAVObject*>(std::addressof(a_parent));
+				 object;
+				 object = object != std::addressof(a_previewRoot) ? object->parent : nullptr) {
+				if (object->GetAppCulled()) {
+					object->SetAppCulled(false);
+				}
+				if (object->fadeAmount <= 0.0F) {
+					object->fadeAmount = 1.0F;
+				}
+				if (object == std::addressof(a_previewRoot)) {
+					break;
+				}
+			}
+		}
+
+		void SetPreviewAnimObjectVisible(
+			PreviewAnimObjectAttachment& a_attachment,
+			const bool a_visible,
+			RE::NiAVObject& a_previewRoot)
+		{
+			if (a_attachment.parent) {
+				UncullPreviewAnimObjectAttachPath(*a_attachment.parent, a_previewRoot);
+			}
+
+			if (a_attachment.object) {
+				a_attachment.object->SetAppCulled(!a_visible);
+			}
+		}
+
+		void AttachPreviewAnimObject(const RE::BSFixedString& a_editorID, const bool a_initiallyVisible)
+		{
+			const auto editorID = FixedStringToString(a_editorID);
+			if (a_editorID.empty()) {
+				return;
+			}
+
+			if (!g_previewRoot) {
 				return;
 			}
 
 			if (auto existing = FindPreviewAnimObjectAttachment(a_editorID);
 				existing != g_previewAnimObjectAttachments.end()) {
+				SetPreviewAnimObjectVisible(*existing, a_initiallyVisible, *g_previewRoot);
+				RE::NiUpdateData updateData;
 				if (existing->object) {
-					existing->object->SetAppCulled(false);
+					existing->object->Update(updateData);
 				}
+				g_previewRoot->Update(updateData);
+				MarkRenderStateDirty();
 				return;
 			}
 
@@ -1415,7 +1464,7 @@ namespace TF3DHud
 			if (!animObject) {
 				LogDiagnostic(
 					std::string{ "anim object attach skipped: ANIO not found for '" } +
-					FixedStringToString(a_editorID) + "'");
+					editorID + "'");
 				return;
 			}
 
@@ -1423,7 +1472,7 @@ namespace TF3DHud
 			if (!modelPath || modelPath[0] == '\0') {
 				LogDiagnostic(
 					std::string{ "anim object attach skipped: ANIO has empty model for '" } +
-					FixedStringToString(a_editorID) + "'");
+					editorID + "'");
 				return;
 			}
 
@@ -1431,7 +1480,7 @@ namespace TF3DHud
 			if (!previewObject) {
 				LogDiagnostic(
 					std::string{ "anim object attach skipped: model load failed for '" } +
-					FixedStringToString(a_editorID) + "' path='" + modelPath + "'");
+					editorID + "' path='" + modelPath + "'");
 				return;
 			}
 
@@ -1441,17 +1490,18 @@ namespace TF3DHud
 			if (!parent) {
 				LogDiagnostic(
 					std::string{ "anim object attach skipped: Prn parent not found for '" } +
-					FixedStringToString(a_editorID) + "' path='" + modelPath + "'");
+					editorID + "' path='" + modelPath + "'");
 				RetirePreviewObject(std::move(previewObject));
 				return;
 			}
+			UncullPreviewAnimObjectAttachPath(*parent, *g_previewRoot);
 
 			RE::bhkWorld::RemoveObjects(previewObject.get(), true, true);
 			StripControllerChains(*previewObject);
 			PreparePreviewTree(*previewObject);
 			SanitizePreviewRenderTree(*previewObject);
 			PrepareForInterface3DOffscreen(*previewObject);
-			previewObject->SetLocalTransform(RE::NiTransform::IDENTITY);
+			previewObject->SetAppCulled(!a_initiallyVisible);
 
 			parent->AttachChild(previewObject.get(), true);
 			g_previewAnimObjectAttachments.push_back({
@@ -1459,6 +1509,7 @@ namespace TF3DHud
 				.object = previewObject,
 				.parent = parent,
 			});
+			SetPreviewAnimObjectVisible(g_previewAnimObjectAttachments.back(), a_initiallyVisible, *g_previewRoot);
 
 			RE::NiUpdateData updateData;
 			previewObject->Update(updateData);
@@ -1468,8 +1519,12 @@ namespace TF3DHud
 
 		void HandleAnimationObjectEventImpl(const RE::BSFixedString& a_tag, const RE::BSFixedString& a_payload)
 		{
+			// IDA OG 1.10.163: AnimationObjects::Loaded attaches on load and
+			// app-culls the root until the animation sends its draw event.
 			if (a_tag == std::string_view{ "AnimObjDraw" }) {
-				AttachPreviewAnimObject(a_payload);
+				AttachPreviewAnimObject(a_payload, true);
+			} else if (a_tag == std::string_view{ "AnimObjLoad" }) {
+				AttachPreviewAnimObject(a_payload, false);
 			} else if (a_tag == std::string_view{ "AnimObjUnequip" }) {
 				DetachPreviewAnimObject(a_payload);
 				MarkRenderStateDirty();
@@ -2394,6 +2449,17 @@ namespace TF3DHud
 		{
 			std::scoped_lock lock(g_stateLock);
 			HandleAnimationObjectEventImpl(a_tag, a_payload);
+		}
+
+		void ClearAnimationObjects()
+		{
+			std::scoped_lock lock(g_stateLock);
+			RetirePreviewAnimObjectAttachments(true);
+			if (g_previewRoot) {
+				RE::NiUpdateData updateData;
+				g_previewRoot->Update(updateData);
+				MarkRenderStateDirty();
+			}
 		}
 
 		void ApplyConfigChanges()

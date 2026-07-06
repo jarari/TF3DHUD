@@ -2260,12 +2260,7 @@ namespace TF3DHud::Animations
 
 				for (const auto& eventName : events) {
 					ApplyPreviewWeaponVisibilityEvent(eventName);
-					const bool processed = NotifyAnimationGraphImpl(eventName);
-					if (IsIdleAnimationMirrorEventWhitelisted(eventName.c_str())) {
-						LogDiagnostic(
-							std::string{ "mirrored idle anim object event '" } + SafeString(eventName.c_str()) +
-							"' processed=" + (processed ? "true" : "false"));
-					}
+					(void)NotifyAnimationGraphImpl(eventName);
 				}
 			}
 
@@ -2276,9 +2271,6 @@ namespace TF3DHud::Animations
 				}
 
 				if (IsIdleAnimationMirrorEventWhitelisted(a_event.tag.c_str())) {
-					LogDiagnostic(
-						std::string{ "preview idle anim object graph event tag='" } + SafeString(a_event.tag.c_str()) +
-						"' payload='" + SafeString(a_event.payload.c_str()) + "'");
 					Previewer::HandleAnimationObjectEvent(a_event.tag, a_event.payload);
 				}
 

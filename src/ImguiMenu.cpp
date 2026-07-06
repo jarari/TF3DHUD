@@ -1098,6 +1098,18 @@ namespace TF3DHud::Imgui
 			return 0;
 		}
 
+		void SelectDynamicActivationIdle(AnimationSettings& a_animation, RE::TESIdleForm& a_idle)
+		{
+			const auto key = DynamicActivationIdleKey(a_idle);
+			if (a_animation.dynamicActivationIdle == key) {
+				return;
+			}
+
+			a_animation.dynamicActivationIdle = key;
+			Animations::StopIdleAnimation();
+			Previewer::ClearAnimationObjects();
+		}
+
 		void DrawAnimationTab()
 		{
 			auto& animation = GetMutableConfig().animation;
@@ -1107,6 +1119,7 @@ namespace TF3DHud::Imgui
 			if (ImGui::Checkbox("Use Live Animation", &animation.useLiveAnimation) &&
 				!wasUsingLiveAnimation && animation.useLiveAnimation) {
 				Animations::StopIdleAnimation();
+				Previewer::ClearAnimationObjects();
 			}
 			ImGui::Separator();
 			if (animation.useLiveAnimation) {
@@ -1156,11 +1169,7 @@ namespace TF3DHud::Imgui
 			ImGui::PushItemWidth(320.0F);
 			if (ImGui::Combo("Idle Animation", &selected, items.data(), static_cast<int>(items.size()))) {
 				if (auto* idle = idles[static_cast<std::size_t>(selected)]) {
-					const auto key = DynamicActivationIdleKey(*idle);
-					if (animation.dynamicActivationIdle != key) {
-						animation.dynamicActivationIdle = key;
-						Animations::StopIdleAnimation();
-					}
+					SelectDynamicActivationIdle(animation, *idle);
 				}
 			}
 			ImGui::PopItemWidth();
@@ -1170,22 +1179,14 @@ namespace TF3DHud::Imgui
 					static_cast<std::uint32_t>(idles.size() - 1) :
 					selectedIndex - 1;
 				if (auto* idle = idles[selectedIndex]) {
-					const auto key = DynamicActivationIdleKey(*idle);
-					if (animation.dynamicActivationIdle != key) {
-						animation.dynamicActivationIdle = key;
-						Animations::StopIdleAnimation();
-					}
+					SelectDynamicActivationIdle(animation, *idle);
 				}
 			}
 			ImGui::SameLine();
 			if (ImGui::Button(">")) {
 				selectedIndex = static_cast<std::uint32_t>((selectedIndex + 1) % idles.size());
 				if (auto* idle = idles[selectedIndex]) {
-					const auto key = DynamicActivationIdleKey(*idle);
-					if (animation.dynamicActivationIdle != key) {
-						animation.dynamicActivationIdle = key;
-						Animations::StopIdleAnimation();
-					}
+					SelectDynamicActivationIdle(animation, *idle);
 				}
 			}
 			ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation);
