@@ -3,10 +3,12 @@
 #include "Address.h"
 #include "Animations.h"
 #include "Config.h"
+#include "Equipment.h"
 #include "Previewer.h"
 #include "Renderer.h"
 
 #include "RE/B/BSGraphics.h"
+#include "RE/P/PlayerCharacter.h"
 #include "RE/T/TESFile.h"
 #include "RE/T/TESIdleForm.h"
 
@@ -1366,6 +1368,95 @@ namespace TF3DHud::Imgui
 			}
 		}
 
+		void ApplyEquipmentEdit()
+		{
+			MarkDirty();
+			Previewer::MarkEquipmentDirty();
+		}
+
+		void DrawEquipmentSlotTable(EquipmentSettings& a_equipment)
+		{
+			constexpr ImGuiTableFlags tableFlags =
+				ImGuiTableFlags_BordersInnerH |
+				ImGuiTableFlags_BordersInnerV |
+				ImGuiTableFlags_RowBg |
+				ImGuiTableFlags_SizingStretchSame;
+
+			if (!ImGui::BeginTable("equipment_slots", 8, tableFlags)) {
+				return;
+			}
+
+			for (std::uint32_t column = 0; column < 8; ++column) {
+				ImGui::TableSetupColumn("");
+			}
+
+			for (std::uint32_t row = 0; row < 4; ++row) {
+				ImGui::TableNextRow();
+				for (std::uint32_t column = 0; column < 8; ++column) {
+					const auto slotIndex = row * 8 + column;
+					const auto bit = 1u << slotIndex;
+					bool enabled = (a_equipment.syncSlotMask & bit) != 0;
+
+					char label[64]{};
+					std::snprintf(
+						label,
+						sizeof(label),
+						"%u %s",
+						Equipment::kEditorSlotBase + slotIndex,
+						Equipment::PrettySlotName(slotIndex));
+
+					ImGui::TableSetColumnIndex(static_cast<int>(column));
+					ImGui::PushID(static_cast<int>(slotIndex));
+					if (ImGui::Checkbox(label, &enabled)) {
+						if (enabled) {
+							a_equipment.syncSlotMask |= bit;
+						} else {
+							a_equipment.syncSlotMask &= ~bit;
+						}
+						ApplyEquipmentEdit();
+					}
+					ImGui::PopID();
+				}
+			}
+
+			ImGui::EndTable();
+		}
+
+		void DrawEquippedArmorList()
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			std::vector<Equipment::EquippedArmorInfo> armors;
+			if (player) {
+				armors = Equipment::CollectEquippedArmors(*player, Equipment::EffectiveEditorSlotMask(*player));
+			}
+
+			if (ImGui::BeginChild("equipped_armors", ImVec2(0.0F, 220.0F), true)) {
+				if (!player) {
+					ImGui::TextDisabled("Player unavailable");
+				} else if (armors.empty()) {
+					ImGui::TextDisabled("No equipped armor");
+				} else {
+					for (const auto& armor : armors) {
+						const auto slots = Equipment::FormatSlotList(armor.slotMask);
+						if (armor.excluded) {
+							ImGui::TextDisabled("%s (%s)", armor.name.c_str(), slots.c_str());
+						} else {
+							ImGui::Text("%s (%s)", armor.name.c_str(), slots.c_str());
+						}
+					}
+				}
+			}
+			ImGui::EndChild();
+		}
+
+		void DrawEquipmentTab()
+		{
+			auto& equipment = GetMutableConfig().equipment;
+			DrawEquipmentSlotTable(equipment);
+			ImGui::Separator();
+			DrawEquippedArmorList();
+		}
+
 		[[nodiscard]] bool LightNameExists(const Config& a_config, const std::string& a_name, const std::size_t a_ignoreIndex)
 		{
 			for (std::size_t index = 0; index < a_config.lights.size(); ++index) {
@@ -1571,6 +1662,10 @@ namespace TF3DHud::Imgui
 				}
 				if (ImGui::BeginTabItem("Animation")) {
 					DrawAnimationTab();
+					ImGui::EndTabItem();
+				}
+				if (ImGui::BeginTabItem("Equipment")) {
+					DrawEquipmentTab();
 					ImGui::EndTabItem();
 				}
 				if (ImGui::BeginTabItem("Light")) {

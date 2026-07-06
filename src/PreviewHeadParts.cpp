@@ -1,6 +1,7 @@
 #include "PreviewHeadParts.h"
 
 #include "Address.h"
+#include "Equipment.h"
 #include "Utils.h"
 
 #include "RE/B/BGSHeadPart.h"
@@ -55,6 +56,7 @@ namespace TF3DHud::PreviewHeadParts
 
 		[[nodiscard]] std::uint32_t BuildEquippedInventoryBipedMask(
 			RE::TESObjectREFR& a_reference,
+			const std::uint32_t a_editorSlotMask,
 			bool& a_usedInventory)
 		{
 			auto* inventory = a_reference.inventoryList;
@@ -70,6 +72,9 @@ namespace TF3DHud::PreviewHeadParts
 				if (!form || !item.IsEquipped(0) || IsIgnoredHeadPartMaskForm(*form)) {
 					continue;
 				}
+				if (Equipment::IsArmorExcludedBySlotMask(*form, a_editorSlotMask)) {
+					continue;
+				}
 
 				const auto filledSlots = form->GetFilledSlots();
 				if (filledSlots != static_cast<std::uint32_t>(-1)) {
@@ -81,11 +86,19 @@ namespace TF3DHud::PreviewHeadParts
 
 		[[nodiscard]] std::uint32_t BuildEquippedBipedMaskFromBiped(
 			const RE::BipedAnim& a_biped,
-			const RE::TESRace& a_race)
+			const RE::TESRace& a_race,
+			const std::uint32_t a_editorSlotMask)
 		{
 			std::uint32_t mask = 0;
 			for (std::int32_t i = 0; i < 32; ++i) {
 				const auto& object = a_biped.object[i];
+				if (Equipment::IsBipedObjectExcludedBySlotMask(
+						static_cast<RE::BIPED_OBJECT>(i),
+						object,
+						a_editorSlotMask)) {
+					continue;
+				}
+
 				if (auto* form = object.parent.object) {
 					if (IsIgnoredHeadPartMaskForm(*form)) {
 						continue;
@@ -111,9 +124,10 @@ namespace TF3DHud::PreviewHeadParts
 			const RE::BipedAnim& a_biped,
 			const RE::TESRace& a_race)
 		{
+			const auto editorSlotMask = Equipment::EffectiveEditorSlotMask(a_reference);
 			bool usedInventory = false;
-			const auto inventoryMask = BuildEquippedInventoryBipedMask(a_reference, usedInventory);
-			const auto bipedMask = BuildEquippedBipedMaskFromBiped(a_biped, a_race);
+			const auto inventoryMask = BuildEquippedInventoryBipedMask(a_reference, editorSlotMask, usedInventory);
+			const auto bipedMask = BuildEquippedBipedMaskFromBiped(a_biped, a_race, editorSlotMask);
 			// FixDisplayedHeadParts uses inventory; biped attach visibility uses
 			// the live BipedAnim object array. The preview applies both outcomes.
 			return (usedInventory ? inventoryMask : 0) | bipedMask;

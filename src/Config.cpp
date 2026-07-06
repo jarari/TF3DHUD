@@ -1,5 +1,6 @@
 #include "Config.h"
 
+#include "Equipment.h"
 #include "SimpleIni.h"
 
 #include <algorithm>
@@ -88,6 +89,22 @@ namespace TF3DHud
 			return "Head";
 		}
 
+		[[nodiscard]] std::string EquipmentSlotKey(const std::uint32_t a_slotIndex)
+		{
+			return std::format("Slot{}", Equipment::kEditorSlotBase + a_slotIndex);
+		}
+
+		void WriteEquipmentSlots(CSimpleIniA& a_ini, const EquipmentSettings& a_settings)
+		{
+			for (std::uint32_t index = 0; index < Equipment::kEditorSlotCount; ++index) {
+				const auto key = EquipmentSlotKey(index);
+				a_ini.SetBoolValue(
+					"Equipment",
+					key.c_str(),
+					(a_settings.syncSlotMask & (1u << index)) != 0);
+			}
+		}
+
 		void WriteFixedLight(CSimpleIniA& a_ini, const char* a_section, const FixedLightSettings& a_settings, const char* a_prefix)
 		{
 			const std::string prefix{ a_prefix };
@@ -168,6 +185,7 @@ namespace TF3DHud
 			a_ini.SetDoubleValue("ClipRect", "Right", g_config.clipRect.right);
 			a_ini.SetDoubleValue("ClipRect", "Bottom", g_config.clipRect.bottom);
 			a_ini.SetBoolValue("Render", "HideInPowerArmor", g_config.hideInPowerArmor);
+			WriteEquipmentSlots(a_ini, g_config.equipment);
 			WriteDefaultLightSections(a_ini);
 			a_ini.SetValue("UI", "MenuKey", "0xDE");
 		}
@@ -209,6 +227,7 @@ namespace TF3DHud
 			a_ini.SetDoubleValue("ClipRect", "Top", a_config.clipRect.top);
 			a_ini.SetDoubleValue("ClipRect", "Bottom", a_config.clipRect.bottom);
 			a_ini.SetBoolValue("Render", "HideInPowerArmor", a_config.hideInPowerArmor);
+			WriteEquipmentSlots(a_ini, a_config.equipment);
 			WriteLightSections(a_ini, a_config.lights.empty() ? Lights::DefaultLights() : a_config.lights);
 			const auto menuKey = std::format("0x{:02X}", a_config.uiMenuKey);
 			a_ini.SetValue("UI", "MenuKey", menuKey.c_str());
@@ -219,6 +238,7 @@ namespace TF3DHud
 			a_config.fov = std::clamp(a_config.fov, 10.0F, 120.0F);
 			a_config.modelScale = std::clamp(a_config.modelScale, 0.01F, 10.0F);
 			a_config.anchor = std::clamp(a_config.anchor, 1, 9);
+			a_config.equipment.syncSlotMask &= Equipment::kAllEditorSlotsMask;
 			for (auto& light : a_config.lights) {
 				ClampFixedLight(light.fixed);
 				ClampTimeOfDayLight(light.timeOfDay);
@@ -344,6 +364,18 @@ namespace TF3DHud
 			REX::WARN("Invalid virtual key {}.{}='{}'; using 0x{:02X}", a_section, a_key, value, a_default);
 			return a_default;
 		}
+
+		[[nodiscard]] std::uint32_t ReadEquipmentSlotMask(CSimpleIniA& a_ini)
+		{
+			std::uint32_t mask = 0;
+			for (std::uint32_t index = 0; index < Equipment::kEditorSlotCount; ++index) {
+				const auto key = EquipmentSlotKey(index);
+				if (a_ini.GetBoolValue("Equipment", key.c_str(), true)) {
+					mask |= (1u << index);
+				}
+			}
+			return mask;
+		}
 	}
 
 	const Config& GetConfig()
@@ -426,6 +458,7 @@ namespace TF3DHud
 		g_config.clipRect.right = static_cast<float>(ini.GetDoubleValue("ClipRect", "Right", g_config.clipRect.right));
 		g_config.clipRect.bottom = static_cast<float>(ini.GetDoubleValue("ClipRect", "Bottom", g_config.clipRect.bottom));
 		g_config.hideInPowerArmor = ini.GetBoolValue("Render", "HideInPowerArmor", g_config.hideInPowerArmor);
+		g_config.equipment.syncSlotMask = ReadEquipmentSlotMask(ini);
 		g_config.uiMenuKey = ReadVirtualKey(ini, "UI", "MenuKey", g_config.uiMenuKey);
 		g_config.lights = ReadLights(ini);
 		ClampConfig(g_config);

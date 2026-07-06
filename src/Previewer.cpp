@@ -1,6 +1,7 @@
 #include "Previewer.h"
 #include "Address.h"
 #include "Animations.h"
+#include "Equipment.h"
 #include "Morph.h"
 #include "PreviewHeadParts.h"
 #include "PreviewRebuilder.h"
@@ -1569,9 +1570,14 @@ namespace TF3DHud
 			g_rebuilder.BeginRequestedAudits();
 		}
 
-		[[nodiscard]] bool TryBuildBipedSignature(const RE::BipedAnim& a_biped, std::uint64_t& a_signature)
+		[[nodiscard]] bool TryBuildBipedSignature(
+			const RE::PlayerCharacter& a_player,
+			const RE::BipedAnim& a_biped,
+			std::uint64_t& a_signature)
 		{
-			a_signature = PreviewRebuilder::BuildEquipmentSignature(std::addressof(a_biped));
+			a_signature = PreviewRebuilder::BuildEquipmentSignature(
+				std::addressof(a_biped),
+				Equipment::EffectiveEditorSlotMask(a_player));
 			if (a_signature == 0) {
 				LogDiagnostic("third-person biped has empty signature");
 				return false;
@@ -1579,11 +1585,14 @@ namespace TF3DHud
 			return true;
 		}
 
-		[[nodiscard]] bool TryResolveAuditedEquipmentSignature(const RE::BipedAnim& a_biped, std::uint64_t& a_signature)
+		[[nodiscard]] bool TryResolveAuditedEquipmentSignature(
+			const RE::PlayerCharacter& a_player,
+			const RE::BipedAnim& a_biped,
+			std::uint64_t& a_signature)
 		{
 			std::int32_t pendingSlot = -1;
 			std::uint64_t currentSignature = 0;
-			if (!TryBuildBipedSignature(a_biped, currentSignature)) {
+			if (!TryBuildBipedSignature(a_player, a_biped, currentSignature)) {
 				return false;
 			}
 
@@ -1819,9 +1828,14 @@ namespace TF3DHud
 
 			std::unordered_set<RE::NiAVObject*> seenSourceObjects;
 			std::uint32_t attachedObjects = 0;
+			const auto editorSlotMask = Equipment::EffectiveEditorSlotMask(a_player);
 			const auto externalBoneAttachmentsBefore = CountPreviewAttachmentsForSlot(RE::BIPED_OBJECT::kNone);
 
 			auto mirrorObject = [&](const RE::BIPED_OBJECT a_slot, const RE::BIPOBJECT& a_sourceObject) {
+				if (Equipment::IsBipedObjectExcludedBySlotMask(a_slot, a_sourceObject, editorSlotMask)) {
+					return;
+				}
+
 				auto* sourceClone = a_sourceObject.partClone.get();
 				if (!sourceClone || !seenSourceObjects.insert(sourceClone).second) {
 					return;
@@ -2297,7 +2311,7 @@ namespace TF3DHud
 					return false;
 				}
 
-				if (a_bipedSignature == 0 && !TryBuildBipedSignature(*biped, a_bipedSignature)) {
+				if (a_bipedSignature == 0 && !TryBuildBipedSignature(*player, *biped, a_bipedSignature)) {
 					if (!g_previewRoot) {
 						HideRendererAndResetAnimation();
 					}
@@ -2345,7 +2359,7 @@ namespace TF3DHud
 			if (!structuralCommandRan && g_postRebuildAdjustmentHoldFrames == 0) {
 				std::uint64_t equipmentSignature = 0;
 				std::uint64_t morphGeometrySignature = 0;
-				if (TryResolveAuditedEquipmentSignature(*biped, equipmentSignature)) {
+				if (TryResolveAuditedEquipmentSignature(*player, *biped, equipmentSignature)) {
 					if (!SyncPreviewEquipmentLayer(
 							*player,
 							*biped,
@@ -2356,7 +2370,7 @@ namespace TF3DHud
 					structuralCommandRan = true;
 				} else if (TryResolveAuditedMorphGeometrySignature(*player, morphGeometrySignature)) {
 					std::uint64_t currentEquipmentSignature = 0;
-					if (!TryBuildBipedSignature(*biped, currentEquipmentSignature) ||
+					if (!TryBuildBipedSignature(*player, *biped, currentEquipmentSignature) ||
 						!SyncPreviewEquipmentLayer(
 							*player,
 							*biped,
@@ -2497,6 +2511,7 @@ namespace TF3DHud
 			if (g_previewRoot) {
 				g_pendingFramingUpdate = true;
 				g_pendingRendererAttach = true;
+				g_rebuilder.ObserveEquipment();
 				MarkRenderStateDirty();
 			}
 

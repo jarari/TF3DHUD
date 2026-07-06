@@ -53,6 +53,11 @@ namespace TF3DHud
 		AnimationMirrorEventSettings mirrorEvents;
 	};
 
+	struct EquipmentSettings
+	{
+		std::uint32_t syncSlotMask{ 0xFFFF'FFFFu };
+	};
+
 	struct Config
 	{
 		bool enabled{ true };
@@ -65,6 +70,7 @@ namespace TF3DHud
 		std::int32_t anchor{ 1 };
 		CameraFramingSettings camera;
 		AnimationSettings animation;
+		EquipmentSettings equipment;
 		ClipRectSettings clipRect;
 		bool hideInPowerArmor{ true };
 		std::uint32_t uiMenuKey{ 0xDE };

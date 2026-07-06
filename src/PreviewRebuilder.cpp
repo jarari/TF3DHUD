@@ -1,4 +1,5 @@
 #include "Address.h"
+#include "Equipment.h"
 #include "PreviewRebuilder.h"
 
 #include "Utils.h"
@@ -252,7 +253,7 @@ namespace TF3DHud::PreviewRebuilder
 		return hash;
 	}
 
-	std::uint64_t BuildEquipmentSignature(const RE::BipedAnim* a_biped)
+	std::uint64_t BuildEquipmentSignature(const RE::BipedAnim* a_biped, const std::uint32_t a_editorSlotMask)
 	{
 		if (!a_biped) {
 			return 0;
@@ -260,7 +261,12 @@ namespace TF3DHud::PreviewRebuilder
 
 		std::uint64_t hash = 1469598103934665603ull;
 		for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kTotal); ++i) {
+			const auto slot = static_cast<RE::BIPED_OBJECT>(i);
 			const auto& object = a_biped->object[i];
+			if (Equipment::IsBipedObjectExcludedBySlotMask(slot, object, a_editorSlotMask)) {
+				continue;
+			}
+
 			HashValue(hash, object.parent.object);
 			HashValue(hash, object.parent.instanceData.get());
 			HashValue(hash, object.modExtra);
