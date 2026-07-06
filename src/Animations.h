@@ -10,6 +10,7 @@ namespace RE
 	class BSAnimationGraphManager;
 	class NiAVObject;
 	class PlayerCharacter;
+	class TESIdleForm;
 }
 
 namespace TF3DHud::Animations
@@ -155,6 +156,9 @@ namespace TF3DHud::Animations
 	void Reset();
 	void ResetGraph();
 	void ResetInitialState();
+	void ObserveLoadedIdle(RE::TESIdleForm* a_idle);
+	[[nodiscard]] const std::vector<RE::TESIdleForm*>& GetDynamicActivationIdles();
+	void StopIdleAnimation();
 	void Update(RE::PlayerCharacter& a_player, RE::NiAVObject& a_previewRoot, float a_deltaTime);
 	void ObserveGraphRequest(RE::BSAnimationGraphManager* a_manager, const char* a_eventName, std::uint32_t a_result);
 	DebugSnapshot GetDebugSnapshot();

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RE/B/BSFixedString.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -61,6 +63,7 @@ namespace TF3DHud::Previewer
 	void Reset();
 	void MarkEquipmentDirty();
 	void ObserveUpdate3DModel(std::uint16_t a_updateFlags, bool a_updateEditorDeadModel);
+	void HandleAnimationObjectEvent(const RE::BSFixedString& a_tag, const RE::BSFixedString& a_payload);
 	void ApplyConfigChanges();
 	void ReloadConfig();
 	void SuspendForLooksMenu();

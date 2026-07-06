@@ -13,17 +13,20 @@
 #include "RE/B/BGSAnimationSystemUtils.h"
 #include "RE/B/BGSBodyPartDefs.h"
 #include "RE/B/BGSHeadPart.h"
+#include "RE/B/BGSKeyword.h"
 #include "RE/B/BGSMod.h"
 #include "RE/B/BGSObjectInstance.h"
 #include "RE/B/BSAnimationGraphManager.h"
 #include "RE/B/BSFixedString.h"
 #include "RE/B/BSGeometry.h"
+#include "RE/B/BSSpinLock.h"
 #include "RE/B/BSTObjectArena.h"
 #include "RE/B/BSTArray.h"
 #include "RE/B/BSTSmartPointer.h"
 #include "RE/B/BipedAnim.h"
 #include "RE/I/IAnimationGraphManagerHolder.h"
 #include "RE/I/Interface3D.h"
+#include "RE/K/KeywordType.h"
 #include "RE/N/NiAVObject.h"
 #include "RE/N/NiCamera.h"
 #include "RE/N/NiColor.h"
@@ -32,6 +35,7 @@
 #include "RE/S/SubgraphHandle.h"
 #include "RE/S/SubgraphIdentifier.h"
 #include "RE/T/TES.h"
+#include "RE/T/TESIdleForm.h"
 #include "RE/T/TESNPC.h"
 #include "RE/T/TESObjectCELL.h"
 #include "RE/T/TESObjectARMO.h"
@@ -82,6 +86,21 @@ namespace TF3DHud::Address
 		RE::BipedAnim* biped{ nullptr };
 	};
 	static_assert(sizeof(BorrowedBipedPointer) == sizeof(void*));
+
+	struct LoadedIdleAnimData
+	{
+		RE::BSFixedString path;
+		std::uintptr_t resourceHandle{ 0 };
+		std::uintptr_t bindingWithTriggers{ 0 };
+		std::uintptr_t nodeTemplateOrFreeMarker{ 0 };
+		RE::BShkbAnimationGraph* graph{ nullptr };
+	};
+	static_assert(sizeof(LoadedIdleAnimData) == 0x28);
+	static_assert(offsetof(LoadedIdleAnimData, path) == 0x0);
+	static_assert(offsetof(LoadedIdleAnimData, resourceHandle) == 0x8);
+	static_assert(offsetof(LoadedIdleAnimData, bindingWithTriggers) == 0x10);
+	static_assert(offsetof(LoadedIdleAnimData, nodeTemplateOrFreeMarker) == 0x18);
+	static_assert(offsetof(LoadedIdleAnimData, graph) == 0x20);
 
 	struct SkinComplexionContext
 	{
@@ -153,6 +172,19 @@ namespace TF3DHud::Address
 	using GetGraphVariableBool_t = bool(const RE::BShkbAnimationGraph*, const RE::BSFixedString&, bool&);
 	using GetGraphVariableFloat_t = bool(const RE::BShkbAnimationGraph*, const RE::BSFixedString&, float&);
 	using GetGraphVariableInt_t = bool(const RE::BShkbAnimationGraph*, const RE::BSFixedString&, std::int32_t&);
+	using GetDynamicIdleFullFilePath_t = bool(
+		const RE::BSFixedString&,
+		RE::Actor&,
+		RE::BSStaticStringT<260>&,
+		const RE::BGSKeyword*,
+		const RE::BGSKeyword*,
+		bool,
+		RE::BSScrapArray<RE::BSFixedString>&,
+		std::int32_t,
+		bool,
+		RE::BGSKeyword*,
+		bool);
+	using GetKeywordForType_t = const RE::BGSKeyword*(const RE::Actor&, RE::KeywordType);
 	using GetNPCHeadPart_t = RE::BGSHeadPart*(RE::TESNPC*, RE::BGSHeadPart::HeadPartType);
 	using GetNumSegments_t = std::uint32_t(const RE::BSGeometrySegmentData*);
 	using GetSubSegmentCount_t = std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t);
@@ -195,6 +227,13 @@ namespace TF3DHud::Address
 		bool,
 		bool);
 	using ResetFaceGenCurrentMorphs_t = int(RE::BSFaceGenAnimationData*, float);
+	using AddLoadedIdle_t = void(void*, RE::TESIdleForm*);
+	using RequestIdles_t = bool(
+		void*,
+		const RE::BSFixedString&,
+		const RE::BSTSmartPointer<RE::BShkbAnimationGraph>&,
+		const RE::BSFixedString&,
+		const RE::BSTSmartPointer<RE::BSAnimationGraphManager>&);
 	using RetrieveSubGraphData_t = bool(
 		void*,
 		std::uint32_t,
@@ -258,6 +297,8 @@ namespace TF3DHud::Address
 	extern REL::Relocation<GetGraphVariableBool_t*> GetBShkbGraphVariableBool;
 	extern REL::Relocation<GetGraphVariableFloat_t*> GetBShkbGraphVariableFloat;
 	extern REL::Relocation<GetGraphVariableInt_t*> GetBShkbGraphVariableInt;
+	extern REL::Relocation<GetDynamicIdleFullFilePath_t*> GetDynamicIdleFullFilePath;
+	extern REL::Relocation<GetKeywordForType_t*> GetKeywordForType;
 	extern REL::Relocation<GetNPCHeadPart_t*> GetNPCHeadPart;
 	extern REL::Relocation<GetNumSegments_t*> GetNumSegments;
 	extern REL::Relocation<GetSubSegmentCount_t*> GetSubSegmentCount;
@@ -278,6 +319,7 @@ namespace TF3DHud::Address
 	extern REL::Relocation<QUpdateEditorDeadActorModel_t*> QUpdateEditorDeadActorModel;
 	extern REL::Relocation<QTiledLighting_t*> QTiledLighting;
 	extern REL::Relocation<ResetFaceGenCurrentMorphs_t*> ResetFaceGenCurrentMorphs;
+	extern REL::Relocation<RequestIdles_t*> RequestIdles;
 	extern REL::Relocation<RetrieveSubGraphData_t*> RetrieveSubGraphData;
 	extern REL::Relocation<SetAnimationGraphTarget_t*> SetAnimationGraphTarget;
 	extern REL::Relocation<SetClothSettleOnTransitionToSim_t*> SetClothSettleOnTransitionToSim;
@@ -300,6 +342,8 @@ namespace TF3DHud::Address
 	extern REL::Relocation<void**> AnimationSubGraphDataSingleton;
 	extern REL::Relocation<void**> BehaviorGraphSwapSingleton;
 	extern REL::Relocation<RE::EquipEventSource*> EquipEventSourceSingleton;
+	extern REL::Relocation<RE::BSTArray<LoadedIdleAnimData>*> LoadedHandleAndBindingA;
+	extern REL::Relocation<RE::BSReadWriteLock*> LoadedIdleLock;
 	extern REL::Relocation<std::uintptr_t> ClipCursor;
 	extern REL::Relocation<std::uintptr_t> ProcessGraphEventTarget;
 	extern REL::Relocation<std::uintptr_t> RenderPrepassesAndMenusTarget;
@@ -309,4 +353,5 @@ namespace TF3DHud::Address
 	extern const IDOffset RenderSceneDeferredCompositePassCtorCall;
 	extern const IDOffset Interface3DDrawModelRenderSceneDeferredCall;
 	extern const IDOffset RunActorUpdatesCall;
+	extern const IDOffset TESIdleFormLoadAddLoadedIdleCall;
 }

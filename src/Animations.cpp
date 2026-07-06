@@ -2,6 +2,7 @@
 
 #include "Address.h"
 #include "Config.h"
+#include "Previewer.h"
 #include "Utils.h"
 
 #include "RE/AnimationSpeedContour.h"
@@ -12,6 +13,7 @@
 #include "RE/A/Actor.h"
 #include "RE/A/ActionInput.h"
 #include "RE/A/AnimationSpeedInformationTypes.h"
+#include "RE/B/BGSDefaultObjectManager.h"
 #include "RE/B/BSAnimationGraphManager.h"
 #include "RE/B/BSAnimationGraphEvent.h"
 #include "RE/B/BSFlattenedBoneTree.h"
@@ -26,6 +28,7 @@
 #include "RE/B/BSTEvent.h"
 #include "RE/B/BSTObjectArena.h"
 #include "RE/B/BSTSmartPointer.h"
+#include "RE/D/DEFAULT_OBJECT.h"
 #include "RE/I/IAnimationGraphManagerHolder.h"
 #include "RE/M/MiddleHighProcessData.h"
 #include "RE/M/MemoryManager.h"
@@ -37,6 +40,7 @@
 #include "RE/S/SubgraphIdentifier.h"
 #include "RE/S/SubGraphIdleRootData.h"
 #include "RE/T/TES.h"
+#include "RE/T/TESIdleForm.h"
 
 #include <cmath>
 #include <cstddef>
@@ -49,6 +53,7 @@
 #include <cctype>
 #include <cstdio>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -62,6 +67,18 @@ namespace TF3DHud::Animations
 	{
 		constexpr std::size_t kBShkbAnimationGraphSize = 0x3D0;
 		constexpr std::size_t kBShkbAnimationGraphAlignment = 0x10;
+		constexpr float kIdleStopFastForwardDelta = 0.5F;
+		constexpr std::uint32_t kIdleStopFastForwardMaxSteps = 6;
+		constexpr std::uintptr_t kDynamicIdleFreeMarker = 0xFFFFFFFFull;
+		constexpr auto kDynamicActivationBehaviorGraphs = std::to_array<std::string_view>({
+			"actors\\Character\\Behaviors\\RaiderRootBehavior.hkx",
+			"Actors\\Character\\Behaviors\\MTBehavior.hkx",
+			"Actors\\Character\\Behaviors\\WeaponBehavior.hkx",
+		});
+		constexpr auto kDynamicActivationEvents = std::to_array<std::string_view>({
+			"dyn_Activation",
+			"dyn_ActivationLoop",
+		});
 		constexpr auto kLiveMirrorLocomotionEvents = std::to_array<std::string_view>({
 			"moveStart",
 			"moveStartAnimated",
@@ -153,6 +170,26 @@ namespace TF3DHud::Animations
 			"SyncCycleEnd",
 			"syncIdleStart",
 			"syncIdleStop",
+		});
+
+		constexpr auto kIdleAnimationMirrorEvents = std::to_array<std::string_view>({
+			"AnimObjLoad",
+			"AnimObjDraw",
+			"AnimObjUnequip",
+		});
+		constexpr auto kDynamicIdleStopActiveNodeNames = std::to_array<std::string_view>({
+			"DynamicLoopAnimation",
+			"DynamicLoopAnimation StateMachine",
+			"DynamicLoopAnimation_A",
+			"DynamicLoopAnimation_A_MG",
+			"Set_iDynamicLoopStartState_to_1",
+			"DynamicLoop_DynamicAnimationGenerator_A",
+			"DynamicLoopIdle_A",
+			"DynamicLoopAnimation_B",
+			"DynamicLoopAnimation_B_MG",
+			"Set_iDynamicLoopStartState_to_0",
+			"DynamicLoop_DynamicAnimationGenerator_B",
+			"DynamicLoopIdle_B",
 		});
 
 		constexpr auto kAlwaysIntGraphVariables = std::to_array<std::string_view>({
@@ -319,6 +356,30 @@ namespace TF3DHud::Animations
 				   (mirrorEvents.throwable && ContainsEngineFixedString(eventName, kLiveMirrorThrowEvents));
 		}
 
+		[[nodiscard]] bool IsIdleAnimationMirrorEventWhitelisted(const char* a_event)
+		{
+			if (!a_event || a_event[0] == '\0') {
+				return false;
+			}
+
+			return ContainsEngineFixedString(RE::BSFixedString(a_event), kIdleAnimationMirrorEvents);
+		}
+
+		[[nodiscard]] bool IsDynamicIdleStopActiveNodeName(const char* a_name)
+		{
+			if (!a_name || a_name[0] == '\0') {
+				return false;
+			}
+
+			const std::string_view name{ a_name };
+			return std::any_of(
+				kDynamicIdleStopActiveNodeNames.begin(),
+				kDynamicIdleStopActiveNodeNames.end(),
+				[&](const std::string_view candidate) {
+					return name == candidate;
+				});
+		}
+
 		[[nodiscard]] bool IsSuppressedAnimationChannel(const RE::BSAnimationGraphChannel& a_channel)
 		{
 			return ContainsEngineFixedString(a_channel.variableName, kPreviewSuppressedAnimationChannels);
@@ -334,11 +395,23 @@ namespace TF3DHud::Animations
 			std::uint32_t result{ 0 };
 		};
 
+		std::string g_idlePlaybackKey;
+		float g_idlePlaybackTime{ 0.0F };
+		float g_idleClipDuration{ 0.0F };
+
+		void LogDiagnostic(std::string a_message);
+		[[nodiscard]] std::string DynamicActivationIdleKey(RE::TESIdleForm& a_idle);
+		[[nodiscard]] RE::TESIdleForm* ResolveConfiguredDynamicActivationIdle();
+		[[nodiscard]] RE::TESIdleForm* ResolvePlayableIdle(RE::PlayerCharacter& a_player, RE::TESIdleForm& a_idle);
+		[[nodiscard]] std::string ResolveDynamicIdleFullPath(RE::PlayerCharacter& a_player, RE::TESIdleForm& a_idle);
+
 		auto& g_constructBShkbAnimationGraph = Address::ConstructBShkbAnimationGraph;
 		auto& g_notifyAnimationGraphImpl = Address::NotifyAnimationGraphImpl;
 		auto& g_getBShkbGraphVariableBool = Address::GetBShkbGraphVariableBool;
 		auto& g_getBShkbGraphVariableFloat = Address::GetBShkbGraphVariableFloat;
 		auto& g_getBShkbGraphVariableInt = Address::GetBShkbGraphVariableInt;
+		auto& g_getDynamicIdleFullFilePath = Address::GetDynamicIdleFullFilePath;
+		auto& g_getKeywordForType = Address::GetKeywordForType;
 		auto& g_actorPreUpdateAnimationGraphManager = Address::ActorPreUpdateAnimationGraphManager;
 		auto& g_actorPreLoadAnimationGraphManager = Address::ActorPreLoadAnimationGraphManager;
 		auto& g_actorPostLoadAnimationGraphManager = Address::ActorPostLoadAnimationGraphManager;
@@ -354,6 +427,9 @@ namespace TF3DHud::Animations
 		auto& g_getGraphSpeedForRequestedSpeedAndDirection = Address::GetGraphSpeedForRequestedSpeedAndDirection;
 		auto& g_destroyAdjustmentArena = Address::DestroyAdjustmentArena;
 		auto& g_calculateSpeedAdjustToSyncAnimationCycles = Address::CalculateSpeedAdjustToSyncAnimationCycles;
+		auto& g_requestIdles = Address::RequestIdles;
+		auto& g_loadedHandleAndBindingA = Address::LoadedHandleAndBindingA;
+		auto& g_loadedIdleLock = Address::LoadedIdleLock;
 		auto& g_retrieveSubGraphData = Address::RetrieveSubGraphData;
 		auto& g_initializeSubGraph = Address::InitializeSubGraph;
 		auto& g_behaviorGraphSwapSingleton = Address::BehaviorGraphSwapSingleton;
@@ -907,6 +983,220 @@ namespace TF3DHud::Animations
 		[[nodiscard]] std::uintptr_t ReadNestedBehaviorGraph(const std::uintptr_t a_activeNodeEntry)
 		{
 			return a_activeNodeEntry ? *reinterpret_cast<const std::uintptr_t*>(a_activeNodeEntry + 0x10) : 0;
+		}
+
+		[[nodiscard]] float NormalizeClipTime(const float a_time, const float a_duration)
+		{
+			if (!std::isfinite(a_time) || a_time <= 0.0F) {
+				return 0.0F;
+			}
+			if (!std::isfinite(a_duration) || a_duration <= 0.0F) {
+				return a_time;
+			}
+
+			const auto wrapped = std::fmod(a_time, a_duration);
+			return wrapped < 0.0F ? wrapped + a_duration : wrapped;
+		}
+
+		void OverwriteClipLocalTime(const std::uintptr_t a_clip, const float a_time)
+		{
+			if (!a_clip || !std::isfinite(a_time)) {
+				return;
+			}
+
+			// HaBCR seek pattern: hkbClipGenerator::localTime, animationControl
+			// local time, then the clip dirty byte.
+			*reinterpret_cast<float*>(a_clip + 0x140) = a_time;
+			const auto animControl = *reinterpret_cast<std::uintptr_t*>(a_clip + 0xD0);
+			if (animControl) {
+				*reinterpret_cast<float*>(animControl + 0x10) = a_time;
+			}
+			*reinterpret_cast<std::uint8_t*>(a_clip + 0x151) = 1;
+		}
+
+		struct ActiveClipTiming
+		{
+			std::uintptr_t clip{ 0 };
+			float duration{ 0.0F };
+		};
+
+		struct DynamicIdleStopState
+		{
+			bool graphReadable{ false };
+			bool graphSettled{ false };
+			bool clipPresent{ false };
+			bool dynamicLoopNodePresent{ false };
+		};
+
+		[[nodiscard]] bool PathMatchesResolvedPath(const std::string& a_authoredPath, const std::string& a_targetPath)
+		{
+			const auto targetPath = ToLowerNormalized(NormalizeSeparators(a_targetPath));
+			const auto targetLeaf = ToLowerNormalized(GetClipLeaf(targetPath.c_str()));
+			const auto authoredPath = NormalizeSeparators(a_authoredPath);
+			const auto authoredLower = ToLowerNormalized(authoredPath);
+			const auto authoredLeaf = ToLowerNormalized(GetClipLeaf(authoredPath.c_str()));
+			return (!targetPath.empty() && authoredLower == targetPath) ||
+			       (!targetLeaf.empty() && authoredLeaf == targetLeaf);
+		}
+
+		[[nodiscard]] bool ClipMatchesResolvedPath(const std::uintptr_t a_clip, const std::string& a_targetPath)
+		{
+			if (!a_clip) {
+				return false;
+			}
+
+			return PathMatchesResolvedPath(SafeString(ReadTaggedString(a_clip + 0x90)), a_targetPath);
+		}
+
+		[[nodiscard]] std::string FormatHex(const std::uintptr_t a_value)
+		{
+			std::array<char, 2 + sizeof(std::uintptr_t) * 2 + 1> buffer{};
+			std::snprintf(buffer.data(), buffer.size(), "0x%llX", static_cast<unsigned long long>(a_value));
+			return buffer.data();
+		}
+
+		class ScopedWriteLock
+		{
+		public:
+			explicit ScopedWriteLock(RE::BSReadWriteLock* a_lock) :
+				lock_(a_lock)
+			{
+				if (lock_) {
+					lock_->lock_write();
+				}
+			}
+
+			ScopedWriteLock(const ScopedWriteLock&) = delete;
+			ScopedWriteLock& operator=(const ScopedWriteLock&) = delete;
+
+			~ScopedWriteLock()
+			{
+				if (lock_) {
+					lock_->unlock_write();
+				}
+			}
+
+		private:
+			RE::BSReadWriteLock* lock_{ nullptr };
+		};
+
+		[[nodiscard]] bool MarkLoadedDynamicIdleEntryFree(
+			RE::BShkbAnimationGraph& a_graph,
+			const std::string& a_resolvedPath)
+		{
+			auto* loadedIdles = g_loadedHandleAndBindingA.get();
+			auto* loadedIdleLock = g_loadedIdleLock.get();
+			if (!loadedIdles || !loadedIdleLock || a_resolvedPath.empty()) {
+				return false;
+			}
+
+			ScopedWriteLock lock(loadedIdleLock);
+			for (auto& entry : *loadedIdles) {
+				if (entry.graph != std::addressof(a_graph)) {
+					continue;
+				}
+				if (!PathMatchesResolvedPath(SafeString(entry.path.c_str()), a_resolvedPath)) {
+					continue;
+				}
+
+				const auto previousMarker = entry.nodeTemplateOrFreeMarker;
+				entry.nodeTemplateOrFreeMarker = kDynamicIdleFreeMarker;
+				LogDiagnostic(
+					"idle stop marked loaded dynamic idle free for '" + a_resolvedPath +
+					"' previousMarker=" + FormatHex(previousMarker));
+				return true;
+			}
+
+			LogDiagnostic("idle stop found no loaded dynamic idle entry for '" + a_resolvedPath + "'");
+			return false;
+		}
+
+		[[nodiscard]] HkbBehaviorGraphDiagnostic* GetBehaviorGraphDiagnostic(RE::BShkbAnimationGraph& a_graph)
+		{
+			const auto* const graphBase = reinterpret_cast<const std::byte*>(std::addressof(a_graph));
+			return *reinterpret_cast<HkbBehaviorGraphDiagnostic* const*>(graphBase + 0x378);
+		}
+
+		[[nodiscard]] DynamicIdleStopState QueryDynamicIdleStopState(
+			RE::BShkbAnimationGraph& a_graph,
+			const std::string& a_resolvedPath)
+		{
+			DynamicIdleStopState result;
+			auto* behavior = GetBehaviorGraphDiagnostic(a_graph);
+			if (!behavior) {
+				return result;
+			}
+
+			result.graphReadable = true;
+			result.graphSettled = !behavior->updateActiveNodes && !behavior->stateOrTransitionChanged;
+
+			auto* activeNodes = behavior->activeNodes;
+			if (!activeNodes || !activeNodes->data || activeNodes->size <= 0 || activeNodes->size > 1024) {
+				return result;
+			}
+
+			for (std::int32_t index = 0; index < activeNodes->size; ++index) {
+				const auto entry = reinterpret_cast<std::uintptr_t>(activeNodes->data[index]);
+				const auto node = ReadActiveNodePointer(entry);
+				if (node && IsDynamicIdleStopActiveNodeName(ReadTaggedString(node + 0x38))) {
+					result.dynamicLoopNodePresent = true;
+				}
+
+				const auto clip = SelectActiveClip(entry);
+				if (!clip) {
+					continue;
+				}
+
+				if (IsDynamicIdleStopActiveNodeName(ReadTaggedString(clip + 0x38))) {
+					result.dynamicLoopNodePresent = true;
+				}
+				if (!a_resolvedPath.empty() && ClipMatchesResolvedPath(clip, a_resolvedPath)) {
+					result.clipPresent = true;
+				}
+			}
+
+			return result;
+		}
+
+		[[nodiscard]] bool IsDynamicIdleStopComplete(const DynamicIdleStopState& a_state)
+		{
+			return a_state.graphReadable &&
+			       a_state.graphSettled &&
+			       !a_state.clipPresent &&
+			       !a_state.dynamicLoopNodePresent;
+		}
+
+		[[nodiscard]] ActiveClipTiming FindActiveClipTiming(
+			RE::BShkbAnimationGraph& a_graph,
+			const std::string& a_resolvedPath)
+		{
+			auto* behavior = GetBehaviorGraphDiagnostic(a_graph);
+			if (!behavior || !behavior->activeNodes || !behavior->activeNodes->data ||
+				behavior->activeNodes->size <= 0 || behavior->activeNodes->size > 1024) {
+				return {};
+			}
+
+			for (std::int32_t index = 0; index < behavior->activeNodes->size; ++index) {
+				const auto entry = reinterpret_cast<std::uintptr_t>(behavior->activeNodes->data[index]);
+				const auto clip = SelectActiveClip(entry);
+				if (!clip) {
+					continue;
+				}
+
+				const auto animControl = *reinterpret_cast<std::uintptr_t*>(clip + 0xD0);
+				const auto animBinding = animControl ? *reinterpret_cast<std::uintptr_t*>(animControl + 0x38) : 0;
+				const auto anim = animBinding ? *reinterpret_cast<std::uintptr_t*>(animBinding + 0x18) : 0;
+				const auto duration = anim ? *reinterpret_cast<float*>(anim + 0x14) : 0.0F;
+				if (!std::isfinite(duration) || duration <= 0.0F) {
+					continue;
+				}
+
+				if (ClipMatchesResolvedPath(clip, a_resolvedPath)) {
+					return { clip, duration };
+				}
+			}
+
+			return {};
 		}
 
 		[[nodiscard]] RE::BSTEventSource<RE::BSAnimationGraphEvent>* GetGraphEventSource(
@@ -1725,6 +2015,36 @@ namespace TF3DHud::Animations
 				return processed;
 			}
 
+			bool NotifyPreviewActionEvent(RE::BGSAction* a_action, const RE::ActionInput::ACTIONPRIORITY a_priority)
+			{
+				if (!a_action || !sourceActor_) {
+					return false;
+				}
+
+				alignas(8) std::array<std::byte, 0x60> actionData{};
+				RE::ActionInput::Data inputData{};
+				g_constructTESActionData(
+					actionData.data(),
+					a_priority,
+					static_cast<RE::TESObjectREFR*>(sourceActor_),
+					a_action,
+					nullptr,
+					inputData);
+
+				const bool interpreted = g_interpretAction(actionData.data());
+				const auto& eventName = *reinterpret_cast<const RE::BSFixedString*>(actionData.data() + 0x28);
+				const bool processed = interpreted && !eventName.empty() && NotifyAnimationGraphImpl(eventName);
+
+				g_destroyTESActionData(actionData.data());
+				return processed;
+			}
+
+			[[nodiscard]] RE::BGSAction* GetDefaultAction(const RE::DEFAULT_OBJECT a_object)
+			{
+				auto* defaultObjectManager = RE::BGSDefaultObjectManager::GetSingleton();
+				return defaultObjectManager ? defaultObjectManager->GetDefaultObject<RE::BGSAction>(a_object) : nullptr;
+			}
+
 			void TryApplyInitialAnimationState()
 			{
 				if (initialStateApplied_ || !manager_ || !IsDefaultSubgraphLinked()) {
@@ -1842,13 +2162,18 @@ namespace TF3DHud::Animations
 				}
 			}
 
-			void ObserveLiveGraphRequest(const char* a_eventName, const std::uint32_t a_result)
+			void ObserveLiveGraphRequest(
+				const char* a_eventName,
+				const std::uint32_t a_result,
+				const bool a_idleAnimationMode)
 			{
 				if (!a_eventName || a_eventName[0] == '\0') {
 					return;
 				}
 
-				const bool whitelisted = IsLiveMirrorEventWhitelisted(a_eventName);
+				const bool whitelisted = a_idleAnimationMode ?
+					IsIdleAnimationMirrorEventWhitelisted(a_eventName) :
+					IsLiveMirrorEventWhitelisted(a_eventName);
 				if (!whitelisted) {
 					return;
 				}
@@ -1935,15 +2260,29 @@ namespace TF3DHud::Animations
 
 				for (const auto& eventName : events) {
 					ApplyPreviewWeaponVisibilityEvent(eventName);
-					(void)NotifyAnimationGraphImpl(eventName);
+					const bool processed = NotifyAnimationGraphImpl(eventName);
+					if (IsIdleAnimationMirrorEventWhitelisted(eventName.c_str())) {
+						LogDiagnostic(
+							std::string{ "mirrored idle anim object event '" } + SafeString(eventName.c_str()) +
+							"' processed=" + (processed ? "true" : "false"));
+					}
 				}
 			}
 
 			void RecordPreviewAnimationEvent(const RE::BSAnimationGraphEvent& a_event)
 			{
-				if (!a_event.tag.empty()) {
-					ApplyPreviewCullBoneEvent(a_event);
+				if (a_event.tag.empty()) {
+					return;
 				}
+
+				if (IsIdleAnimationMirrorEventWhitelisted(a_event.tag.c_str())) {
+					LogDiagnostic(
+						std::string{ "preview idle anim object graph event tag='" } + SafeString(a_event.tag.c_str()) +
+						"' payload='" + SafeString(a_event.payload.c_str()) + "'");
+					Previewer::HandleAnimationObjectEvent(a_event.tag, a_event.payload);
+				}
+
+				ApplyPreviewCullBoneEvent(a_event);
 			}
 
 			void ApplyPreviewCullBoneEvent(const RE::BSAnimationGraphEvent& a_event)
@@ -2117,6 +2456,13 @@ namespace TF3DHud::Animations
 				(void)SetPreviewBoneCulled(RE::BSFixedString("Weapon"), cullWeapon);
 			}
 
+			void ApplyIdleWeaponCullState()
+			{
+				(void)SetPreviewBoneCulled(
+					RE::BSFixedString("Weapon"),
+					GetConfig().animation.hideWeaponDuringIdleAnimation);
+			}
+
 			void ApplyPreviewWeaponDrawState(const std::int32_t a_state)
 			{
 				// IDA: InitializeActorInstant sets iSyncWeaponDrawState=2 while
@@ -2163,6 +2509,197 @@ namespace TF3DHud::Animations
 				}
 
 				return adjustedDeltaTime;
+			}
+
+			void RequestIdleAnimation(RE::PlayerCharacter& a_player)
+			{
+				auto* idle = ResolveConfiguredDynamicActivationIdle();
+				if (!idle || !manager_) {
+					return;
+				}
+
+				auto key = DynamicActivationIdleKey(*idle);
+				if (key.empty()) {
+					return;
+				}
+				if (g_idlePlaybackKey != key) {
+					g_idlePlaybackKey = key;
+					g_idlePlaybackTime = 0.0F;
+					g_idleClipDuration = 0.0F;
+				}
+
+				auto graph = GetActivePreviewGraph();
+				if (!graph) {
+					return;
+				}
+
+				if (idleRequestSubmitted_ && (idleRequestedKey_ != key || idleRequestedGraph_ != graph.get())) {
+					StopIdleAnimation();
+					return;
+				}
+
+				if (idleRequestSubmitted_ && idleRequestedKey_ == key && idleRequestedGraph_ == graph.get()) {
+					return;
+				}
+
+				const auto resolvedPath = ResolveDynamicIdleFullPath(a_player, *idle);
+				if (resolvedPath.empty()) {
+					LogDiagnostic("idle request skipped: dynamic idle path resolution failed for '" + key + "'");
+					return;
+				}
+
+				const RE::BSFixedString eventName("dyn_ActivationLoop");
+				const RE::BSFixedString path(resolvedPath.c_str());
+				// IDA: RequestIdles stores into anonymous loading queues and does
+				// not read its this pointer.
+				void* const fileManager = nullptr;
+				if (!g_requestIdles(fileManager, eventName, graph, path, manager_)) {
+					LogDiagnostic("idle request failed for '" + resolvedPath + "'");
+					return;
+				}
+
+				idleRequestedKey_ = std::move(key);
+				idleResolvedPath_ = resolvedPath;
+				idleRequestedGraph_ = graph.get();
+				idleRequestSubmitted_ = true;
+				idleSeekPending_ = true;
+				idleClipObserved_ = false;
+			}
+
+			void StopIdleAnimation()
+			{
+				const bool alreadyStopping = idleStopPending_;
+				if (!idleResolvedPath_.empty()) {
+					idleStoppingPath_ = idleResolvedPath_;
+				} else if (!alreadyStopping) {
+					idleStoppingPath_.clear();
+				}
+
+				if (manager_) {
+					auto* stopAction = GetDefaultAction(RE::DEFAULT_OBJECT::kActionIdleStopInstant);
+					if (!stopAction) {
+						stopAction = GetDefaultAction(RE::DEFAULT_OBJECT::kActionIdleStop);
+					}
+					if (stopAction) {
+						(void)NotifyPreviewActionEvent(stopAction, RE::ActionInput::ACTIONPRIORITY::kImperative);
+					} else {
+						(void)NotifyAnimationGraphImpl("idleStop");
+					}
+					idleStopPending_ = true;
+					FastForwardIdleStop();
+				} else {
+					idleStopPending_ = false;
+				}
+
+				idleRequestedKey_.clear();
+				idleResolvedPath_.clear();
+				idleRequestedGraph_ = nullptr;
+				idleRequestSubmitted_ = false;
+				idleSeekPending_ = false;
+				idleClipObserved_ = false;
+			}
+
+			[[nodiscard]] bool HasIdleStopPending() const
+			{
+				return idleStopPending_;
+			}
+
+			void TryFinishIdleStop()
+			{
+				if (!idleStopPending_) {
+					return;
+				}
+
+				auto graph = GetActivePreviewGraph();
+				if (!graph) {
+					idleStopPending_ = false;
+					idleStoppingPath_.clear();
+					return;
+				}
+
+				if (idleStoppingPath_.empty()) {
+					const auto state = QueryDynamicIdleStopState(*graph, idleStoppingPath_);
+					if (IsDynamicIdleStopComplete(state)) {
+						FinishIdleStopAfterDynamicExit(*graph);
+					}
+					return;
+				}
+
+				const auto state = QueryDynamicIdleStopState(*graph, idleStoppingPath_);
+				if (IsDynamicIdleStopComplete(state)) {
+					FinishIdleStopAfterDynamicExit(*graph);
+				}
+			}
+
+			void FinishIdleStopAfterDynamicExit(RE::BShkbAnimationGraph& a_graph)
+			{
+				if (!idleStoppingPath_.empty()) {
+					(void)MarkLoadedDynamicIdleEntryFree(a_graph, idleStoppingPath_);
+				}
+				idleStopPending_ = false;
+				idleStoppingPath_.clear();
+			}
+
+			void FastForwardIdleStop()
+			{
+				if (!manager_) {
+					return;
+				}
+
+				std::optional<RE::NiTransform> targetLocal;
+				if (targetRoot_) {
+					targetLocal = targetRoot_->GetLocalTransform();
+				}
+
+				for (std::uint32_t step = 0; step < kIdleStopFastForwardMaxSteps; ++step) {
+					(void)g_updateAnimationGraphManagerFloat(this, kIdleStopFastForwardDelta);
+
+					if (targetRoot_ && targetLocal) {
+						targetRoot_->SetLocalTransform(*targetLocal);
+					}
+
+					auto graph = GetActivePreviewGraph();
+					if (!graph || idleStoppingPath_.empty()) {
+						return;
+					}
+
+					const auto state = QueryDynamicIdleStopState(*graph, idleStoppingPath_);
+					if (IsDynamicIdleStopComplete(state)) {
+						FinishIdleStopAfterDynamicExit(*graph);
+						return;
+					}
+				}
+			}
+
+			void UpdateIdlePlaybackClock(const float a_deltaTime)
+			{
+				auto graph = GetActivePreviewGraph();
+				if (!graph || idleResolvedPath_.empty()) {
+					return;
+				}
+
+				const auto timing = FindActiveClipTiming(*graph, idleResolvedPath_);
+				if (!timing.clip) {
+					return;
+				}
+
+				if (timing.duration > 0.0F && std::isfinite(timing.duration)) {
+					g_idleClipDuration = timing.duration;
+					g_idlePlaybackTime = NormalizeClipTime(g_idlePlaybackTime, g_idleClipDuration);
+				}
+
+				if (idleSeekPending_) {
+					OverwriteClipLocalTime(timing.clip, NormalizeClipTime(g_idlePlaybackTime, g_idleClipDuration));
+					idleSeekPending_ = false;
+					idleClipObserved_ = true;
+					return;
+				}
+
+				if (idleClipObserved_ && std::isfinite(a_deltaTime) && a_deltaTime > 0.0F) {
+					g_idlePlaybackTime = NormalizeClipTime(g_idlePlaybackTime + a_deltaTime, g_idleClipDuration);
+				} else {
+					idleClipObserved_ = true;
+				}
 			}
 
 			[[nodiscard]] DebugSnapshot CaptureDebugSnapshot() const
@@ -2318,6 +2855,14 @@ namespace TF3DHud::Animations
 			std::int32_t lastLiveSyncJumpState_{ 0 };
 			bool initialStateApplied_{ false };
 			bool previewStopEventsApplied_{ false };
+			std::string idleRequestedKey_;
+			std::string idleResolvedPath_;
+			std::string idleStoppingPath_;
+			RE::BShkbAnimationGraph* idleRequestedGraph_{ nullptr };
+			bool idleRequestSubmitted_{ false };
+			bool idleSeekPending_{ false };
+			bool idleClipObserved_{ false };
+			bool idleStopPending_{ false };
 
 			[[nodiscard]] RE::BSTSmartPointer<RE::BShkbAnimationGraph> GetActivePreviewGraph() const
 			{
@@ -2474,6 +3019,7 @@ namespace TF3DHud::Animations
 		std::string g_lastDiagnostic;
 		std::uint64_t g_liveSubgraphSignature{ 0 };
 		std::recursive_mutex g_stateLock;
+		std::vector<RE::TESIdleForm*> g_dynamicActivationIdles;
 		std::mutex g_pendingLiveGraphRequestsLock;
 		std::vector<LiveGraphRequest> g_pendingLiveGraphRequests;
 
@@ -2555,7 +3101,7 @@ namespace TF3DHud::Animations
 			g_pendingLiveGraphRequests.clear();
 		}
 
-		void DrainPendingLiveGraphRequests()
+		void DrainPendingLiveGraphRequests(const bool a_idleAnimationMode)
 		{
 			std::vector<LiveGraphRequest> requests;
 			{
@@ -2572,9 +3118,134 @@ namespace TF3DHud::Animations
 
 			for (const auto& request : requests) {
 				if (g_holder->IsLiveSourceManager(request.manager)) {
-					g_holder->ObserveLiveGraphRequest(request.eventName.c_str(), request.result);
+					g_holder->ObserveLiveGraphRequest(
+						request.eventName.c_str(),
+						request.result,
+						a_idleAnimationMode);
 				}
 			}
+		}
+
+		template <std::size_t N>
+		[[nodiscard]] bool FixedStringMatchesAny(
+			const RE::BSFixedString& a_value,
+			const std::array<std::string_view, N>& a_candidates)
+		{
+			if (a_value.empty()) {
+				return false;
+			}
+
+			const std::string_view value{ a_value.c_str() };
+			return std::any_of(a_candidates.begin(), a_candidates.end(), [&](const std::string_view candidate) {
+				return value == candidate;
+			});
+		}
+
+		struct DynamicActivationIdleMatch
+		{
+			bool graph{ false };
+			bool event{ false };
+			bool matched{ false };
+		};
+
+		[[nodiscard]] DynamicActivationIdleMatch EvaluateDynamicActivationIdleMatch(const RE::TESIdleForm& a_idle)
+		{
+			DynamicActivationIdleMatch result;
+			result.graph = FixedStringMatchesAny(a_idle.behaviorGraphName, kDynamicActivationBehaviorGraphs);
+			result.event = FixedStringMatchesAny(a_idle.animEventName, kDynamicActivationEvents);
+			result.matched = result.graph && result.event;
+			return result;
+		}
+
+		[[nodiscard]] std::string DynamicActivationIdleKey(RE::TESIdleForm& a_idle)
+		{
+			auto* file = a_idle.GetFile(0);
+			if (!file || file->filename[0] == '\0') {
+				return {};
+			}
+
+			std::array<char, 16> localID{};
+			std::snprintf(localID.data(), localID.size(), "0x%X", a_idle.GetLocalFormID());
+			return std::string{ file->filename } + "|" + localID.data();
+		}
+
+		[[nodiscard]] RE::TESIdleForm* ResolveConfiguredDynamicActivationIdle()
+		{
+			if (g_dynamicActivationIdles.empty()) {
+				return nullptr;
+			}
+
+			const auto& key = GetConfig().animation.dynamicActivationIdle;
+			if (!key.empty()) {
+				for (auto* idle : g_dynamicActivationIdles) {
+					if (idle && DynamicActivationIdleKey(*idle) == key) {
+						return idle;
+					}
+				}
+			}
+
+			return g_dynamicActivationIdles.front();
+		}
+
+		[[nodiscard]] RE::TESIdleForm* ResolvePlayableIdle(RE::PlayerCharacter& a_player, RE::TESIdleForm& a_idle)
+		{
+			alignas(8) std::array<std::byte, 0x60> actionData{};
+			RE::ActionInput::Data inputData{};
+			g_constructTESActionData(
+				actionData.data(),
+				RE::ActionInput::ACTIONPRIORITY::kTry,
+				static_cast<RE::TESObjectREFR*>(std::addressof(a_player)),
+				nullptr,
+				nullptr,
+				inputData);
+
+			*reinterpret_cast<RE::BSFixedString*>(actionData.data() + 0x28) = a_idle.animEventName;
+			*reinterpret_cast<RE::TESIdleForm**>(actionData.data() + 0x48) = std::addressof(a_idle);
+			// IDA: RunActionOnActorGetFile sets this before TESActionData resolves the idle.
+			*reinterpret_cast<std::uint32_t*>(actionData.data() + 0x58) = 1;
+
+			using resolve_t = bool(void*);
+			const auto vtable = *reinterpret_cast<std::uintptr_t*>(actionData.data());
+			const auto resolve = reinterpret_cast<resolve_t*>(*reinterpret_cast<std::uintptr_t*>(vtable + 0x28));
+			const bool resolved = resolve && resolve(actionData.data());
+			auto* playableIdle = resolved ? *reinterpret_cast<RE::TESIdleForm**>(actionData.data() + 0x48) : nullptr;
+
+			g_destroyTESActionData(actionData.data());
+			return playableIdle ? playableIdle : std::addressof(a_idle);
+		}
+
+		[[nodiscard]] std::string ResolveDynamicIdleFullPath(RE::PlayerCharacter& a_player, RE::TESIdleForm& a_idle)
+		{
+			auto* playableIdle = ResolvePlayableIdle(a_player, a_idle);
+			if (!playableIdle || playableIdle->animFileName.empty()) {
+				return {};
+			}
+
+			RE::BSFixedString sourcePath(playableIdle->animFileName.c_str());
+			RE::BSStaticStringT<260> resolvedPath;
+			(void)resolvedPath.Set(playableIdle->animFileName.c_str(), 0);
+			RE::BSScrapArray<RE::BSFixedString> wildcardPaths;
+
+			const auto* archetype = g_getKeywordForType(a_player, RE::KeywordType::kAnimArchetype);
+			const auto* flavor = g_getKeywordForType(a_player, RE::KeywordType::kAnimFlavor);
+			(void)g_getDynamicIdleFullFilePath(
+				sourcePath,
+				a_player,
+				resolvedPath,
+				archetype,
+				flavor,
+				false,
+				wildcardPaths,
+				-1,
+				false,
+				nullptr,
+				false);
+
+			auto result = NormalizeSeparators(SafeString(resolvedPath.c_str()));
+			if (result.empty()) {
+				result = NormalizeSeparators(playableIdle->animFileName.c_str());
+			}
+			return result;
 		}
 
 		[[nodiscard]] bool EnsureGraph(RE::PlayerCharacter& a_player, RE::NiAVObject& a_previewRoot)
@@ -2661,26 +3332,84 @@ namespace TF3DHud::Animations
 		}
 	}
 
+	void ObserveLoadedIdle(RE::TESIdleForm* a_idle)
+	{
+		if (!a_idle) {
+			return;
+		}
+
+		std::scoped_lock lock(g_stateLock);
+		const auto match = EvaluateDynamicActivationIdleMatch(*a_idle);
+		if (!match.matched) {
+			return;
+		}
+
+		const auto found = std::find(g_dynamicActivationIdles.begin(), g_dynamicActivationIdles.end(), a_idle);
+		if (found == g_dynamicActivationIdles.end()) {
+			g_dynamicActivationIdles.push_back(a_idle);
+		}
+	}
+
+	const std::vector<RE::TESIdleForm*>& GetDynamicActivationIdles()
+	{
+		return g_dynamicActivationIdles;
+	}
+
+	void StopIdleAnimation()
+	{
+		std::scoped_lock lock(g_stateLock);
+		if (g_holder) {
+			g_holder->StopIdleAnimation();
+		}
+	}
+
 	void Update(RE::PlayerCharacter& a_player, RE::NiAVObject& a_previewRoot, const float a_deltaTime)
 	{
 		std::scoped_lock lock(g_stateLock);
 		if (!EnsureGraph(a_player, a_previewRoot) || !g_holder) {
 			return;
 		}
-		DrainPendingLiveGraphRequests();
-		g_holder->SyncWhitelistedGraphVariablesFromLive();
+
+		const auto& animation = GetConfig().animation;
 		g_holder->RefreshPendingSubgraphLoads();
 		g_holder->TryApplyInitialAnimationState();
-		g_holder->ReconcileJumpLandingFromLive();
-		g_holder->SyncWeaponCullStateFromLive();
-		g_holder->SetGraphVariableBool("bAimEnabled", false);
 
 		const auto previewRootLocal = a_previewRoot.GetLocalTransform();
-		const auto updateDelta = g_holder->GetActiveClipSynchronizedDeltaTime(a_deltaTime);
+		float updateDelta = a_deltaTime;
+		if (animation.useLiveAnimation) {
+			DrainPendingLiveGraphRequests(false);
+			g_holder->SyncWhitelistedGraphVariablesFromLive();
+			g_holder->ReconcileJumpLandingFromLive();
+			g_holder->SyncWeaponCullStateFromLive();
+			g_holder->SetGraphVariableBool("bAimEnabled", false);
+			updateDelta = g_holder->GetActiveClipSynchronizedDeltaTime(a_deltaTime);
+		} else {
+			DrainPendingLiveGraphRequests(true);
+			if (!g_holder->HasIdleStopPending()) {
+				g_holder->RequestIdleAnimation(a_player);
+			}
+		}
+
 		const bool updated = g_updateAnimationGraphManagerFloat(g_holder.get(), updateDelta);
 		a_previewRoot.SetLocalTransform(previewRootLocal);
 
-		g_holder->ProcessMirroredEvents();
+		if (animation.useLiveAnimation) {
+			g_holder->ProcessMirroredEvents();
+			if (g_holder->HasIdleStopPending()) {
+				g_holder->TryFinishIdleStop();
+			}
+		} else if (g_holder->HasIdleStopPending()) {
+			g_holder->ProcessMirroredEvents();
+			g_holder->ApplyIdleWeaponCullState();
+			g_holder->TryFinishIdleStop();
+			if (!g_holder->HasIdleStopPending()) {
+				g_holder->RequestIdleAnimation(a_player);
+			}
+		} else {
+			g_holder->ProcessMirroredEvents();
+			g_holder->ApplyIdleWeaponCullState();
+			g_holder->UpdateIdlePlaybackClock(updateDelta);
+		}
 
 		RE::NiUpdateData niUpdateData;
 		a_previewRoot.Update(niUpdateData);

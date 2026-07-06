@@ -25,12 +25,14 @@
 #include "RE/N/NiExtraData.h"
 #include "RE/N/NiNode.h"
 #include "RE/N/NiStringExtraData.h"
+#include "RE/N/NiTransform.h"
 #include "RE/N/NiUpdateData.h"
 #include "RE/P/PlayerCharacter.h"
 #include "RE/T/TESNPC.h"
 #include "RE/T/TESForm.h"
 #include "RE/T/TESModel.h"
 #include "RE/T/TESObjectARMO.h"
+#include "RE/T/TESObjectANIO.h"
 #include "RE/T/TESRace.h"
 
 #include <algorithm>
@@ -82,6 +84,13 @@ namespace TF3DHud
 			bool preserveOnEquipmentSync{ false };
 		};
 
+		struct PreviewAnimObjectAttachment
+		{
+			RE::BSFixedString editorID;
+			RE::NiPointer<RE::NiAVObject> object;
+			RE::NiNode* parent{ nullptr };
+		};
+
 		enum class EquipmentSyncResult
 		{
 			kNoChange,
@@ -103,6 +112,7 @@ namespace TF3DHud
 		RE::NiPointer<RE::BSFaceGenNiNode> g_previewFaceNode;
 		std::vector<Previewer::FaceGenSliderDebugInfo> g_lastAppliedFaceGenEntries;
 		std::vector<PreviewAttachment> g_previewAttachments;
+		std::vector<PreviewAnimObjectAttachment> g_previewAnimObjectAttachments;
 		std::vector<RE::NiPointer<RE::NiAVObject>> g_retiredPreviewObjects;
 		std::vector<RE::NiPointer<RE::NiAVObject>> g_retiredPreviewObjectsPendingRelease;
 		constexpr std::uint32_t kPostRebuildAdjustmentHoldFrames = 6;
@@ -1320,10 +1330,157 @@ namespace TF3DHud
 			g_previewAttachments = std::move(preservedAttachments);
 		}
 
+		void RetirePreviewAnimObjectAttachments(const bool a_detach)
+		{
+			for (auto& attachment : g_previewAnimObjectAttachments) {
+				if (a_detach && attachment.parent && attachment.object) {
+					attachment.parent->DetachChild(attachment.object.get());
+				}
+				if (attachment.object) {
+					RetirePreviewObject(std::move(attachment.object));
+				}
+			}
+			g_previewAnimObjectAttachments.clear();
+		}
+
+		[[nodiscard]] std::vector<PreviewAnimObjectAttachment>::iterator FindPreviewAnimObjectAttachment(
+			const RE::BSFixedString& a_editorID)
+		{
+			return std::ranges::find_if(
+				g_previewAnimObjectAttachments,
+				[&](const PreviewAnimObjectAttachment& a_attachment) {
+					return a_attachment.editorID == a_editorID;
+				});
+		}
+
+		void DetachPreviewAnimObject(const RE::BSFixedString& a_editorID)
+		{
+			if (a_editorID.empty()) {
+				RetirePreviewAnimObjectAttachments(true);
+				return;
+			}
+
+			for (auto it = g_previewAnimObjectAttachments.begin(); it != g_previewAnimObjectAttachments.end();) {
+				if (it->editorID != a_editorID) {
+					++it;
+					continue;
+				}
+
+				if (it->parent && it->object) {
+					it->parent->DetachChild(it->object.get());
+				}
+				if (it->object) {
+					RetirePreviewObject(std::move(it->object));
+				}
+				it = g_previewAnimObjectAttachments.erase(it);
+			}
+
+			if (g_previewRoot) {
+				RE::NiUpdateData updateData;
+				g_previewRoot->Update(updateData);
+			}
+		}
+
+		[[nodiscard]] RE::NiNode* ResolvePreviewAnimObjectParent(
+			RE::NiAVObject& a_animObject,
+			RE::NiAVObject& a_previewRoot,
+			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
+		{
+			// IDA OG 1.10.163: AnimationObjects::Loaded passes BIPED_OBJECT -1 to
+			// BipedAnim::AttachToParent; that path resolves the parent from the
+			// model's NiStringExtraData "Prn" and skips weapon-slot fallbacks.
+			auto* prn = FindStringExtraDataInTree(a_animObject, RE::BSFixedString("Prn"));
+			if (!prn || prn->GetValue().empty()) {
+				return nullptr;
+			}
+
+			return FindPreviewNodeByName(a_previewRoot, a_previewNodes, prn->GetValue());
+		}
+
+		void AttachPreviewAnimObject(const RE::BSFixedString& a_editorID)
+		{
+			if (a_editorID.empty() || !g_previewRoot) {
+				return;
+			}
+
+			if (auto existing = FindPreviewAnimObjectAttachment(a_editorID);
+				existing != g_previewAnimObjectAttachments.end()) {
+				if (existing->object) {
+					existing->object->SetAppCulled(false);
+				}
+				return;
+			}
+
+			auto* animObject = RE::TESForm::GetFormByEditorID<RE::TESObjectANIO>(a_editorID);
+			if (!animObject) {
+				LogDiagnostic(
+					std::string{ "anim object attach skipped: ANIO not found for '" } +
+					FixedStringToString(a_editorID) + "'");
+				return;
+			}
+
+			const auto* modelPath = static_cast<RE::BGSModelMaterialSwap*>(animObject)->GetModel();
+			if (!modelPath || modelPath[0] == '\0') {
+				LogDiagnostic(
+					std::string{ "anim object attach skipped: ANIO has empty model for '" } +
+					FixedStringToString(a_editorID) + "'");
+				return;
+			}
+
+			auto previewObject = LoadPreviewModel(modelPath);
+			if (!previewObject) {
+				LogDiagnostic(
+					std::string{ "anim object attach skipped: model load failed for '" } +
+					FixedStringToString(a_editorID) + "' path='" + modelPath + "'");
+				return;
+			}
+
+			std::unordered_map<std::string, RE::NiAVObject*> previewNodes;
+			CollectPreviewSkinTargetNodes(*g_previewRoot, previewNodes);
+			auto* parent = ResolvePreviewAnimObjectParent(*previewObject, *g_previewRoot, previewNodes);
+			if (!parent) {
+				LogDiagnostic(
+					std::string{ "anim object attach skipped: Prn parent not found for '" } +
+					FixedStringToString(a_editorID) + "' path='" + modelPath + "'");
+				RetirePreviewObject(std::move(previewObject));
+				return;
+			}
+
+			RE::bhkWorld::RemoveObjects(previewObject.get(), true, true);
+			StripControllerChains(*previewObject);
+			PreparePreviewTree(*previewObject);
+			SanitizePreviewRenderTree(*previewObject);
+			PrepareForInterface3DOffscreen(*previewObject);
+			previewObject->SetLocalTransform(RE::NiTransform::IDENTITY);
+
+			parent->AttachChild(previewObject.get(), true);
+			g_previewAnimObjectAttachments.push_back({
+				.editorID = a_editorID,
+				.object = previewObject,
+				.parent = parent,
+			});
+
+			RE::NiUpdateData updateData;
+			previewObject->Update(updateData);
+			g_previewRoot->Update(updateData);
+			MarkRenderStateDirty();
+		}
+
+		void HandleAnimationObjectEventImpl(const RE::BSFixedString& a_tag, const RE::BSFixedString& a_payload)
+		{
+			if (a_tag == std::string_view{ "AnimObjDraw" }) {
+				AttachPreviewAnimObject(a_payload);
+			} else if (a_tag == std::string_view{ "AnimObjUnequip" }) {
+				DetachPreviewAnimObject(a_payload);
+				MarkRenderStateDirty();
+			}
+		}
+
 		void ResetPreview3DState(const bool a_disableRenderer)
 		{
 			Renderer::ClearPreviewRoot(a_disableRenderer);
 			RetirePreviewAttachments(false);
+			RetirePreviewAnimObjectAttachments(false);
 			g_previewRoot.reset();
 			g_previewFlattenedBoneTree = nullptr;
 			g_previewFaceNode.reset();
@@ -1863,16 +2020,20 @@ namespace TF3DHud
 			// Rebuilds run at the Interface3D commit boundary. Keep the active
 			// renderer-owned tree intact until a full replacement is ready.
 			auto previousAttachments = std::move(g_previewAttachments);
+			auto previousAnimObjectAttachments = std::move(g_previewAnimObjectAttachments);
 			auto previousFaceNode = std::move(g_previewFaceNode);
 			auto* previousFlattenedBoneTree = g_previewFlattenedBoneTree;
 			g_previewAttachments.clear();
+			g_previewAnimObjectAttachments.clear();
 			g_previewFaceNode.reset();
 			g_previewFlattenedBoneTree = nullptr;
 
 			auto restorePreviousPreviewMetadata = [&]() {
 				g_previewAttachments.clear();
+				g_previewAnimObjectAttachments.clear();
 				g_previewFaceNode.reset();
 				g_previewAttachments = std::move(previousAttachments);
+				g_previewAnimObjectAttachments = std::move(previousAnimObjectAttachments);
 				g_previewFaceNode = std::move(previousFaceNode);
 				g_previewFlattenedBoneTree = previousFlattenedBoneTree;
 				if (!g_previewRoot) {
@@ -2227,6 +2388,12 @@ namespace TF3DHud
 			std::scoped_lock lock(g_stateLock);
 			g_rebuilder.ObserveUpdate3DModel(a_updateFlags, a_updateEditorDeadModel);
 			MarkRenderStateDirty();
+		}
+
+		void HandleAnimationObjectEvent(const RE::BSFixedString& a_tag, const RE::BSFixedString& a_payload)
+		{
+			std::scoped_lock lock(g_stateLock);
+			HandleAnimationObjectEventImpl(a_tag, a_payload);
 		}
 
 		void ApplyConfigChanges()

@@ -38,6 +38,10 @@ namespace TF3DHud::Address
 	REL::Relocation<GetGraphVariableBool_t*> GetBShkbGraphVariableBool{ REL::ID(815875) };
 	REL::Relocation<GetGraphVariableFloat_t*> GetBShkbGraphVariableFloat{ REL::ID(1254547) };
 	REL::Relocation<GetGraphVariableInt_t*> GetBShkbGraphVariableInt{ REL::ID(110974) };
+	// IDA OG 1.10.163: anonymous GetDynamicIdleFullFilePath used by
+	// BGSAnimationSystemUtils::RunActionOnActorGetFile for dynamic idle paths.
+	REL::Relocation<GetDynamicIdleFullFilePath_t*> GetDynamicIdleFullFilePath{ REL::ID{ 1060877, 2236430 } };
+	REL::Relocation<GetKeywordForType_t*> GetKeywordForType{ REL::ID(50302) };
 	REL::Relocation<GetNPCHeadPart_t*> GetNPCHeadPart{ REL::ID(946253) };
 	REL::Relocation<GetNumSegments_t*> GetNumSegments{ REL::ID(331465) };
 	REL::Relocation<GetSubSegmentCount_t*> GetSubSegmentCount{ REL::ID(374480) };
@@ -63,6 +67,7 @@ namespace TF3DHud::Address
 	REL::Relocation<QUpdateEditorDeadActorModel_t*> QUpdateEditorDeadActorModel{ REL::ID{ 16281, 2231571 } };
 	REL::Relocation<QTiledLighting_t*> QTiledLighting{ REL::ID{ 1154650, 2318371 } };
 	REL::Relocation<ResetFaceGenCurrentMorphs_t*> ResetFaceGenCurrentMorphs{ REL::ID(1174798) };
+	REL::Relocation<RequestIdles_t*> RequestIdles{ REL::ID{ 261705, 2257437 } };
 	REL::Relocation<RetrieveSubGraphData_t*> RetrieveSubGraphData{ REL::ID{ 1291992, 2188860 } };
 	REL::Relocation<SetAnimationGraphTarget_t*> SetAnimationGraphTarget{ REL::ID{ 1340816, 2214556 } };
 	REL::Relocation<SetClothSettleOnTransitionToSim_t*> SetClothSettleOnTransitionToSim{ REL::ID(638869) };
@@ -91,6 +96,10 @@ namespace TF3DHud::Address
 	REL::Relocation<void**> AnimationSubGraphDataSingleton{ REL::ID(1363506) };
 	REL::Relocation<void**> BehaviorGraphSwapSingleton{ REL::ID(153510) };
 	REL::Relocation<RE::EquipEventSource*> EquipEventSourceSingleton{ REL::ID{ 485633, 2691240, 4798533 } };
+	// IDA OG 1.10.163: AnimationFileManagerSingleton dynamic idle loaded-entry array.
+	REL::Relocation<RE::BSTArray<LoadedIdleAnimData>*> LoadedHandleAndBindingA{ REL::ID(762973) };
+	// IDA OG 1.10.163: anonymous LoadedIdleLock guarding loaded/loading dynamic idle arrays.
+	REL::Relocation<RE::BSReadWriteLock*> LoadedIdleLock{ REL::ID(1420624) };
 	REL::Relocation<std::uintptr_t> ClipCursor{ REL::ID{ 641385, 4823626 } };
 	REL::Relocation<std::uintptr_t> ProcessGraphEventTarget{ REL::ID(1199489) };
 	REL::Relocation<std::uintptr_t> RenderPrepassesAndMenusTarget{ REL::ID(1189309) };
@@ -111,5 +120,9 @@ namespace TF3DHud::Address
 	const IDOffset RunActorUpdatesCall{
 		REL::ID{ 556439, 2227611 },
 		VariantOffset{ 0x17, 0x23 }
+	};
+	const IDOffset TESIdleFormLoadAddLoadedIdleCall{
+		REL::ID{ 1269730, 2207227 },
+		VariantOffset{ 0x1D5, 0x1D5 }
 	};
 }

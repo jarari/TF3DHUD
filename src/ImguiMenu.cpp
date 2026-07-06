@@ -7,6 +7,8 @@
 #include "Renderer.h"
 
 #include "RE/B/BSGraphics.h"
+#include "RE/T/TESFile.h"
+#include "RE/T/TESIdleForm.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -20,6 +22,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -1056,18 +1059,136 @@ namespace TF3DHud::Imgui
 			}
 		}
 
+		[[nodiscard]] std::string DynamicActivationIdleLabel(const RE::TESIdleForm& a_idle)
+		{
+			if (!a_idle.formEditorID.empty()) {
+				return a_idle.formEditorID.c_str();
+			}
+			if (!a_idle.animFileName.empty()) {
+				return a_idle.animFileName.c_str();
+			}
+
+			std::array<char, 32> buffer{};
+			std::snprintf(buffer.data(), buffer.size(), "%08X", a_idle.GetFormID());
+			return buffer.data();
+		}
+
+		[[nodiscard]] std::string DynamicActivationIdleKey(RE::TESIdleForm& a_idle)
+		{
+			auto* file = a_idle.GetFile(0);
+			if (!file) {
+				return {};
+			}
+
+			std::array<char, 64> localID{};
+			std::snprintf(localID.data(), localID.size(), "0x%X", a_idle.GetLocalFormID());
+			return std::string{ file->filename } + "|" + localID.data();
+		}
+
+		[[nodiscard]] std::uint32_t ResolveDynamicActivationIdleIndex(
+			const std::vector<RE::TESIdleForm*>& a_idles,
+			const std::string& a_key)
+		{
+			for (std::size_t index = 0; index < a_idles.size(); ++index) {
+				auto* idle = a_idles[index];
+				if (idle && DynamicActivationIdleKey(*idle) == a_key) {
+					return static_cast<std::uint32_t>(index);
+				}
+			}
+			return 0;
+		}
+
 		void DrawAnimationTab()
 		{
-			auto& mirrorEvents = GetMutableConfig().animation.mirrorEvents;
+			auto& animation = GetMutableConfig().animation;
+			auto& mirrorEvents = animation.mirrorEvents;
 
-			ImGui::TextUnformatted("Mirror Events / Graph Variables");
-			ImGui::Checkbox("Locomotion", &mirrorEvents.locomotion);
-			ImGui::Checkbox("Sneak", &mirrorEvents.sneak);
-			ImGui::Checkbox("Jump", &mirrorEvents.jump);
-			ImGui::Checkbox("Weapon Fire", &mirrorEvents.weaponFire);
-			ImGui::Checkbox("Weapon Reload", &mirrorEvents.weaponReload);
-			ImGui::Checkbox("Melee", &mirrorEvents.melee);
-			ImGui::Checkbox("Throw", &mirrorEvents.throwable);
+			const bool wasUsingLiveAnimation = animation.useLiveAnimation;
+			if (ImGui::Checkbox("Use Live Animation", &animation.useLiveAnimation) &&
+				!wasUsingLiveAnimation && animation.useLiveAnimation) {
+				Animations::StopIdleAnimation();
+			}
+			ImGui::Separator();
+			if (animation.useLiveAnimation) {
+				ImGui::TextUnformatted("Mirror Events / Graph Variables");
+				ImGui::Checkbox("Locomotion", &mirrorEvents.locomotion);
+				ImGui::Checkbox("Sneak", &mirrorEvents.sneak);
+				ImGui::Checkbox("Jump", &mirrorEvents.jump);
+				ImGui::Checkbox("Weapon Fire", &mirrorEvents.weaponFire);
+				ImGui::Checkbox("Weapon Reload", &mirrorEvents.weaponReload);
+				ImGui::Checkbox("Melee", &mirrorEvents.melee);
+				ImGui::Checkbox("Throw", &mirrorEvents.throwable);
+				return;
+			}
+
+			const auto& idles = Animations::GetDynamicActivationIdles();
+			if (idles.empty()) {
+				const char* none = "(none)";
+				int selected = 0;
+				ImGui::BeginDisabled();
+				ImGui::Combo("Idle Animation", &selected, &none, 1);
+				ImGui::SameLine();
+				ImGui::Button("<");
+				ImGui::SameLine();
+				ImGui::Button(">");
+				ImGui::EndDisabled();
+				ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation);
+				return;
+			}
+
+			std::vector<std::string> labels;
+			labels.reserve(idles.size());
+			std::vector<const char*> items;
+			items.reserve(idles.size());
+			for (auto* idle : idles) {
+				labels.push_back(idle ? DynamicActivationIdleLabel(*idle) : std::string{ "(null)" });
+				items.push_back(labels.back().c_str());
+			}
+
+			auto selectedIndex = ResolveDynamicActivationIdleIndex(idles, animation.dynamicActivationIdle);
+			if (animation.dynamicActivationIdle.empty()) {
+				if (auto* idle = idles[selectedIndex]) {
+					animation.dynamicActivationIdle = DynamicActivationIdleKey(*idle);
+				}
+			}
+
+			int selected = static_cast<int>(selectedIndex);
+			ImGui::PushItemWidth(320.0F);
+			if (ImGui::Combo("Idle Animation", &selected, items.data(), static_cast<int>(items.size()))) {
+				if (auto* idle = idles[static_cast<std::size_t>(selected)]) {
+					const auto key = DynamicActivationIdleKey(*idle);
+					if (animation.dynamicActivationIdle != key) {
+						animation.dynamicActivationIdle = key;
+						Animations::StopIdleAnimation();
+					}
+				}
+			}
+			ImGui::PopItemWidth();
+			ImGui::SameLine();
+			if (ImGui::Button("<")) {
+				selectedIndex = selectedIndex == 0 ?
+					static_cast<std::uint32_t>(idles.size() - 1) :
+					selectedIndex - 1;
+				if (auto* idle = idles[selectedIndex]) {
+					const auto key = DynamicActivationIdleKey(*idle);
+					if (animation.dynamicActivationIdle != key) {
+						animation.dynamicActivationIdle = key;
+						Animations::StopIdleAnimation();
+					}
+				}
+			}
+			ImGui::SameLine();
+			if (ImGui::Button(">")) {
+				selectedIndex = static_cast<std::uint32_t>((selectedIndex + 1) % idles.size());
+				if (auto* idle = idles[selectedIndex]) {
+					const auto key = DynamicActivationIdleKey(*idle);
+					if (animation.dynamicActivationIdle != key) {
+						animation.dynamicActivationIdle = key;
+						Animations::StopIdleAnimation();
+					}
+				}
+			}
+			ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation);
 		}
 
 		[[nodiscard]] bool LightNameExists(const Config& a_config, const std::string& a_name, const std::size_t a_ignoreIndex)

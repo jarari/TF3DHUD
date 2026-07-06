@@ -3,6 +3,7 @@
 #include "Lights.h"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace TF3DHud
@@ -45,6 +46,9 @@ namespace TF3DHud
 
 	struct AnimationSettings
 	{
+		bool useLiveAnimation{ true };
+		bool hideWeaponDuringIdleAnimation{ false };
+		std::string dynamicActivationIdle;
 		AnimationMirrorEventSettings mirrorEvents;
 	};
 

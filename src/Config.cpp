@@ -146,6 +146,12 @@ namespace TF3DHud
 			a_ini.SetBoolValue("Camera", "FollowX", g_config.camera.followX);
 			a_ini.SetBoolValue("Camera", "FollowY", g_config.camera.followY);
 			a_ini.SetBoolValue("Camera", "FollowZ", g_config.camera.followZ);
+			a_ini.SetBoolValue("Animation", "UseLiveAnimation", g_config.animation.useLiveAnimation);
+			a_ini.SetBoolValue(
+				"Animation",
+				"HideWeaponDuringIdleAnimation",
+				g_config.animation.hideWeaponDuringIdleAnimation);
+			a_ini.SetValue("Animation", "DynamicActivationIdle", g_config.animation.dynamicActivationIdle.c_str());
 			a_ini.SetBoolValue("Animation", "MirrorLocomotion", g_config.animation.mirrorEvents.locomotion);
 			a_ini.SetBoolValue("Animation", "MirrorSneak", g_config.animation.mirrorEvents.sneak);
 			a_ini.SetBoolValue("Animation", "MirrorJump", g_config.animation.mirrorEvents.jump);
@@ -177,6 +183,12 @@ namespace TF3DHud
 			a_ini.SetBoolValue("Camera", "FollowX", a_config.camera.followX);
 			a_ini.SetBoolValue("Camera", "FollowY", a_config.camera.followY);
 			a_ini.SetBoolValue("Camera", "FollowZ", a_config.camera.followZ);
+			a_ini.SetBoolValue("Animation", "UseLiveAnimation", a_config.animation.useLiveAnimation);
+			a_ini.SetBoolValue(
+				"Animation",
+				"HideWeaponDuringIdleAnimation",
+				a_config.animation.hideWeaponDuringIdleAnimation);
+			a_ini.SetValue("Animation", "DynamicActivationIdle", a_config.animation.dynamicActivationIdle.c_str());
 			a_ini.SetBoolValue("Animation", "MirrorLocomotion", a_config.animation.mirrorEvents.locomotion);
 			a_ini.SetBoolValue("Animation", "MirrorSneak", a_config.animation.mirrorEvents.sneak);
 			a_ini.SetBoolValue("Animation", "MirrorJump", a_config.animation.mirrorEvents.jump);
@@ -375,6 +387,14 @@ namespace TF3DHud
 		g_config.camera.followX = ini.GetBoolValue("Camera", "FollowX", g_config.camera.followX);
 		g_config.camera.followY = ini.GetBoolValue("Camera", "FollowY", g_config.camera.followY);
 		g_config.camera.followZ = ini.GetBoolValue("Camera", "FollowZ", g_config.camera.followZ);
+		g_config.animation.useLiveAnimation =
+			ini.GetBoolValue("Animation", "UseLiveAnimation", g_config.animation.useLiveAnimation);
+		g_config.animation.hideWeaponDuringIdleAnimation = ini.GetBoolValue(
+			"Animation",
+			"HideWeaponDuringIdleAnimation",
+			g_config.animation.hideWeaponDuringIdleAnimation);
+		g_config.animation.dynamicActivationIdle =
+			ini.GetValue("Animation", "DynamicActivationIdle", g_config.animation.dynamicActivationIdle.c_str());
 		g_config.animation.mirrorEvents.locomotion =
 			ini.GetBoolValue("Animation", "MirrorLocomotion", g_config.animation.mirrorEvents.locomotion);
 		g_config.animation.mirrorEvents.sneak =

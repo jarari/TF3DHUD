@@ -20,6 +20,7 @@
 #include "RE/P/PlayerCharacter.h"
 #include "RE/T/TESEquipEvent.h"
 #include "RE/T/TESForm.h"
+#include "RE/T/TESIdleForm.h"
 
 #include <cstdint>
 
@@ -33,8 +34,10 @@ namespace TF3DHud
 		using BSRenderPassCtor_t = Address::BSRenderPassCtor_t;
 		using RenderSceneDeferred_t = Address::RenderSceneDeferred_t;
 		using RenderPrepassesAndMenus_t = Address::RenderPrepassesAndMenus_t;
+		using AddLoadedIdle_t = Address::AddLoadedIdle_t;
 
 		const auto& g_runActorUpdatesCall = Address::RunActorUpdatesCall;
+		const auto& g_tesIdleFormLoadAddLoadedIdleCall = Address::TESIdleFormLoadAddLoadedIdleCall;
 		auto& g_processGraphEventTarget = Address::ProcessGraphEventTarget;
 		// BodyShapeManager hooks AIProcess::Update3dModel at this function entry and
 		// preserves the first 5-byte instruction (`mov [rsp+0x18], rbp`). Use the same
@@ -66,6 +69,7 @@ namespace TF3DHud
 		BSRenderPassCtor_t* g_bsRenderPassCtor{ nullptr };
 		RenderSceneDeferred_t* g_renderSceneDeferred{ nullptr };
 		RenderPrepassesAndMenus_t* g_renderPrepassesAndMenus{ nullptr };
+		AddLoadedIdle_t* g_addLoadedIdle{ nullptr };
 		bool g_equipWatcherRegistered{ false };
 		thread_local bool g_inTF3DHudDeferredRender{ false };
 
@@ -229,6 +233,14 @@ namespace TF3DHud
 			}
 		}
 
+		void HookedAddLoadedIdle(void* a_idleManager, RE::TESIdleForm* a_idle)
+		{
+			if (g_addLoadedIdle) {
+				g_addLoadedIdle(a_idleManager, a_idle);
+			}
+			Animations::ObserveLoadedIdle(a_idle);
+		}
+
 		void F4SEMessageHandler(F4SE::MessagingInterface::Message* a_message)
 		{
 			if (!a_message) {
@@ -275,6 +287,10 @@ namespace TF3DHud
 		g_runActorUpdates = reinterpret_cast<RunActorUpdates_t*>(
 			trampoline.write_call<5>(g_runActorUpdatesCall.address(), &HookedRunActorUpdates));
 		REX::INFO("Installed frame hook at {:X}", g_runActorUpdatesCall.address());
+
+		g_addLoadedIdle = reinterpret_cast<AddLoadedIdle_t*>(
+			trampoline.write_call<5>(g_tesIdleFormLoadAddLoadedIdleCall.address(), &HookedAddLoadedIdle));
+		REX::INFO("Installed TESIdleForm::Load AddLoadedIdle hook at {:X}", g_tesIdleFormLoadAddLoadedIdleCall.address());
 
 		g_processGraphEvent = CreateBranchGateway5<ProcessGraphEvent_t*>(
 			"BSAnimationGraphManager::ProcessGraphEvent",
