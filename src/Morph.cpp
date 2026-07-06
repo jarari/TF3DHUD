@@ -5,6 +5,7 @@
 
 #include "RE/B/BSGeometry.h"
 #include "RE/N/NiNode.h"
+#include "RE/N/NiRTTI.h"
 #include "RE/N/NiUpdateData.h"
 
 #include <algorithm>
@@ -94,12 +95,46 @@ namespace TF3DHud::Morph
 
 		[[nodiscard]] bool IsAdjustmentBone(const RE::NiAVObject& a_object)
 		{
-			if (!a_object.IsNode()) {
+			if (!netimmerse_cast<RE::NiNode*>(std::addressof(a_object))) {
 				return false;
 			}
 
 			const auto name = a_object.GetName();
 			return !name.empty() && !NamesEqual(name.c_str(), "Root") && !g_graphWrittenBoneNames.contains(name.c_str());
+		}
+
+		[[nodiscard]] RE::NiNode* ResolveNodeByName(RE::NiAVObject& a_root, const RE::BSFixedString& a_name)
+		{
+			if (a_name.empty()) {
+				return nullptr;
+			}
+
+			auto* object = a_root.GetObjectByName(a_name);
+			return object ? netimmerse_cast<RE::NiNode*>(object) : nullptr;
+		}
+
+		void CollectResolvedFlattenedBoneNodes(
+			RE::NiAVObject& a_root,
+			RE::BSFlattenedBoneTree* a_tree,
+			std::unordered_map<std::string, RE::NiAVObject*>& a_nodes)
+		{
+			if (!a_tree || !a_tree->bone || a_tree->boneCount <= 0 || a_tree->boneCount > 1024) {
+				return;
+			}
+
+			for (std::int32_t i = 0; i < a_tree->boneCount; ++i) {
+				const auto& bone = a_tree->bone[i];
+				if (bone.name.empty()) {
+					continue;
+				}
+
+				auto* node = ResolveNodeByName(a_root, bone.name);
+				if (!node) {
+					continue;
+				}
+
+				a_nodes.insert_or_assign(std::string(bone.name), node);
+			}
 		}
 
 		void BuildPreviewTargetMap(
@@ -108,17 +143,17 @@ namespace TF3DHud::Morph
 			std::unordered_map<std::string, RE::NiAVObject*>& a_previewNodes)
 		{
 			a_previewNodes.clear();
-			CollectFlattenedBoneNodes(a_previewFlattenedBoneTree, a_previewNodes);
 			CollectNamedNodes(std::addressof(a_previewRoot), a_previewNodes);
+			CollectResolvedFlattenedBoneNodes(a_previewRoot, a_previewFlattenedBoneTree, a_previewNodes);
 		}
 
 		[[nodiscard]] RE::NiAVObject* FindNamedNodeRecursive(RE::NiAVObject& a_object, const std::string_view a_name)
 		{
-			if (a_object.IsNode() && NamesEqual(a_object.GetName(), a_name)) {
+			auto* node = netimmerse_cast<RE::NiNode*>(std::addressof(a_object));
+			if (node && NamesEqual(a_object.GetName(), a_name)) {
 				return std::addressof(a_object);
 			}
 
-			auto* node = a_object.IsNode();
 			if (!node) {
 				return nullptr;
 			}
@@ -139,7 +174,7 @@ namespace TF3DHud::Morph
 			std::vector<std::string>& a_currentPath,
 			std::vector<std::vector<std::string>>& a_paths)
 		{
-			auto* node = a_object.IsNode();
+			auto* node = netimmerse_cast<RE::NiNode*>(std::addressof(a_object));
 			if (!node) {
 				return;
 			}
@@ -153,7 +188,7 @@ namespace TF3DHud::Morph
 			std::vector<RE::NiAVObject*> nodeChildren;
 			nodeChildren.reserve(node->children.size());
 			for (auto& child : node->children) {
-				if (child && child->IsNode()) {
+				if (child && netimmerse_cast<RE::NiNode*>(child.get())) {
 					nodeChildren.push_back(child.get());
 				}
 			}
@@ -183,7 +218,7 @@ namespace TF3DHud::Morph
 			if (!root) {
 				root = std::addressof(a_previewRoot);
 			}
-			if (!root->IsNode()) {
+			if (!netimmerse_cast<RE::NiNode*>(root)) {
 				return;
 			}
 
@@ -206,10 +241,10 @@ namespace TF3DHud::Morph
 				return false;
 			}
 
-			if (auto* sourceFlattenedTree = FindFlattenedBoneTree(sourceRoot)) {
-				CollectFlattenedBoneNodes(sourceFlattenedTree, a_sourceNodes);
-			}
 			CollectNamedNodes(sourceRoot, a_sourceNodes);
+			if (auto* sourceFlattenedTree = FindFlattenedBoneTree(sourceRoot)) {
+				CollectResolvedFlattenedBoneNodes(*sourceRoot, sourceFlattenedTree, a_sourceNodes);
+			}
 			return !a_sourceNodes.empty();
 		}
 
@@ -251,7 +286,7 @@ namespace TF3DHud::Morph
 				return nullptr;
 			}
 			auto* object = a_root.GetObjectByName(RE::BSFixedString(a_name.data()));
-			return object ? object->IsNode() : nullptr;
+			return object ? netimmerse_cast<RE::NiNode*>(object) : nullptr;
 		}
 
 		void RefreshPreviewAdjustmentLookup(
@@ -292,7 +327,7 @@ namespace TF3DHud::Morph
 			livePathLeafToRoot.reserve(16);
 			std::unordered_set<RE::NiAVObject*> seen;
 			for (auto* current = static_cast<RE::NiAVObject*>(liveLeaf); current; current = current->parent) {
-				if (!current->IsNode() || !seen.insert(current).second) {
+				if (!netimmerse_cast<RE::NiNode*>(current) || !seen.insert(current).second) {
 					return stats;
 				}
 
@@ -452,7 +487,7 @@ namespace TF3DHud::Morph
 				}
 
 				auto* target = FindNodeByName(a_previewNodes, name);
-				if (!target || target == std::addressof(a_previewRoot) || !target->IsNode()) {
+				if (!target || target == std::addressof(a_previewRoot) || !netimmerse_cast<RE::NiNode*>(target)) {
 					continue;
 				}
 
