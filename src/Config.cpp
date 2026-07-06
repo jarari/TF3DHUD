@@ -3,7 +3,10 @@
 #include "Equipment.h"
 #include "SimpleIni.h"
 
+#include "RE/S/Setting.h"
+
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <format>
 #include <string>
@@ -22,6 +25,43 @@ namespace TF3DHud
 		[[nodiscard]] std::filesystem::path ConfigPath()
 		{
 			return std::filesystem::path("Data") / "F4SE" / "Plugins" / "TF3DHud.ini";
+		}
+
+		[[nodiscard]] std::string NormalizeLanguageCode(std::string_view a_language)
+		{
+			std::string language{ a_language };
+			std::ranges::transform(language, language.begin(), [](const unsigned char a_ch) {
+				return static_cast<char>(std::tolower(a_ch));
+			});
+			std::ranges::replace(language, '-', '_');
+			std::ranges::replace(language, ' ', '_');
+
+			if (language == "english") {
+				return "en";
+			}
+			if (language == "ja" || language == "japanese") {
+				return "jp";
+			}
+			if (language == "kr" || language == "korean") {
+				return "ko";
+			}
+			if (language == "zh_hans" || language == "zh_cn" || language == "cn" || language == "chinese_simplified") {
+				return "zh_cn";
+			}
+			if (language == "zh_hant" || language == "zh_tw" || language == "tw" || language == "chinese_traditional") {
+				return "zh_tw";
+			}
+			return language.empty() ? "en" : language;
+		}
+
+		[[nodiscard]] std::string ResolveDefaultLanguage()
+		{
+			if (const auto setting = RE::GetINISetting("sLanguage:General")) {
+				if (const auto value = setting->GetString(); !value.empty()) {
+					return NormalizeLanguageCode(value);
+				}
+			}
+			return "en";
 		}
 
 		[[nodiscard]] float ClampDiffuse(const float a_value)
@@ -188,6 +228,7 @@ namespace TF3DHud
 			WriteEquipmentSlots(a_ini, g_config.equipment);
 			WriteDefaultLightSections(a_ini);
 			a_ini.SetValue("UI", "MenuKey", "0xDE");
+			a_ini.SetValue("UI", "Language", g_config.language.c_str());
 		}
 
 		void WriteConfig(CSimpleIniA& a_ini, const Config& a_config)
@@ -231,6 +272,7 @@ namespace TF3DHud
 			WriteLightSections(a_ini, a_config.lights.empty() ? Lights::DefaultLights() : a_config.lights);
 			const auto menuKey = std::format("0x{:02X}", a_config.uiMenuKey);
 			a_ini.SetValue("UI", "MenuKey", menuKey.c_str());
+			a_ini.SetValue("UI", "Language", a_config.language.c_str());
 		}
 
 		void ClampConfig(Config& a_config)
@@ -239,6 +281,7 @@ namespace TF3DHud
 			a_config.modelScale = std::clamp(a_config.modelScale, 0.01F, 10.0F);
 			a_config.anchor = std::clamp(a_config.anchor, 1, 9);
 			a_config.equipment.syncSlotMask &= Equipment::kAllEditorSlotsMask;
+			a_config.language = NormalizeLanguageCode(a_config.language);
 			for (auto& light : a_config.lights) {
 				ClampFixedLight(light.fixed);
 				ClampTimeOfDayLight(light.timeOfDay);
@@ -391,6 +434,7 @@ namespace TF3DHud
 	void LoadConfig()
 	{
 		g_config = Config{};
+		g_config.language = ResolveDefaultLanguage();
 
 		CSimpleIniA ini;
 		ini.SetUnicode();
@@ -409,8 +453,18 @@ namespace TF3DHud
 			return;
 		}
 
+		bool writeMissingUI = false;
 		if (!ini.GetValue("UI", "MenuKey", nullptr)) {
 			ini.SetValue("UI", "MenuKey", "0xDE");
+			writeMissingUI = true;
+		}
+		if (const auto* language = ini.GetValue("UI", "Language", nullptr); language && language[0] != '\0') {
+			g_config.language = NormalizeLanguageCode(language);
+		} else {
+			ini.SetValue("UI", "Language", g_config.language.c_str());
+			writeMissingUI = true;
+		}
+		if (writeMissingUI) {
 			ini.SaveFile(path.string().c_str());
 		}
 
@@ -464,7 +518,7 @@ namespace TF3DHud
 		ClampConfig(g_config);
 
 		REX::INFO(
-			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, cameraTarget={}, cameraFollow={} axes=({}, {}, {}), clipRect=({}, {}, {}, {}), hideInPowerArmor={}, uiMenuKey=0x{:02X}, lights={}",
+			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, cameraTarget={}, cameraFollow={} axes=({}, {}, {}), clipRect=({}, {}, {}, {}), hideInPowerArmor={}, uiMenuKey=0x{:02X}, language={}, lights={}",
 			g_config.enabled,
 			g_config.fov,
 			g_config.placementX,
@@ -484,6 +538,7 @@ namespace TF3DHud
 			g_config.clipRect.bottom,
 			g_config.hideInPowerArmor,
 			g_config.uiMenuKey,
+			g_config.language,
 			g_config.lights.size());
 	}
 
@@ -503,6 +558,30 @@ namespace TF3DHud
 		}
 
 		REX::INFO("Saved config to {}", path.string());
+		return true;
+	}
+
+	bool SaveLanguageConfig(std::string_view a_language)
+	{
+		g_config.language = NormalizeLanguageCode(a_language);
+
+		CSimpleIniA ini;
+		ini.SetUnicode();
+
+		const auto path = ConfigPath();
+		if (std::filesystem::exists(path) && ini.LoadFile(path.string().c_str()) < 0) {
+			REX::WARN("Failed to load {}; rewriting current config while saving language", path.string());
+			WriteConfig(ini, g_config);
+		}
+
+		ini.SetValue("UI", "Language", g_config.language.c_str());
+		std::filesystem::create_directories(path.parent_path());
+		if (ini.SaveFile(path.string().c_str()) < 0) {
+			REX::WARN("Failed to save language config to {}", path.string());
+			return false;
+		}
+
+		REX::INFO("Saved language '{}' to {}", g_config.language, path.string());
 		return true;
 	}
 }

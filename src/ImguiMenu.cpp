@@ -4,6 +4,7 @@
 #include "Animations.h"
 #include "Config.h"
 #include "Equipment.h"
+#include "Localization.h"
 #include "Previewer.h"
 #include "Renderer.h"
 
@@ -80,7 +81,7 @@ namespace TF3DHud::Imgui
 		constexpr float kVanillaDisplayTop = 79.875F;
 		constexpr float kVanillaDisplayRight = 148.125F;
 		constexpr float kVanillaDisplayBottom = -79.875F;
-		constexpr const char* kSavePromptPopup = "Save changes?";
+		constexpr const char* kSavePromptPopup = "Save changes?##SaveChanges";
 
 		struct DisplayBounds
 		{
@@ -91,6 +92,39 @@ namespace TF3DHud::Imgui
 		};
 
 		[[nodiscard]] DisplayBounds GetOverlayScreenPlaneBounds(const Config& a_config);
+
+		[[nodiscard]] const char* L(const char* a_key)
+		{
+			return Localization::GetText(a_key);
+		}
+
+		[[nodiscard]] std::string Label(const char* a_key, const char* a_id)
+		{
+			return std::string{ L(a_key) } + "##" + a_id;
+		}
+
+		void DrawHint(const char* a_key)
+		{
+			ImGui::SameLine();
+			ImGui::TextDisabled("(?)");
+			if (ImGui::BeginItemTooltip()) {
+				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0F);
+				ImGui::TextUnformatted(L(a_key));
+				ImGui::PopTextWrapPos();
+				ImGui::EndTooltip();
+			}
+		}
+
+		void DrawSectionHeader(const char* a_labelKey, const char* a_hintKey)
+		{
+			ImGui::TextUnformatted(L(a_labelKey));
+			DrawHint(a_hintKey);
+		}
+
+		[[nodiscard]] const char* BoolText(const bool a_value)
+		{
+			return a_value ? L("state.true") : L("state.false");
+		}
 
 		void MarkDirty()
 		{
@@ -274,22 +308,22 @@ namespace TF3DHud::Imgui
 				return;
 			}
 
-			ImGui::TextUnformatted("Save changes to TF3DHud.ini?");
+			ImGui::TextUnformatted(L("modal.save_changes.body"));
 			ImGui::Separator();
 
-			if (ImGui::Button("Save", ImVec2(96.0F, 0.0F))) {
+			if (ImGui::Button(L("button.save"), ImVec2(96.0F, 0.0F))) {
 				if (SaveConfigFromMenu()) {
 					ImGui::CloseCurrentPopup();
 					CloseMenu();
 				}
 			}
 			ImGui::SameLine();
-			if (ImGui::Button("Close", ImVec2(96.0F, 0.0F))) {
+			if (ImGui::Button(L("button.close"), ImVec2(96.0F, 0.0F))) {
 				ImGui::CloseCurrentPopup();
 				CloseMenu();
 			}
 			ImGui::SameLine();
-			if (ImGui::Button("Cancel", ImVec2(96.0F, 0.0F))) {
+			if (ImGui::Button(L("button.cancel"), ImVec2(96.0F, 0.0F))) {
 				g_savePromptOpen = false;
 				ImGui::CloseCurrentPopup();
 			}
@@ -316,7 +350,7 @@ namespace TF3DHud::Imgui
 		bool DrawEditButton(const char* a_id)
 		{
 			ImGui::SameLine();
-			if (ImGui::Button("E")) {
+			if (ImGui::Button(L("button.edit"))) {
 				g_editingValueId = a_id;
 				g_focusEditInput = true;
 				return true;
@@ -325,22 +359,24 @@ namespace TF3DHud::Imgui
 		}
 
 		[[nodiscard]] bool DrawIntSliderEdit(
-			const char* a_label,
+			const char* a_labelKey,
+			const char* a_id,
 			float& a_value,
 			const int a_min,
 			const int a_max,
 			const int a_step)
 		{
 			bool changed = false;
-			ImGui::PushID(a_label);
-			const bool editing = g_editingValueId == a_label;
+			ImGui::PushID(a_id);
+			const bool editing = g_editingValueId == a_id;
 			int value = static_cast<int>(std::lround(a_value));
+			const auto label = Label(a_labelKey, a_id);
 			if (editing) {
 				if (g_focusEditInput) {
 					ImGui::SetKeyboardFocusHere();
 					g_focusEditInput = false;
 				}
-				if (ImGui::InputInt(a_label, &value, a_step, a_step, ImGuiInputTextFlags_EnterReturnsTrue) ||
+				if (ImGui::InputInt(label.c_str(), &value, a_step, a_step, ImGuiInputTextFlags_EnterReturnsTrue) ||
 				    ImGui::IsItemDeactivatedAfterEdit()) {
 					value = std::clamp(value, a_min, a_max);
 					a_value = static_cast<float>(value);
@@ -348,46 +384,48 @@ namespace TF3DHud::Imgui
 					changed = true;
 				}
 			} else {
-				if (ImGui::SliderInt(a_label, &value, a_min, a_max, "%d", ImGuiSliderFlags_AlwaysClamp)) {
+				if (ImGui::SliderInt(label.c_str(), &value, a_min, a_max, "%d", ImGuiSliderFlags_AlwaysClamp)) {
 					if (a_step > 1) {
 						value = std::clamp(((value + (a_step / 2)) / a_step) * a_step, a_min, a_max);
 					}
 					a_value = static_cast<float>(value);
 					changed = true;
 				}
-				DrawEditButton(a_label);
+				DrawEditButton(a_id);
 			}
 			ImGui::PopID();
 			return changed;
 		}
 
 		[[nodiscard]] bool DrawFloatSliderEdit(
-			const char* a_label,
+			const char* a_labelKey,
+			const char* a_id,
 			float& a_value,
 			const float a_min,
 			const float a_max,
 			const float a_step)
 		{
 			bool changed = false;
-			ImGui::PushID(a_label);
-			const bool editing = g_editingValueId == a_label;
+			ImGui::PushID(a_id);
+			const bool editing = g_editingValueId == a_id;
+			const auto label = Label(a_labelKey, a_id);
 			if (editing) {
 				if (g_focusEditInput) {
 					ImGui::SetKeyboardFocusHere();
 					g_focusEditInput = false;
 				}
-				if (ImGui::InputFloat(a_label, &a_value, a_step, a_step, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue) ||
+				if (ImGui::InputFloat(label.c_str(), &a_value, a_step, a_step, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue) ||
 				    ImGui::IsItemDeactivatedAfterEdit()) {
 					a_value = std::clamp(a_value, a_min, a_max);
 					g_editingValueId.clear();
 					changed = true;
 				}
 			} else {
-				if (ImGui::SliderFloat(a_label, &a_value, a_min, a_max, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+				if (ImGui::SliderFloat(label.c_str(), &a_value, a_min, a_max, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
 					a_value = std::clamp(std::round(a_value / a_step) * a_step, a_min, a_max);
 					changed = true;
 				}
-				DrawEditButton(a_label);
+				DrawEditButton(a_id);
 			}
 			ImGui::PopID();
 			return changed;
@@ -493,26 +531,26 @@ namespace TF3DHud::Imgui
 			});
 
 			if (clipIter == a_snapshot.activeNodes.end()) {
-				ImGui::TextUnformatted("Active clip: none");
+				ImGui::TextUnformatted(L("debug.active_clip.none"));
 				return;
 			}
 
-			ImGui::Text("Active clip: %s", clipIter->clipName.empty() ? "(unnamed)" : clipIter->clipName.c_str());
+			ImGui::Text(L("debug.active_clip"), clipIter->clipName.empty() ? L("state.unnamed") : clipIter->clipName.c_str());
 			if (clipIter->inSubgraph) {
-				ImGui::Text("Subgraph: slot %u root=%p", clipIter->subgraphSlot, reinterpret_cast<void*>(clipIter->behaviorRootId));
+				ImGui::Text(L("debug.subgraph_slot"), clipIter->subgraphSlot, reinterpret_cast<void*>(clipIter->behaviorRootId));
 			} else {
-				ImGui::Text("Subgraph: root graph root=%p", reinterpret_cast<void*>(clipIter->behaviorRootId));
+				ImGui::Text(L("debug.subgraph_root"), reinterpret_cast<void*>(clipIter->behaviorRootId));
 			}
-			ImGui::Text("Path: %s", clipIter->resolvedClipPath.empty() ? clipIter->authoredClipPath.c_str() : clipIter->resolvedClipPath.c_str());
+			ImGui::Text(L("debug.path"), clipIter->resolvedClipPath.empty() ? clipIter->authoredClipPath.c_str() : clipIter->resolvedClipPath.c_str());
 			if (clipIter->hasTiming) {
-				ImGui::Text("Time (+0x140 localTime): %.4f / %.4f", clipIter->currentTime, clipIter->duration);
-				ImGui::Text("Control +0x10: %.4f", clipIter->controlLocalTime);
+				ImGui::Text(L("debug.time_local"), clipIter->currentTime, clipIter->duration);
+				ImGui::Text(L("debug.control_time"), clipIter->controlLocalTime);
 				ImGui::Text(
-					"Mode (+0xBE): %u  User fraction (+0xB8): %.4f",
+					L("debug.mode_fraction"),
 					clipIter->playbackMode,
 					clipIter->userControlledTimeFraction);
 			} else {
-				ImGui::TextUnformatted("Time: unavailable");
+				ImGui::TextUnformatted(L("debug.time_unavailable"));
 			}
 		}
 
@@ -522,15 +560,15 @@ namespace TF3DHud::Imgui
 			const std::uint32_t a_shown,
 			const std::array<std::uint64_t, Animations::kMaxSubgraphDebugRequestEntries>& a_values)
 		{
-			ImGui::Text("%s count=%u shown=%u:", a_label, a_count, a_shown);
+			ImGui::Text(L("debug.list_count"), a_label, a_count, a_shown);
 			if (a_count != 0 && a_shown == 0) {
 				ImGui::SameLine();
-				ImGui::TextDisabled("data unavailable");
+				ImGui::TextDisabled(L("state.data_unavailable"));
 				return;
 			}
 			if (a_count == 0) {
 				ImGui::SameLine();
-				ImGui::TextDisabled("none");
+				ImGui::TextDisabled(L("state.none"));
 				return;
 			}
 
@@ -548,9 +586,9 @@ namespace TF3DHud::Imgui
 			const std::uint32_t a_shown,
 			const std::array<Animations::SubgraphFileDebugInfo, Animations::kMaxSubgraphDebugFiles>& a_files)
 		{
-			ImGui::Text("%s count=%u shown=%u", a_label, a_count, a_shown);
+			ImGui::Text(L("debug.list_count_plain"), a_label, a_count, a_shown);
 			if (a_count != 0 && a_shown == 0) {
-				ImGui::TextDisabled("data unavailable");
+				ImGui::TextDisabled(L("state.data_unavailable"));
 				return;
 			}
 			if (a_shown == 0) {
@@ -560,7 +598,7 @@ namespace TF3DHud::Imgui
 			ImGui::Indent();
 			for (std::uint32_t index = 0; index < a_shown; ++index) {
 				const auto* file = a_files[index].path.data();
-				ImGui::BulletText("%s", file[0] == '\0' ? "(empty)" : file);
+				ImGui::BulletText("%s", file[0] == '\0' ? L("state.empty") : file);
 			}
 			ImGui::Unindent();
 		}
@@ -579,26 +617,26 @@ namespace TF3DHud::Imgui
 				reinterpret_cast<void*>(a_snapshot.subgraphSwapStateMachine),
 				reinterpret_cast<void*>(a_snapshot.subgraphSwapBehavior));
 			if (!a_snapshot.hasSubgraphSwapData) {
-				ImGui::TextDisabled("No graph swap data attached.");
+				ImGui::TextDisabled(L("debug.no_graph_swap_data"));
 			}
 
 			DrawIdList(
-				"default handles",
+				L("debug.default_handles"),
 				a_snapshot.defaultSubgraphHandleCount,
 				a_snapshot.defaultSubgraphHandleShown,
 				a_snapshot.defaultSubgraphHandles);
 			DrawIdList(
-				"default ids",
+				L("debug.default_ids"),
 				a_snapshot.defaultSubgraphIdCount,
 				a_snapshot.defaultSubgraphIdShown,
 				a_snapshot.defaultSubgraphIds);
 			DrawIdList(
-				"weapon handles",
+				L("debug.weapon_handles"),
 				a_snapshot.weaponSubgraphHandleCount,
 				a_snapshot.weaponSubgraphHandleShown,
 				a_snapshot.weaponSubgraphHandles);
 			DrawIdList(
-				"weapon ids",
+				L("debug.weapon_ids"),
 				a_snapshot.weaponSubgraphIdCount,
 				a_snapshot.weaponSubgraphIdShown,
 				a_snapshot.weaponSubgraphIds);
@@ -609,16 +647,16 @@ namespace TF3DHud::Imgui
 				ImGuiTableFlags_SizingStretchProp;
 
 			if (ImGui::BeginTable("subgraph_slots", 10, tableFlags)) {
-				ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 34.0F);
-				ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 42.0F);
-				ImGui::TableSetupColumn("Handle", ImGuiTableColumnFlags_WidthFixed, 92.0F);
-				ImGui::TableSetupColumn("Shared", ImGuiTableColumnFlags_WidthFixed, 92.0F);
-				ImGui::TableSetupColumn("Root", ImGuiTableColumnFlags_WidthFixed, 92.0F);
-				ImGui::TableSetupColumn("Root Name", ImGuiTableColumnFlags_WidthFixed, 140.0F);
-				ImGui::TableSetupColumn("Use", ImGuiTableColumnFlags_WidthFixed, 42.0F);
-				ImGui::TableSetupColumn("Remove", ImGuiTableColumnFlags_WidthFixed, 58.0F);
-				ImGui::TableSetupColumn("data+160", ImGuiTableColumnFlags_WidthFixed, 68.0F);
-				ImGui::TableSetupColumn("data+178", ImGuiTableColumnFlags_WidthFixed, 68.0F);
+				ImGui::TableSetupColumn(L("table.slot"), ImGuiTableColumnFlags_WidthFixed, 34.0F);
+				ImGui::TableSetupColumn(L("table.state"), ImGuiTableColumnFlags_WidthFixed, 42.0F);
+				ImGui::TableSetupColumn(L("table.handle"), ImGuiTableColumnFlags_WidthFixed, 92.0F);
+				ImGui::TableSetupColumn(L("table.shared"), ImGuiTableColumnFlags_WidthFixed, 92.0F);
+				ImGui::TableSetupColumn(L("table.root"), ImGuiTableColumnFlags_WidthFixed, 92.0F);
+				ImGui::TableSetupColumn(L("table.root_name"), ImGuiTableColumnFlags_WidthFixed, 140.0F);
+				ImGui::TableSetupColumn(L("table.use"), ImGuiTableColumnFlags_WidthFixed, 42.0F);
+				ImGui::TableSetupColumn(L("table.remove"), ImGuiTableColumnFlags_WidthFixed, 58.0F);
+				ImGui::TableSetupColumn(L("table.data_160"), ImGuiTableColumnFlags_WidthFixed, 68.0F);
+				ImGui::TableSetupColumn(L("table.data_178"), ImGuiTableColumnFlags_WidthFixed, 68.0F);
 				ImGui::TableHeadersRow();
 
 				for (std::uint32_t index = 0; index < a_snapshot.subgraphSlotShown; ++index) {
@@ -656,11 +694,11 @@ namespace TF3DHud::Imgui
 				}
 
 				ImGui::PushID(static_cast<int>(slot.index));
-				if (ImGui::TreeNode("file arrays")) {
+				if (ImGui::TreeNode(L("debug.file_arrays"))) {
 					ImGui::SameLine();
-					ImGui::TextDisabled("slot %u", slot.index);
-					DrawFileArray("data+0x160", slot.files160Count, slot.files160Shown, slot.files160);
-					DrawFileArray("data+0x178", slot.files178Count, slot.files178Shown, slot.files178);
+					ImGui::TextDisabled(L("debug.slot"), slot.index);
+					DrawFileArray(L("debug.data_160"), slot.files160Count, slot.files160Shown, slot.files160);
+					DrawFileArray(L("debug.data_178"), slot.files178Count, slot.files178Shown, slot.files178);
 					ImGui::TreePop();
 				}
 				ImGui::PopID();
@@ -672,11 +710,11 @@ namespace TF3DHud::Imgui
 			const auto& speed = a_snapshot.speedChannel;
 			ImGui::Text(
 				"Speed channel constructed=%s reset=%s polled=%s polls=%u applyAdjustments=%s",
-				speed.constructed ? "true" : "false",
-				speed.reset ? "true" : "false",
-				speed.polled ? "true" : "false",
+				BoolText(speed.constructed),
+				BoolText(speed.reset),
+				BoolText(speed.polled),
 				speed.pollCount,
-				speed.applyAdjustments ? "true" : "false");
+				BoolText(speed.applyAdjustments));
 			ImGui::Text(
 				"Speed desired=%.3f scale=%.3f raw=%.3f contour=%.3f last=%.3f graph=%s %.3f",
 				speed.desiredSpeed,
@@ -684,19 +722,19 @@ namespace TF3DHud::Imgui
 				speed.rawSpeed,
 				speed.graphSpeed,
 				speed.lastSpeed,
-				speed.previewGraphSpeedHas ? "yes" : "no",
+				speed.previewGraphSpeedHas ? L("state.yes") : L("state.no"),
 				speed.previewGraphSpeed);
 			ImGui::Text(
 				"Freeze preview=%s actor=%s contours=%s actorGate=%s resolved=%s state=%s response=%u adjustments=%u applied=%s",
-				speed.previewFreeze ? "true" : "false",
-				speed.actorFreeze ? "true" : "false",
-				speed.useContours ? "true" : "false",
-				speed.actorAllowsContours ? "true" : "false",
-				speed.contourResolved ? "true" : "false",
-				speed.contourState ? "true" : "false",
+				BoolText(speed.previewFreeze),
+				BoolText(speed.actorFreeze),
+				BoolText(speed.useContours),
+				BoolText(speed.actorAllowsContours),
+				BoolText(speed.contourResolved),
+				BoolText(speed.contourState),
 				speed.contourResponse,
 				speed.adjustmentCount,
-				speed.contourApplied ? "true" : "false");
+				BoolText(speed.contourApplied));
 		}
 
 		void DrawActiveNodesTable(const Animations::DebugSnapshot& a_snapshot);
@@ -704,10 +742,10 @@ namespace TF3DHud::Imgui
 		void DrawGraphInfoTab(const Animations::DebugSnapshot& a_snapshot)
 		{
 			if (!a_snapshot.lastDiagnostic.empty()) {
-				ImGui::Text("Last diagnostic: %s", a_snapshot.lastDiagnostic.c_str());
+				ImGui::Text(L("debug.last_diagnostic"), a_snapshot.lastDiagnostic.c_str());
 			}
 
-			ImGui::Text("Project: %s", a_snapshot.project.empty() ? "(none)" : a_snapshot.project.c_str());
+			ImGui::Text(L("debug.project"), a_snapshot.project.empty() ? L("state.none") : a_snapshot.project.c_str());
 			ImGui::Text(
 				"Manager=%p Graph=%p Behavior=%p ActiveGraph=%u/%u",
 				reinterpret_cast<void*>(a_snapshot.manager),
@@ -717,28 +755,28 @@ namespace TF3DHud::Imgui
 				a_snapshot.graphCount);
 			ImGui::Text(
 				"Behavior active=%s linked=%s updateActiveNodes=%s stateOrTransitionChanged=%s activeNodes=%u shown=%zu",
-				a_snapshot.behaviorActive ? "true" : "false",
-				a_snapshot.behaviorLinked ? "true" : "false",
-				a_snapshot.updateActiveNodes ? "true" : "false",
-				a_snapshot.stateOrTransitionChanged ? "true" : "false",
+				BoolText(a_snapshot.behaviorActive),
+				BoolText(a_snapshot.behaviorLinked),
+				BoolText(a_snapshot.updateActiveNodes),
+				BoolText(a_snapshot.stateOrTransitionChanged),
 				a_snapshot.activeNodeCount,
 				a_snapshot.activeNodes.size());
 			ImGui::Text(
 				"generateHavokBones=%s ragdollInterface=%s physicsWorld=%s windowActive=%s",
-				a_snapshot.generateHavokBones ? "true" : "false",
-				a_snapshot.hasRagdollInterface ? "true" : "false",
-				a_snapshot.hasPhysicsWorld ? "true" : "false",
-				g_windowActive ? "true" : "false");
+				BoolText(a_snapshot.generateHavokBones),
+				BoolText(a_snapshot.hasRagdollInterface),
+				BoolText(a_snapshot.hasPhysicsWorld),
+				BoolText(g_windowActive));
 			ImGui::Text(
 				"Live sync active=%s time=%.4f/%.4f speed=%.4f points=%u",
-				a_snapshot.liveSync.active ? "true" : "false",
+				BoolText(a_snapshot.liveSync.active),
 				a_snapshot.liveSync.currentTime,
 				a_snapshot.liveSync.totalTime,
 				a_snapshot.liveSync.speed,
 				a_snapshot.liveSync.syncPointCount);
 			ImGui::Text(
 				"Preview sync active=%s time=%.4f/%.4f speed=%.4f points=%u",
-				a_snapshot.previewSync.active ? "true" : "false",
+				BoolText(a_snapshot.previewSync.active),
 				a_snapshot.previewSync.currentTime,
 				a_snapshot.previewSync.totalTime,
 				a_snapshot.previewSync.speed,
@@ -757,7 +795,7 @@ namespace TF3DHud::Imgui
 		{
 			const auto snapshot = Previewer::GetFaceGenDebugSnapshot();
 			if (snapshot.headParts.empty() && snapshot.geometries.empty() && snapshot.hairSkinBones.empty() && snapshot.sliders.empty()) {
-				ImGui::TextDisabled("No FaceGen debug data.");
+				ImGui::TextDisabled(L("debug.no_facegen"));
 				return;
 			}
 
@@ -766,22 +804,22 @@ namespace TF3DHud::Imgui
 				ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg |
 				ImGuiTableFlags_SizingStretchProp;
 
-			ImGui::TextUnformatted("Used headparts");
+			DrawSectionHeader("debug.used_headparts", "section.debug_facegen.hint");
 			if (snapshot.headParts.empty()) {
-				ImGui::TextDisabled("No used HDPT data.");
+				ImGui::TextDisabled(L("debug.no_hdpt"));
 			} else if (ImGui::BeginTable("facegen_headparts", 6, tableFlags)) {
-				ImGui::TableSetupColumn("HDPT", ImGuiTableColumnFlags_WidthStretch, 1.1F);
-				ImGui::TableSetupColumn("Form", ImGuiTableColumnFlags_WidthFixed, 86.0F);
-				ImGui::TableSetupColumn("Ptr", ImGuiTableColumnFlags_WidthFixed, 118.0F);
-				ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 82.0F);
-				ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.0F);
-				ImGui::TableSetupColumn("Model", ImGuiTableColumnFlags_WidthStretch, 1.8F);
+				ImGui::TableSetupColumn(L("table.hdpt"), ImGuiTableColumnFlags_WidthStretch, 1.1F);
+				ImGui::TableSetupColumn(L("table.form"), ImGuiTableColumnFlags_WidthFixed, 86.0F);
+				ImGui::TableSetupColumn(L("table.ptr"), ImGuiTableColumnFlags_WidthFixed, 118.0F);
+				ImGui::TableSetupColumn(L("table.type"), ImGuiTableColumnFlags_WidthFixed, 82.0F);
+				ImGui::TableSetupColumn(L("table.name"), ImGuiTableColumnFlags_WidthStretch, 1.0F);
+				ImGui::TableSetupColumn(L("table.model"), ImGuiTableColumnFlags_WidthStretch, 1.8F);
 				ImGui::TableHeadersRow();
 
 				for (const auto& headPart : snapshot.headParts) {
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
-					ImGui::TextUnformatted(headPart.editorID.empty() ? "<no editor id>" : headPart.editorID.c_str());
+					ImGui::TextUnformatted(headPart.editorID.empty() ? L("state.no_editor_id") : headPart.editorID.c_str());
 					ImGui::TableSetColumnIndex(1);
 					ImGui::Text("%08X", headPart.formID);
 					ImGui::TableSetColumnIndex(2);
@@ -789,38 +827,38 @@ namespace TF3DHud::Imgui
 					ImGui::TableSetColumnIndex(3);
 					ImGui::TextUnformatted(headPart.type.c_str());
 					ImGui::TableSetColumnIndex(4);
-					ImGui::TextUnformatted(headPart.fullName.empty() ? "-" : headPart.fullName.c_str());
+					ImGui::TextUnformatted(headPart.fullName.empty() ? L("state.no_data") : headPart.fullName.c_str());
 					ImGui::TableSetColumnIndex(5);
-					ImGui::TextUnformatted(headPart.model.empty() ? "-" : headPart.model.c_str());
+					ImGui::TextUnformatted(headPart.model.empty() ? L("state.no_data") : headPart.model.c_str());
 				}
 
 				ImGui::EndTable();
 			}
 
 			ImGui::Spacing();
-			ImGui::TextUnformatted("Preview face geometries");
+			DrawSectionHeader("debug.preview_face_geometries", "section.debug_facegen.hint");
 			if (snapshot.geometries.empty()) {
-				ImGui::TextDisabled("No preview face geometry data.");
+				ImGui::TextDisabled(L("debug.no_face_geometry"));
 			} else if (ImGui::BeginTable("facegen_geometries", 4, tableFlags)) {
-				ImGui::TableSetupColumn("Geometry", ImGuiTableColumnFlags_WidthStretch, 1.5F);
-				ImGui::TableSetupColumn("Geometry Ptr", ImGuiTableColumnFlags_WidthFixed, 118.0F);
-				ImGui::TableSetupColumn("Parent", ImGuiTableColumnFlags_WidthStretch, 1.0F);
-				ImGui::TableSetupColumn("Parent Ptr", ImGuiTableColumnFlags_WidthFixed, 118.0F);
+				ImGui::TableSetupColumn(L("table.geometry"), ImGuiTableColumnFlags_WidthStretch, 1.5F);
+				ImGui::TableSetupColumn(L("table.geometry_ptr"), ImGuiTableColumnFlags_WidthFixed, 118.0F);
+				ImGui::TableSetupColumn(L("table.parent"), ImGuiTableColumnFlags_WidthStretch, 1.0F);
+				ImGui::TableSetupColumn(L("table.parent_ptr"), ImGuiTableColumnFlags_WidthFixed, 118.0F);
 				ImGui::TableHeadersRow();
 
 				for (const auto& geometry : snapshot.geometries) {
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
-					ImGui::TextUnformatted(geometry.name.empty() ? "<unnamed>" : geometry.name.c_str());
+					ImGui::TextUnformatted(geometry.name.empty() ? L("state.unnamed") : geometry.name.c_str());
 					ImGui::TableSetColumnIndex(1);
 					ImGui::Text("%llX", static_cast<unsigned long long>(geometry.ptr));
 					ImGui::TableSetColumnIndex(2);
-					ImGui::TextUnformatted(geometry.parentName.empty() ? "-" : geometry.parentName.c_str());
+					ImGui::TextUnformatted(geometry.parentName.empty() ? L("state.no_data") : geometry.parentName.c_str());
 					ImGui::TableSetColumnIndex(3);
 					if (geometry.parentPtr != 0) {
 						ImGui::Text("%llX", static_cast<unsigned long long>(geometry.parentPtr));
 					} else {
-						ImGui::TextDisabled("-");
+						ImGui::TextDisabled(L("state.no_data"));
 					}
 				}
 
@@ -828,23 +866,23 @@ namespace TF3DHud::Imgui
 			}
 
 			ImGui::Spacing();
-			if (ImGui::Button("Dump hair skin bones")) {
+			if (ImGui::Button(L("button.dump_hair_skin_bones"))) {
 				Previewer::LogHairSkinBoneDiagnostics();
 			}
-			ImGui::TextUnformatted("Hair skin bones");
+			DrawSectionHeader("debug.hair_skin_bones", "section.debug_facegen.hint");
 			if (snapshot.hairSkinBones.empty()) {
-				ImGui::TextDisabled("No hair skin-bone data.");
+				ImGui::TextDisabled(L("debug.no_hair_skin_bones"));
 			} else if (ImGui::BeginTable("facegen_hair_skin_bones", 10, tableFlags)) {
-				ImGui::TableSetupColumn("Src", ImGuiTableColumnFlags_WidthFixed, 58.0F);
-				ImGui::TableSetupColumn("HDPT", ImGuiTableColumnFlags_WidthStretch, 1.0F);
-				ImGui::TableSetupColumn("Geometry", ImGuiTableColumnFlags_WidthStretch, 1.1F);
-				ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 36.0F);
-				ImGui::TableSetupColumn("Bone", ImGuiTableColumnFlags_WidthStretch, 1.0F);
-				ImGui::TableSetupColumn("Bone Ptr", ImGuiTableColumnFlags_WidthFixed, 118.0F);
-				ImGui::TableSetupColumn("Parent", ImGuiTableColumnFlags_WidthStretch, 1.0F);
-				ImGui::TableSetupColumn("Parent Ptr", ImGuiTableColumnFlags_WidthFixed, 118.0F);
-				ImGui::TableSetupColumn("Local", ImGuiTableColumnFlags_WidthStretch, 1.8F);
-				ImGui::TableSetupColumn("World", ImGuiTableColumnFlags_WidthStretch, 1.8F);
+				ImGui::TableSetupColumn(L("table.src"), ImGuiTableColumnFlags_WidthFixed, 58.0F);
+				ImGui::TableSetupColumn(L("table.hdpt"), ImGuiTableColumnFlags_WidthStretch, 1.0F);
+				ImGui::TableSetupColumn(L("table.geometry"), ImGuiTableColumnFlags_WidthStretch, 1.1F);
+				ImGui::TableSetupColumn(L("table.index"), ImGuiTableColumnFlags_WidthFixed, 36.0F);
+				ImGui::TableSetupColumn(L("table.bone"), ImGuiTableColumnFlags_WidthStretch, 1.0F);
+				ImGui::TableSetupColumn(L("table.bone_ptr"), ImGuiTableColumnFlags_WidthFixed, 118.0F);
+				ImGui::TableSetupColumn(L("table.parent"), ImGuiTableColumnFlags_WidthStretch, 1.0F);
+				ImGui::TableSetupColumn(L("table.parent_ptr"), ImGuiTableColumnFlags_WidthFixed, 118.0F);
+				ImGui::TableSetupColumn(L("table.local"), ImGuiTableColumnFlags_WidthStretch, 1.8F);
+				ImGui::TableSetupColumn(L("table.world"), ImGuiTableColumnFlags_WidthStretch, 1.8F);
 				ImGui::TableHeadersRow();
 
 				for (const auto& bone : snapshot.hairSkinBones) {
@@ -852,40 +890,40 @@ namespace TF3DHud::Imgui
 					ImGui::TableSetColumnIndex(0);
 					ImGui::TextUnformatted(bone.source.c_str());
 					ImGui::TableSetColumnIndex(1);
-					ImGui::TextUnformatted(bone.headPart.empty() ? "-" : bone.headPart.c_str());
+					ImGui::TextUnformatted(bone.headPart.empty() ? L("state.no_data") : bone.headPart.c_str());
 					ImGui::TableSetColumnIndex(2);
-					ImGui::TextUnformatted(bone.geometry.empty() ? "-" : bone.geometry.c_str());
+					ImGui::TextUnformatted(bone.geometry.empty() ? L("state.no_data") : bone.geometry.c_str());
 					ImGui::TableSetColumnIndex(3);
 					ImGui::Text("%u", bone.index);
 					ImGui::TableSetColumnIndex(4);
-					ImGui::TextUnformatted(bone.boneName.empty() ? "-" : bone.boneName.c_str());
+					ImGui::TextUnformatted(bone.boneName.empty() ? L("state.no_data") : bone.boneName.c_str());
 					ImGui::TableSetColumnIndex(5);
 					if (bone.bonePtr != 0) {
 						ImGui::Text("%llX", static_cast<unsigned long long>(bone.bonePtr));
 					} else {
-						ImGui::TextDisabled("-");
+						ImGui::TextDisabled(L("state.no_data"));
 					}
 					ImGui::TableSetColumnIndex(6);
-					ImGui::TextUnformatted(bone.parentName.empty() ? "-" : bone.parentName.c_str());
+					ImGui::TextUnformatted(bone.parentName.empty() ? L("state.no_data") : bone.parentName.c_str());
 					ImGui::TableSetColumnIndex(7);
 					if (bone.parentPtr != 0) {
 						ImGui::Text("%llX", static_cast<unsigned long long>(bone.parentPtr));
 					} else {
-						ImGui::TextDisabled("-");
+						ImGui::TextDisabled(L("state.no_data"));
 					}
 					ImGui::TableSetColumnIndex(8);
-					ImGui::TextUnformatted(bone.local.empty() ? "-" : bone.local.c_str());
+					ImGui::TextUnformatted(bone.local.empty() ? L("state.no_data") : bone.local.c_str());
 					ImGui::TableSetColumnIndex(9);
-					ImGui::TextUnformatted(bone.world.empty() ? "-" : bone.world.c_str());
+					ImGui::TextUnformatted(bone.world.empty() ? L("state.no_data") : bone.world.c_str());
 				}
 
 				ImGui::EndTable();
 			}
 
 			ImGui::Separator();
-			ImGui::TextUnformatted("Sliders and tints");
+			DrawSectionHeader("debug.sliders_tints", "section.debug_facegen.hint");
 			if (snapshot.sliders.empty()) {
-				ImGui::TextDisabled("No FaceGen slider data.");
+				ImGui::TextDisabled(L("debug.no_facegen_slider"));
 				return;
 			}
 
@@ -893,10 +931,10 @@ namespace TF3DHud::Imgui
 				return;
 			}
 
-			ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthStretch, 1.3F);
-			ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 54.0F);
-			ImGui::TableSetupColumn("Live", ImGuiTableColumnFlags_WidthStretch, 1.5F);
-			ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthStretch, 1.5F);
+			ImGui::TableSetupColumn(L("table.category"), ImGuiTableColumnFlags_WidthStretch, 1.3F);
+			ImGui::TableSetupColumn(L("table.index"), ImGuiTableColumnFlags_WidthFixed, 54.0F);
+			ImGui::TableSetupColumn(L("table.live"), ImGuiTableColumnFlags_WidthStretch, 1.5F);
+			ImGui::TableSetupColumn(L("table.preview"), ImGuiTableColumnFlags_WidthStretch, 1.5F);
 			ImGui::TableHeadersRow();
 
 			for (const auto& slider : snapshot.sliders) {
@@ -909,13 +947,13 @@ namespace TF3DHud::Imgui
 				if (slider.hasLive) {
 					ImGui::TextUnformatted(slider.liveValue.c_str());
 				} else {
-					ImGui::TextDisabled("-");
+					ImGui::TextDisabled(L("state.no_data"));
 				}
 				ImGui::TableSetColumnIndex(3);
 				if (slider.hasPreview) {
 					ImGui::TextUnformatted(slider.previewValue.c_str());
 				} else {
-					ImGui::TextDisabled("-");
+					ImGui::TextDisabled(L("state.no_data"));
 				}
 			}
 
@@ -933,19 +971,19 @@ namespace TF3DHud::Imgui
 				return;
 			}
 
-			ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 34.0F);
-			ImGui::TableSetupColumn("Entry", ImGuiTableColumnFlags_WidthFixed, 92.0F);
-			ImGui::TableSetupColumn("Node", ImGuiTableColumnFlags_WidthFixed, 92.0F);
-			ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 54.0F);
-			ImGui::TableSetupColumn("SG", ImGuiTableColumnFlags_WidthFixed, 38.0F);
-			ImGui::TableSetupColumn("Root", ImGuiTableColumnFlags_WidthFixed, 92.0F);
-			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.4F);
-			ImGui::TableSetupColumn("Clip Path", ImGuiTableColumnFlags_WidthStretch, 2.2F);
-			ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 92.0F);
-			ImGui::TableSetupColumn("Ctrl", ImGuiTableColumnFlags_WidthFixed, 72.0F);
-			ImGui::TableSetupColumn("Mode", ImGuiTableColumnFlags_WidthFixed, 48.0F);
-			ImGui::TableSetupColumn("Frac", ImGuiTableColumnFlags_WidthFixed, 60.0F);
-			ImGui::TableSetupColumn("Behavior", ImGuiTableColumnFlags_WidthFixed, 92.0F);
+			ImGui::TableSetupColumn(L("table.index"), ImGuiTableColumnFlags_WidthFixed, 34.0F);
+			ImGui::TableSetupColumn(L("table.entry"), ImGuiTableColumnFlags_WidthFixed, 92.0F);
+			ImGui::TableSetupColumn(L("table.node"), ImGuiTableColumnFlags_WidthFixed, 92.0F);
+			ImGui::TableSetupColumn(L("table.type"), ImGuiTableColumnFlags_WidthFixed, 54.0F);
+			ImGui::TableSetupColumn(L("table.sg"), ImGuiTableColumnFlags_WidthFixed, 38.0F);
+			ImGui::TableSetupColumn(L("table.root"), ImGuiTableColumnFlags_WidthFixed, 92.0F);
+			ImGui::TableSetupColumn(L("table.name"), ImGuiTableColumnFlags_WidthStretch, 1.4F);
+			ImGui::TableSetupColumn(L("table.clip_path"), ImGuiTableColumnFlags_WidthStretch, 2.2F);
+			ImGui::TableSetupColumn(L("table.time"), ImGuiTableColumnFlags_WidthFixed, 92.0F);
+			ImGui::TableSetupColumn(L("table.ctrl"), ImGuiTableColumnFlags_WidthFixed, 72.0F);
+			ImGui::TableSetupColumn(L("table.mode"), ImGuiTableColumnFlags_WidthFixed, 48.0F);
+			ImGui::TableSetupColumn(L("table.frac"), ImGuiTableColumnFlags_WidthFixed, 60.0F);
+			ImGui::TableSetupColumn(L("table.behavior"), ImGuiTableColumnFlags_WidthFixed, 92.0F);
 			ImGui::TableHeadersRow();
 
 			for (std::size_t index = 0; index < a_snapshot.activeNodes.size(); ++index) {
@@ -959,12 +997,12 @@ namespace TF3DHud::Imgui
 				ImGui::TableSetColumnIndex(2);
 				ImGui::Text("%p", reinterpret_cast<void*>(node.node));
 				ImGui::TableSetColumnIndex(3);
-				ImGui::TextUnformatted(node.isClip ? "clip" : "node");
+				ImGui::TextUnformatted(node.isClip ? L("debug.clip") : L("debug.node"));
 				ImGui::TableSetColumnIndex(4);
 				if (node.inSubgraph) {
 					ImGui::Text("%u", node.subgraphSlot);
 				} else {
-					ImGui::TextDisabled("-");
+					ImGui::TextDisabled(L("state.no_data"));
 				}
 				ImGui::TableSetColumnIndex(5);
 				ImGui::Text("%p", reinterpret_cast<void*>(node.behaviorRootId));
@@ -974,38 +1012,38 @@ namespace TF3DHud::Imgui
 				} else if (!node.clipName.empty()) {
 					ImGui::TextUnformatted(node.clipName.c_str());
 				} else {
-					ImGui::TextDisabled("(unnamed)");
+					ImGui::TextDisabled(L("state.unnamed"));
 				}
 				ImGui::TableSetColumnIndex(7);
 				if (node.isClip) {
 					const auto& path = node.resolvedClipPath.empty() ? node.authoredClipPath : node.resolvedClipPath;
-					ImGui::TextUnformatted(path.empty() ? "(empty)" : path.c_str());
+					ImGui::TextUnformatted(path.empty() ? L("state.empty") : path.c_str());
 				} else {
-					ImGui::TextDisabled("-");
+					ImGui::TextDisabled(L("state.no_data"));
 				}
 				ImGui::TableSetColumnIndex(8);
 				if (node.hasTiming) {
 					ImGui::Text("%.3f/%.3f", node.currentTime, node.duration);
 				} else {
-					ImGui::TextDisabled("-");
+					ImGui::TextDisabled(L("state.no_data"));
 				}
 				ImGui::TableSetColumnIndex(9);
 				if (node.hasControlLocalTime) {
 					ImGui::Text("%.3f", node.controlLocalTime);
 				} else {
-					ImGui::TextDisabled("-");
+					ImGui::TextDisabled(L("state.no_data"));
 				}
 				ImGui::TableSetColumnIndex(10);
 				if (node.isClip) {
 					ImGui::Text("%u", node.playbackMode);
 				} else {
-					ImGui::TextDisabled("-");
+					ImGui::TextDisabled(L("state.no_data"));
 				}
 				ImGui::TableSetColumnIndex(11);
 				if (node.isClip) {
 					ImGui::Text("%.3f", node.userControlledTimeFraction);
 				} else {
-					ImGui::TextDisabled("-");
+					ImGui::TextDisabled(L("state.no_data"));
 				}
 				ImGui::TableSetColumnIndex(12);
 				ImGui::Text("%p", reinterpret_cast<void*>(node.behaviorGraph));
@@ -1018,25 +1056,25 @@ namespace TF3DHud::Imgui
 		{
 			switch (a_anchor) {
 			case 1:
-				return "bottom left";
+				return L("anchor.bottom_left");
 			case 2:
-				return "bottom center";
+				return L("anchor.bottom_center");
 			case 3:
-				return "bottom right";
+				return L("anchor.bottom_right");
 			case 4:
-				return "middle left";
+				return L("anchor.middle_left");
 			case 5:
-				return "middle center";
+				return L("anchor.middle_center");
 			case 6:
-				return "middle right";
+				return L("anchor.middle_right");
 			case 7:
-				return "top left";
+				return L("anchor.top_left");
 			case 8:
-				return "top center";
+				return L("anchor.top_center");
 			case 9:
-				return "top right";
+				return L("anchor.top_right");
 			default:
-				return "unknown";
+				return L("anchor.unknown");
 			}
 		}
 
@@ -1059,7 +1097,7 @@ namespace TF3DHud::Imgui
 		{
 			auto& config = GetMutableConfig();
 
-			ImGui::TextUnformatted("Anchor");
+			DrawSectionHeader("section.anchor", "section.anchor.hint");
 			for (int row = 2; row >= 0; --row) {
 				for (int col = 0; col < 3; ++col) {
 					const auto anchor = (row * 3) + col + 1;
@@ -1071,73 +1109,74 @@ namespace TF3DHud::Imgui
 			}
 
 			ImGui::Separator();
-			ImGui::TextUnformatted("View");
-			if (DrawIntSliderEdit("FOV", config.fov, 10, 120, 1)) {
+			DrawSectionHeader("section.view", "section.view.hint");
+			if (DrawIntSliderEdit("field.fov", "FOV", config.fov, 10, 120, 1)) {
 				ApplyLayoutEdit();
 			}
-			if (DrawIntSliderEdit("PlacementX", config.placementX, -200, 200, 1)) {
+			if (DrawIntSliderEdit("field.placement_x", "PlacementX", config.placementX, -200, 200, 1)) {
 				ApplyLayoutEdit();
 			}
-			if (DrawIntSliderEdit("PlacementY", config.placementY, -200, 200, 1)) {
+			if (DrawIntSliderEdit("field.placement_y", "PlacementY", config.placementY, -200, 200, 1)) {
 				ApplyLayoutEdit();
 			}
-			if (DrawIntSliderEdit("CameraDistance", config.cameraDistance, 100, 2000, 5)) {
+			if (DrawIntSliderEdit("field.camera_distance", "CameraDistance", config.cameraDistance, 100, 2000, 5)) {
 				ApplyLayoutEdit();
 			}
-			if (DrawFloatSliderEdit("ModelScale", config.modelScale, 0.01F, 2.0F, 0.01F)) {
+			if (DrawFloatSliderEdit("field.model_scale", "ModelScale", config.modelScale, 0.01F, 2.0F, 0.01F)) {
 				ApplyLayoutEdit();
 			}
-			if (DrawIntSliderEdit("YawDegrees", config.yawDegrees, 0, 360, 1)) {
+			if (DrawIntSliderEdit("field.yaw_degrees", "YawDegrees", config.yawDegrees, 0, 360, 1)) {
 				ApplyLayoutEdit();
 			}
 
 			ImGui::Separator();
-			ImGui::TextUnformatted("Camera");
-			const char* targets[] = { "Head", "Chest", "Pelvis", "Root" };
+			DrawSectionHeader("section.camera", "section.camera.hint");
+			const char* targets[] = { L("camera.head"), L("camera.chest"), L("camera.pelvis"), L("camera.root") };
 			int target = static_cast<int>(config.camera.target);
-			if (ImGui::Combo("Target", &target, targets, static_cast<int>(std::size(targets)))) {
+			const auto targetLabel = Label("field.target", "CameraTarget");
+			if (ImGui::Combo(targetLabel.c_str(), &target, targets, static_cast<int>(std::size(targets)))) {
 				config.camera.target = static_cast<CameraFramingTarget>(target);
 				ApplyLayoutEdit();
 			}
 			ImGui::SameLine();
-			if (ImGui::Checkbox("Follow", &config.camera.follow)) {
+			if (ImGui::Checkbox(Label("field.follow", "CameraFollow").c_str(), &config.camera.follow)) {
 				ApplyLayoutEdit();
 			}
-			ImGui::TextUnformatted("Follow Axis");
-			if (ImGui::Checkbox("X", &config.camera.followX)) {
-				ApplyLayoutEdit();
-			}
-			ImGui::SameLine();
-			if (ImGui::Checkbox("Y", &config.camera.followY)) {
+			DrawSectionHeader("section.follow_axis", "section.follow_axis.hint");
+			if (ImGui::Checkbox(Label("field.x", "CameraFollowX").c_str(), &config.camera.followX)) {
 				ApplyLayoutEdit();
 			}
 			ImGui::SameLine();
-			if (ImGui::Checkbox("Z", &config.camera.followZ)) {
+			if (ImGui::Checkbox(Label("field.y", "CameraFollowY").c_str(), &config.camera.followY)) {
+				ApplyLayoutEdit();
+			}
+			ImGui::SameLine();
+			if (ImGui::Checkbox(Label("field.z", "CameraFollowZ").c_str(), &config.camera.followZ)) {
 				ApplyLayoutEdit();
 			}
 
 			ImGui::Separator();
-			ImGui::TextUnformatted("ClipRect");
-			if (DrawIntSliderEdit("Left", config.clipRect.left, -100, 200, 1)) {
+			DrawSectionHeader("section.clip_rect", "section.clip_rect.hint");
+			if (DrawIntSliderEdit("field.left", "ClipRectLeft", config.clipRect.left, -100, 200, 1)) {
 				ApplyLayoutEdit(true);
 			}
-			if (DrawIntSliderEdit("Right", config.clipRect.right, -100, 200, 1)) {
+			if (DrawIntSliderEdit("field.right", "ClipRectRight", config.clipRect.right, -100, 200, 1)) {
 				ApplyLayoutEdit(true);
 			}
-			if (DrawIntSliderEdit("Top", config.clipRect.top, -100, 200, 1)) {
+			if (DrawIntSliderEdit("field.top", "ClipRectTop", config.clipRect.top, -100, 200, 1)) {
 				ApplyLayoutEdit(true);
 			}
-			if (DrawIntSliderEdit("Bottom", config.clipRect.bottom, -100, 200, 1)) {
+			if (DrawIntSliderEdit("field.bottom", "ClipRectBottom", config.clipRect.bottom, -100, 200, 1)) {
 				ApplyLayoutEdit(true);
 			}
 			FlushClipRectEdit();
 
 			ImGui::Separator();
-			ImGui::TextUnformatted("General");
-			if (ImGui::Checkbox("Enabled", &config.enabled)) {
+			DrawSectionHeader("section.general", "section.general.hint");
+			if (ImGui::Checkbox(Label("field.enabled", "Enabled").c_str(), &config.enabled)) {
 				ApplyLayoutEdit();
 			}
-			if (ImGui::Checkbox("HideInPowerArmor", &config.hideInPowerArmor)) {
+			if (ImGui::Checkbox(Label("field.hide_in_power_armor", "HideInPowerArmor").c_str(), &config.hideInPowerArmor)) {
 				ApplyLayoutEdit();
 			}
 		}
@@ -1222,8 +1261,9 @@ namespace TF3DHud::Imgui
 			auto& animation = GetMutableConfig().animation;
 			auto& mirrorEvents = animation.mirrorEvents;
 
+			DrawSectionHeader("section.live_animation", "section.live_animation.hint");
 			const bool wasUsingLiveAnimation = animation.useLiveAnimation;
-			if (ImGui::Checkbox("Use Live Animation", &animation.useLiveAnimation) &&
+			if (ImGui::Checkbox(Label("field.use_live_animation", "UseLiveAnimation").c_str(), &animation.useLiveAnimation) &&
 				wasUsingLiveAnimation != animation.useLiveAnimation) {
 				MarkDirty();
 				if (animation.useLiveAnimation) {
@@ -1235,41 +1275,42 @@ namespace TF3DHud::Imgui
 			}
 			ImGui::Separator();
 			if (animation.useLiveAnimation) {
-				ImGui::TextUnformatted("Mirror Events / Graph Variables");
+				DrawSectionHeader("section.mirror_events", "section.mirror_events.hint");
 				bool changed = false;
-				changed |= ImGui::Checkbox("Locomotion", &mirrorEvents.locomotion);
-				changed |= ImGui::Checkbox("Sneak", &mirrorEvents.sneak);
-				changed |= ImGui::Checkbox("Jump", &mirrorEvents.jump);
-				changed |= ImGui::Checkbox("Weapon Fire", &mirrorEvents.weaponFire);
-				changed |= ImGui::Checkbox("Weapon Reload", &mirrorEvents.weaponReload);
-				changed |= ImGui::Checkbox("Melee", &mirrorEvents.melee);
-				changed |= ImGui::Checkbox("Throw", &mirrorEvents.throwable);
+				changed |= ImGui::Checkbox(Label("field.locomotion", "MirrorLocomotion").c_str(), &mirrorEvents.locomotion);
+				changed |= ImGui::Checkbox(Label("field.sneak", "MirrorSneak").c_str(), &mirrorEvents.sneak);
+				changed |= ImGui::Checkbox(Label("field.jump", "MirrorJump").c_str(), &mirrorEvents.jump);
+				changed |= ImGui::Checkbox(Label("field.weapon_fire", "MirrorWeaponFire").c_str(), &mirrorEvents.weaponFire);
+				changed |= ImGui::Checkbox(Label("field.weapon_reload", "MirrorWeaponReload").c_str(), &mirrorEvents.weaponReload);
+				changed |= ImGui::Checkbox(Label("field.melee", "MirrorMelee").c_str(), &mirrorEvents.melee);
+				changed |= ImGui::Checkbox(Label("field.throw", "MirrorThrow").c_str(), &mirrorEvents.throwable);
 				if (changed) {
 					MarkDirty();
 				}
 				return;
 			}
 
+			DrawSectionHeader("section.idle_animation", "section.idle_animation.hint");
 			const auto& idles = Animations::GetDynamicActivationIdles();
 			if (!HasDynamicActivationIdles(idles)) {
-				const char* none = "(none)";
+				const char* none = L("state.none");
 				int selected = 0;
 				ImGui::BeginDisabled();
 				ImGui::PushItemWidth(320.0F);
-				ImGui::Combo("File", &selected, &none, 1);
-				ImGui::Combo("Idle Animation", &selected, &none, 1);
+				ImGui::Combo(Label("field.file", "IdleFile").c_str(), &selected, &none, 1);
+				ImGui::Combo(Label("field.idle_animation", "IdleAnimation").c_str(), &selected, &none, 1);
 				ImGui::PopItemWidth();
-				ImGui::Button("<##IdleAnimationPrev");
+				ImGui::Button(Label("button.previous", "IdleAnimationPrev").c_str());
 				ImGui::SameLine();
-				ImGui::Button(">##IdleAnimationNext");
+				ImGui::Button(Label("button.next", "IdleAnimationNext").c_str());
 				ImGui::EndDisabled();
 				ImGui::SameLine();
-				if (ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation)) {
+				if (ImGui::Checkbox(Label("field.hide_weapon", "HideWeaponDuringIdleAnimation").c_str(), &animation.hideWeaponDuringIdleAnimation)) {
 					MarkDirty();
 				}
 				ImGui::SameLine();
 				const bool wasSheathingWeapon = animation.sheatheWeaponDuringIdleAnimation;
-				if (ImGui::Checkbox("Sheathe Weapon", &animation.sheatheWeaponDuringIdleAnimation) &&
+				if (ImGui::Checkbox(Label("field.sheathe_weapon", "SheatheWeaponDuringIdleAnimation").c_str(), &animation.sheatheWeaponDuringIdleAnimation) &&
 					wasSheathingWeapon != animation.sheatheWeaponDuringIdleAnimation) {
 					MarkDirty();
 					Animations::ResetGraphPreservingIdlePlayback();
@@ -1310,7 +1351,7 @@ namespace TF3DHud::Imgui
 
 			ImGui::PushItemWidth(320.0F);
 			int selectedFileComboIndex = static_cast<int>(selectedFileIndex);
-			if (ImGui::Combo("File", &selectedFileComboIndex, fileItems.data(), static_cast<int>(fileItems.size()))) {
+			if (ImGui::Combo(Label("field.file", "IdleFile").c_str(), &selectedFileComboIndex, fileItems.data(), static_cast<int>(fileItems.size()))) {
 				selectedFileIndex = static_cast<std::size_t>(selectedFileComboIndex);
 				selectedFile = files[selectedFileIndex];
 				if (auto* idle = selectedFile->second.front()) {
@@ -1327,20 +1368,20 @@ namespace TF3DHud::Imgui
 			std::vector<const char*> idleItems;
 			idleItems.reserve(selectedFileIdles.size());
 			for (auto* idle : selectedFileIdles) {
-				idleLabels.push_back(idle ? DynamicActivationIdleLabel(*idle) : std::string{ "(null)" });
+				idleLabels.push_back(idle ? DynamicActivationIdleLabel(*idle) : Localization::GetString("state.null"));
 				idleItems.push_back(idleLabels.back().c_str());
 			}
 
 			selectedIndex =
 				ResolveDynamicActivationIdleIndexInFile(selectedFileIdles, animation.dynamicActivationIdle);
 			int selected = static_cast<int>(selectedIndex);
-			if (ImGui::Combo("Idle Animation", &selected, idleItems.data(), static_cast<int>(idleItems.size()))) {
+			if (ImGui::Combo(Label("field.idle_animation", "IdleAnimation").c_str(), &selected, idleItems.data(), static_cast<int>(idleItems.size()))) {
 				if (auto* idle = selectedFileIdles[static_cast<std::size_t>(selected)]) {
 					SelectDynamicActivationIdle(animation, *idle);
 				}
 			}
 			ImGui::PopItemWidth();
-			if (ImGui::Button("<##IdleAnimationPrev")) {
+			if (ImGui::Button(Label("button.previous", "IdleAnimationPrev").c_str())) {
 				selectedIndex = selectedIndex == 0 ?
 					static_cast<std::uint32_t>(selectedFileIdles.size() - 1) :
 					selectedIndex - 1;
@@ -1349,19 +1390,19 @@ namespace TF3DHud::Imgui
 				}
 			}
 			ImGui::SameLine();
-			if (ImGui::Button(">##IdleAnimationNext")) {
+			if (ImGui::Button(Label("button.next", "IdleAnimationNext").c_str())) {
 				selectedIndex = static_cast<std::uint32_t>((selectedIndex + 1) % selectedFileIdles.size());
 				if (auto* idle = selectedFileIdles[selectedIndex]) {
 					SelectDynamicActivationIdle(animation, *idle);
 				}
 			}
 			ImGui::SameLine();
-			if (ImGui::Checkbox("Hide Weapon", &animation.hideWeaponDuringIdleAnimation)) {
+			if (ImGui::Checkbox(Label("field.hide_weapon", "HideWeaponDuringIdleAnimation").c_str(), &animation.hideWeaponDuringIdleAnimation)) {
 				MarkDirty();
 			}
 			ImGui::SameLine();
 			const bool wasSheathingWeapon = animation.sheatheWeaponDuringIdleAnimation;
-			if (ImGui::Checkbox("Sheathe Weapon", &animation.sheatheWeaponDuringIdleAnimation) &&
+			if (ImGui::Checkbox(Label("field.sheathe_weapon", "SheatheWeaponDuringIdleAnimation").c_str(), &animation.sheatheWeaponDuringIdleAnimation) &&
 				wasSheathingWeapon != animation.sheatheWeaponDuringIdleAnimation) {
 				MarkDirty();
 				Animations::ResetGraphPreservingIdlePlayback();
@@ -1432,9 +1473,9 @@ namespace TF3DHud::Imgui
 
 			if (ImGui::BeginChild("equipped_armors", ImVec2(0.0F, 220.0F), true)) {
 				if (!player) {
-					ImGui::TextDisabled("Player unavailable");
+					ImGui::TextDisabled(L("equipment.player_unavailable"));
 				} else if (armors.empty()) {
-					ImGui::TextDisabled("No equipped armor");
+					ImGui::TextDisabled(L("equipment.no_equipped_armor"));
 				} else {
 					for (const auto& armor : armors) {
 						const auto slots = Equipment::FormatSlotList(armor.slotMask);
@@ -1452,8 +1493,10 @@ namespace TF3DHud::Imgui
 		void DrawEquipmentTab()
 		{
 			auto& equipment = GetMutableConfig().equipment;
+			DrawSectionHeader("section.equipment_slots", "section.equipment_slots.hint");
 			DrawEquipmentSlotTable(equipment);
 			ImGui::Separator();
+			DrawSectionHeader("section.equipped_armor", "section.equipped_armor.hint");
 			DrawEquippedArmorList();
 		}
 
@@ -1490,7 +1533,8 @@ namespace TF3DHud::Imgui
 		void DrawLightTab()
 		{
 			auto& config = GetMutableConfig();
-			if (ImGui::Button("Add")) {
+			DrawSectionHeader("section.lights", "section.lights.hint");
+			if (ImGui::Button(L("button.add"))) {
 				LightSettings light;
 				light.name = MakeUniqueLightName(config, "Directional");
 				light.type = LightType::kDirectional;
@@ -1504,17 +1548,17 @@ namespace TF3DHud::Imgui
 			for (std::size_t index = 0; index < config.lights.size(); ++index) {
 				auto& light = config.lights[index];
 				ImGui::PushID(static_cast<int>(index));
-				const auto treeLabel = (light.name.empty() ? std::string{ "(unnamed)" } : light.name) + "###Light";
+				const auto treeLabel = (light.name.empty() ? Localization::GetString("state.unnamed") : light.name) + "###Light";
 				const bool expanded = ImGui::TreeNode(treeLabel.c_str());
 				if (expanded) {
-					if (ImGui::Button("Delete")) {
+					if (ImGui::Button(L("button.delete"))) {
 						deleteIndex = index;
 					}
 
 					std::array<char, 128> nameBuffer{};
 					const auto copySize = (std::min)(light.name.size(), nameBuffer.size() - 1);
 					std::memcpy(nameBuffer.data(), light.name.data(), copySize);
-					if (ImGui::InputText("Name", nameBuffer.data(), nameBuffer.size())) {
+					if (ImGui::InputText(Label("field.name", "LightName").c_str(), nameBuffer.data(), nameBuffer.size())) {
 						light.name = nameBuffer.data();
 						MarkDirty();
 					}
@@ -1524,40 +1568,40 @@ namespace TF3DHud::Imgui
 					}
 
 					int type = static_cast<int>(light.type);
-					const char* types[] = { "Directional", "Fixed", "ToD" };
-					if (ImGui::Combo("Type", &type, types, static_cast<int>(std::size(types)))) {
+					const char* types[] = { L("light.directional"), L("light.fixed"), L("light.tod") };
+					if (ImGui::Combo(Label("field.type", "LightType").c_str(), &type, types, static_cast<int>(std::size(types)))) {
 						light.type = static_cast<LightType>(type);
 						ApplyConfigEdit();
 					}
-					if (light.type != LightType::kDirectional && ImGui::Checkbox("UseInInterior", &light.useInInterior)) {
+					if (light.type != LightType::kDirectional && ImGui::Checkbox(Label("field.use_in_interior", "UseInInterior").c_str(), &light.useInInterior)) {
 						ApplyConfigEdit();
 					}
 
 					const auto drawFixedControls = [&](FixedLightSettings& a_settings) {
 						bool changed = false;
-						changed |= DrawIntSliderEdit("PositionX", a_settings.position.x, -300, 300, 1);
-						changed |= DrawIntSliderEdit("PositionY", a_settings.position.y, -300, 300, 1);
-						changed |= DrawIntSliderEdit("PositionZ", a_settings.position.z, -300, 300, 1);
+						changed |= DrawIntSliderEdit("field.position_x", "PositionX", a_settings.position.x, -300, 300, 1);
+						changed |= DrawIntSliderEdit("field.position_y", "PositionY", a_settings.position.y, -300, 300, 1);
+						changed |= DrawIntSliderEdit("field.position_z", "PositionZ", a_settings.position.z, -300, 300, 1);
 
 						float diffuse[3] = { a_settings.diffuse.r, a_settings.diffuse.g, a_settings.diffuse.b };
-						if (ImGui::ColorEdit3("Diffuse", diffuse, ImGuiColorEditFlags_Float)) {
+						if (ImGui::ColorEdit3(Label("field.diffuse", "Diffuse").c_str(), diffuse, ImGuiColorEditFlags_Float)) {
 							a_settings.diffuse.r = diffuse[0];
 							a_settings.diffuse.g = diffuse[1];
 							a_settings.diffuse.b = diffuse[2];
 							changed = true;
 						}
 
-						changed |= DrawIntSliderEdit("Distance", a_settings.distance, 50, 2000, 5);
-						changed |= DrawFloatSliderEdit("Intensity", a_settings.intensity, 0.01F, 10.0F, 0.01F);
+						changed |= DrawIntSliderEdit("field.distance", "Distance", a_settings.distance, 50, 2000, 5);
+						changed |= DrawFloatSliderEdit("field.intensity", "Intensity", a_settings.intensity, 0.01F, 10.0F, 0.01F);
 						return changed;
 					};
 
 					switch (light.type) {
 					case LightType::kDirectional:
-						if (DrawIntSliderEdit("PositionX", light.fixed.position.x, -300, 300, 1) ||
-						    DrawIntSliderEdit("PositionY", light.fixed.position.y, -300, 300, 1) ||
-						    DrawIntSliderEdit("PositionZ", light.fixed.position.z, -300, 300, 1) ||
-						    DrawFloatSliderEdit("Intensity", light.fixed.intensity, 0.01F, 10.0F, 0.01F)) {
+						if (DrawIntSliderEdit("field.position_x", "PositionX", light.fixed.position.x, -300, 300, 1) ||
+						    DrawIntSliderEdit("field.position_y", "PositionY", light.fixed.position.y, -300, 300, 1) ||
+						    DrawIntSliderEdit("field.position_z", "PositionZ", light.fixed.position.z, -300, 300, 1) ||
+						    DrawFloatSliderEdit("field.intensity", "Intensity", light.fixed.intensity, 0.01F, 10.0F, 0.01F)) {
 							ApplyConfigEdit();
 						}
 						break;
@@ -1567,17 +1611,17 @@ namespace TF3DHud::Imgui
 						}
 						break;
 					case LightType::kTimeOfDay:
-						if (DrawFloatSliderEdit("StartToD", light.timeOfDay.startTimeOfDay, 0.0F, 24.0F, 0.01F) ||
-						    DrawFloatSliderEdit("EndToD", light.timeOfDay.endTimeOfDay, 0.0F, 24.0F, 0.01F)) {
+						if (DrawFloatSliderEdit("field.start_tod", "StartToD", light.timeOfDay.startTimeOfDay, 0.0F, 24.0F, 0.01F) ||
+						    DrawFloatSliderEdit("field.end_tod", "EndToD", light.timeOfDay.endTimeOfDay, 0.0F, 24.0F, 0.01F)) {
 							ApplyConfigEdit();
 						}
-						if (ImGui::TreeNode("Start")) {
+						if (ImGui::TreeNode(L("field.start"))) {
 							if (drawFixedControls(light.timeOfDay.start)) {
 								ApplyConfigEdit();
 							}
 							ImGui::TreePop();
 						}
-						if (ImGui::TreeNode("End")) {
+						if (ImGui::TreeNode(L("field.end"))) {
 							if (drawFixedControls(light.timeOfDay.end)) {
 								ApplyConfigEdit();
 							}
@@ -1599,22 +1643,22 @@ namespace TF3DHud::Imgui
 		void DrawDebugTab()
 		{
 			if (ImGui::BeginTabBar("debug_tabs")) {
-				if (ImGui::BeginTabItem("Graph Info")) {
+				if (ImGui::BeginTabItem(L("debug.tab.graph_info"))) {
 					const auto snapshot = Animations::GetDebugSnapshot();
 					DrawGraphInfoTab(snapshot);
 					ImGui::EndTabItem();
 				}
-				if (ImGui::BeginTabItem("Subgraphs")) {
+				if (ImGui::BeginTabItem(L("debug.tab.subgraphs"))) {
 					const auto snapshot = Animations::GetDebugSnapshot();
 					DrawSubgraphState(snapshot);
 					ImGui::EndTabItem();
 				}
-				if (ImGui::BeginTabItem("Active Nodes")) {
+				if (ImGui::BeginTabItem(L("debug.tab.active_nodes"))) {
 					const auto snapshot = Animations::GetDebugSnapshot();
 					DrawActiveNodesTab(snapshot);
 					ImGui::EndTabItem();
 				}
-				if (ImGui::BeginTabItem("FaceGen")) {
+				if (ImGui::BeginTabItem(L("debug.tab.facegen"))) {
 					DrawFaceGenTab();
 					ImGui::EndTabItem();
 				}
@@ -1641,13 +1685,22 @@ namespace TF3DHud::Imgui
 			}
 
 			if (ImGui::BeginMenuBar()) {
-				if (ImGui::BeginMenu("File")) {
-					if (ImGui::MenuItem("Save")) {
+				if (ImGui::BeginMenu(L("menu.file"))) {
+					if (ImGui::MenuItem(L("menu.save"))) {
 						(void)SaveConfigFromMenu();
 					}
-					if (ImGui::MenuItem("Reload")) {
+					if (ImGui::MenuItem(L("menu.reload"))) {
 						Previewer::ReloadConfig();
 						g_isDirty = false;
+					}
+					ImGui::EndMenu();
+				}
+				if (ImGui::BeginMenu(L("menu.language"))) {
+					const auto currentLanguage = Localization::GetCurrentLanguage();
+					for (const auto& language : Localization::GetSupportedLanguages()) {
+						if (ImGui::MenuItem(language.c_str(), nullptr, language == currentLanguage)) {
+							(void)Localization::SetCurrentLanguage(language);
+						}
 					}
 					ImGui::EndMenu();
 				}
@@ -1655,24 +1708,24 @@ namespace TF3DHud::Imgui
 			}
 
 			if (ImGui::BeginTabBar("tf3dhud_tabs")) {
-				if (ImGui::BeginTabItem("Layout")) {
+				if (ImGui::BeginTabItem(L("tab.layout"))) {
 					DrawLayoutTab();
 					DrawClipRectOverlay();
 					ImGui::EndTabItem();
 				}
-				if (ImGui::BeginTabItem("Animation")) {
+				if (ImGui::BeginTabItem(L("tab.animation"))) {
 					DrawAnimationTab();
 					ImGui::EndTabItem();
 				}
-				if (ImGui::BeginTabItem("Equipment")) {
+				if (ImGui::BeginTabItem(L("tab.equipment"))) {
 					DrawEquipmentTab();
 					ImGui::EndTabItem();
 				}
-				if (ImGui::BeginTabItem("Light")) {
+				if (ImGui::BeginTabItem(L("tab.light"))) {
 					DrawLightTab();
 					ImGui::EndTabItem();
 				}
-				if (ImGui::BeginTabItem("Debug")) {
+				if (ImGui::BeginTabItem(L("tab.debug"))) {
 					DrawDebugTab();
 					ImGui::EndTabItem();
 				}
@@ -1710,6 +1763,8 @@ namespace TF3DHud::Imgui
 			ImGui::CreateContext();
 			auto& io = ImGui::GetIO();
 			io.IniFilename = nullptr;
+			Localization::Initialize();
+			Localization::LoadFonts(io);
 
 			g_originalWndProc = reinterpret_cast<WNDPROC>(
 				::SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(ImGuiWndProc)));

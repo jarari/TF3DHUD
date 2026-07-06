@@ -15,6 +15,7 @@ add_rules("plugin.vsxmake.autoupdate")
 add_defines("COMMONLIB_RUNTIMECOUNT=3")
 
 add_requires("imgui", { configs = { dx11 = true, win32 = true } })
+add_requires("nlohmann_json")
 
 -- define targets
 target("TF3DHud")
@@ -29,6 +30,6 @@ target("TF3DHud")
     add_files("src/**.cpp")
     add_headerfiles("src/**.h")
     add_includedirs("src")
-    add_packages("imgui")
+    add_packages("imgui", "nlohmann_json")
     add_syslinks("d3d11", "dxgi")
     set_pcxxheader("src/pch.h")

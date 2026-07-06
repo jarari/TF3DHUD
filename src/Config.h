@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace TF3DHud
@@ -74,6 +75,7 @@ namespace TF3DHud
 		ClipRectSettings clipRect;
 		bool hideInPowerArmor{ true };
 		std::uint32_t uiMenuKey{ 0xDE };
+		std::string language{ "en" };
 		std::vector<LightSettings> lights;
 	};
 
@@ -81,4 +83,5 @@ namespace TF3DHud
 	Config& GetMutableConfig();
 	void LoadConfig();
 	bool SaveConfig();
+	bool SaveLanguageConfig(std::string_view a_language);
 }
