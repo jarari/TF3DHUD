@@ -180,6 +180,8 @@ namespace TF3DHud::Animations
 		constexpr std::string_view kRelaxedStateStartInstantEvent{ "g_archetypeRelaxedStateStartInstant" };
 		constexpr std::string_view kBaseStateStartEvent{ "g_archetypeBaseStateStart" };
 		constexpr std::string_view kRelaxedStateStartEvent{ "g_archetypeRelaxedStateStart" };
+		constexpr float kIdleRequestRetrySeconds = 0.25F;
+		constexpr std::uint32_t kIdleRequestRetryFrames = 12;
 
 		constexpr auto kAlwaysIntGraphVariables = std::to_array<std::string_view>({
 			"iSyncWeaponDrawState",
@@ -2461,7 +2463,7 @@ namespace TF3DHud::Animations
 				return adjustedDeltaTime;
 			}
 
-			void RequestIdleAnimation(RE::PlayerCharacter& a_player)
+			void RequestIdleAnimation(RE::PlayerCharacter& a_player, const float a_deltaTime)
 			{
 				auto* idle = ResolveConfiguredDynamicActivationIdle();
 				if (!idle || !manager_ || !initialStateApplied_) {
@@ -2488,7 +2490,19 @@ namespace TF3DHud::Animations
 				}
 
 				if (idleRequestSubmitted_ && idleRequestedKey_ == key && idleRequestedGraph_ == graph.get()) {
-					return;
+					if (IsRequestedIdleClipActive(*graph)) {
+						idleClipObserved_ = true;
+						idleRequestRetrySeconds_ = 0.0F;
+						idleRequestRetryFrames_ = 0;
+						return;
+					}
+
+					AdvanceIdleRequestRetry(a_deltaTime);
+					if (!ShouldRetryIdleRequest()) {
+						return;
+					}
+
+					ClearIdleRequestState();
 				}
 
 				const auto resolvedPath = ResolveDynamicIdleFullPath(a_player, *idle);
@@ -2513,6 +2527,8 @@ namespace TF3DHud::Animations
 				idleRequestSubmitted_ = true;
 				idleSeekPending_ = true;
 				idleClipObserved_ = false;
+				idleRequestRetrySeconds_ = 0.0F;
+				idleRequestRetryFrames_ = 0;
 			}
 
 			void ClearIdleRequestState()
@@ -2523,6 +2539,27 @@ namespace TF3DHud::Animations
 				idleRequestSubmitted_ = false;
 				idleSeekPending_ = false;
 				idleClipObserved_ = false;
+				idleRequestRetrySeconds_ = 0.0F;
+				idleRequestRetryFrames_ = 0;
+			}
+
+			[[nodiscard]] bool IsRequestedIdleClipActive(RE::BShkbAnimationGraph& a_graph) const
+			{
+				return !idleResolvedPath_.empty() && FindActiveClipTiming(a_graph, idleResolvedPath_).clip != 0;
+			}
+
+			void AdvanceIdleRequestRetry(const float a_deltaTime)
+			{
+				++idleRequestRetryFrames_;
+				if (std::isfinite(a_deltaTime) && a_deltaTime > 0.0F) {
+					idleRequestRetrySeconds_ += a_deltaTime;
+				}
+			}
+
+			[[nodiscard]] bool ShouldRetryIdleRequest() const
+			{
+				return idleRequestRetryFrames_ >= kIdleRequestRetryFrames ||
+				       idleRequestRetrySeconds_ >= kIdleRequestRetrySeconds;
 			}
 
 			void UpdateIdlePlaybackClock(const float a_deltaTime)
@@ -2546,6 +2583,8 @@ namespace TF3DHud::Animations
 					OverwriteClipLocalTime(timing.clip, NormalizeClipTime(g_idlePlaybackTime, g_idleClipDuration));
 					idleSeekPending_ = false;
 					idleClipObserved_ = true;
+					idleRequestRetrySeconds_ = 0.0F;
+					idleRequestRetryFrames_ = 0;
 					return;
 				}
 
@@ -2554,6 +2593,8 @@ namespace TF3DHud::Animations
 				} else {
 					idleClipObserved_ = true;
 				}
+				idleRequestRetrySeconds_ = 0.0F;
+				idleRequestRetryFrames_ = 0;
 			}
 
 			[[nodiscard]] DebugSnapshot CaptureDebugSnapshot() const
@@ -2715,6 +2756,8 @@ namespace TF3DHud::Animations
 			bool idleRequestSubmitted_{ false };
 			bool idleSeekPending_{ false };
 			bool idleClipObserved_{ false };
+			float idleRequestRetrySeconds_{ 0.0F };
+			std::uint32_t idleRequestRetryFrames_{ 0 };
 
 			[[nodiscard]] std::int32_t GetInitialWeaponDrawSyncState() const
 			{
@@ -3288,8 +3331,8 @@ namespace TF3DHud::Animations
 			updateDelta = g_holder->GetActiveClipSynchronizedDeltaTime(a_deltaTime);
 		} else {
 			DrainPendingLiveGraphRequests(true);
-			g_holder->RequestIdleAnimation(a_player);
 			g_holder->ApplyIdlePreviewWeaponGraphState();
+			g_holder->RequestIdleAnimation(a_player, updateDelta);
 		}
 
 		const bool updated = g_updateAnimationGraphManagerFloat(g_holder.get(), updateDelta);
