@@ -227,6 +227,14 @@ namespace TF3DHud::Address
 	using SetSegmentEnabled_t = void(RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t, bool);
 	using TryAttachMod3DRecurse_t =
 		bool(RE::BGSMod::Attachment::Mod*, RE::NiNode*, char*, RE::TBO_InstanceData*);
+	using ActionInputCtor_t = void*(
+		void*,
+		RE::ActionInput::ACTIONPRIORITY,
+		RE::TESObjectREFR*,
+		RE::BGSAction*,
+		RE::TESObjectREFR*,
+		RE::ActionInput::Data);
+	using ActionInputDtor_t = void(void*);
 	using TESActionDataCtor_t = void*(
 		void*,
 		RE::ActionInput::ACTIONPRIORITY,
@@ -301,13 +309,16 @@ namespace TF3DHud::Address
 	extern REL::Relocation<SetSegmentEnabled_t*> DisableSegment;
 	extern REL::Relocation<SetSegmentEnabled_t*> EnableSegment;
 	extern REL::Relocation<TryAttachMod3DRecurse_t*> TryAttachMod3DRecurse;
-	extern REL::Relocation<TESActionDataCtor_t*> ConstructTESActionData;
-	extern REL::Relocation<TESActionDataDtor_t*> DestroyTESActionData;
+	extern REL::Relocation<ActionInputCtor_t*> ConstructActionInput;
+	extern REL::Relocation<ActionInputDtor_t*> DestroyActionInput;
 	extern REL::Relocation<UpdateAnimationGraphManager_t*> UpdateAnimationGraphManager;
 	extern REL::Relocation<UpdateAnimationGraphManagerFloat_t*> UpdateAnimationGraphManagerFloat;
 	extern REL::Relocation<UpdateBodyTintColorsOnScene_t*> UpdateBodyTintColorsOnScene;
 	extern REL::Relocation<UseSpeedContoursForMovementCalculations_t*> UseSpeedContoursForMovementCalculations;
 	extern REL::Relocation<FixFaceGenHeadSkinInstances_t*> FixFaceGenHeadSkinInstances;
+
+	extern const REL::ID ConstructTESActionDataID;
+	extern const REL::ID DestroyTESActionDataID;
 
 	extern REL::Relocation<void (*)(RE::NiAVObject*)> CreateBoneMap;
 	extern REL::Relocation<void**> AnimationSubGraphDataSingleton;

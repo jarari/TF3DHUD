@@ -422,9 +422,126 @@ namespace TF3DHud::Animations
 			Address::GetDefaultObjectForActionInitializeToBaseState;
 		auto& g_getDefaultObjectForActionInstantInitializeToBaseState =
 			Address::GetDefaultObjectForActionInstantInitializeToBaseState;
-		auto& g_constructTESActionData = Address::ConstructTESActionData;
-		auto& g_destroyTESActionData = Address::DestroyTESActionData;
 		auto& g_interpretAction = Address::InterpretAction;
+		auto& g_constructActionInput = Address::ConstructActionInput;
+		auto& g_destroyActionInput = Address::DestroyActionInput;
+
+		struct AERequestIdlesData
+		{
+			RE::BSFixedString eventName;
+			RE::BSFixedString path;
+			RE::BSTSmartPointer<RE::BSAnimationGraphManager> manager;
+			bool result{ false };
+		};
+
+		static_assert(offsetof(AERequestIdlesData, path) == 0x8);
+		static_assert(offsetof(AERequestIdlesData, manager) == 0x10);
+		static_assert(offsetof(AERequestIdlesData, result) == 0x18);
+
+		using RequestIdleFunctorAE_t =
+			void(AERequestIdlesData*, const RE::BSTSmartPointer<RE::BShkbAnimationGraph>*);
+
+		constexpr std::size_t kTESActionDataSize = 0x60;
+		constexpr std::size_t kTESActionDataEventNameOffset = 0x28;
+		constexpr std::size_t kTESActionDataTargetEventNameOffset = 0x30;
+		constexpr std::size_t kTESActionDataFlagsOffset = 0x38;
+		constexpr std::size_t kTESActionDataExtraDataOffset = 0x40;
+		constexpr std::size_t kTESActionDataIdleFormOffset = 0x48;
+		constexpr std::size_t kTESActionDataRunFlagsOffset = 0x50;
+		constexpr std::size_t kTESActionDataResolveIdleOffset = 0x58;
+
+		[[nodiscard]] std::uintptr_t BGSActionDataVTable()
+		{
+			static REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE::BGSActionData[0] };
+			return vtable.address();
+		}
+
+		[[nodiscard]] std::uintptr_t TESActionDataVTable()
+		{
+			static REL::Relocation<std::uintptr_t> vtable{ RE::VTABLE::TESActionData[0] };
+			return vtable.address();
+		}
+
+		void* ConstructTESActionDataAE(
+			void* a_actionData,
+			const RE::ActionInput::ACTIONPRIORITY a_priority,
+			RE::TESObjectREFR* a_ref,
+			RE::BGSAction* a_action,
+			RE::TESObjectREFR* a_target,
+			const RE::ActionInput::Data a_inputData)
+		{
+			auto* const data = static_cast<std::byte*>(a_actionData);
+			std::memset(data, 0, kTESActionDataSize);
+
+			g_constructActionInput(a_actionData, a_priority, a_ref, a_action, a_target, a_inputData);
+			std::construct_at(reinterpret_cast<RE::BSFixedString*>(data + kTESActionDataEventNameOffset));
+			std::construct_at(reinterpret_cast<RE::BSFixedString*>(data + kTESActionDataTargetEventNameOffset));
+
+			*reinterpret_cast<std::uintptr_t*>(data) = TESActionDataVTable();
+			*reinterpret_cast<std::uint32_t*>(data + kTESActionDataFlagsOffset) = 0;
+			*reinterpret_cast<void**>(data + kTESActionDataExtraDataOffset) = nullptr;
+			*reinterpret_cast<RE::TESIdleForm**>(data + kTESActionDataIdleFormOffset) = nullptr;
+			*reinterpret_cast<std::uint32_t*>(data + kTESActionDataRunFlagsOffset) = 0;
+			*reinterpret_cast<std::uint32_t*>(data + kTESActionDataResolveIdleOffset) = 0;
+			return a_actionData;
+		}
+
+		void DestroyTESActionDataAE(void* a_actionData)
+		{
+			auto* const data = static_cast<std::byte*>(a_actionData);
+
+			*reinterpret_cast<std::uintptr_t*>(data) = BGSActionDataVTable();
+			std::destroy_at(reinterpret_cast<RE::BSFixedString*>(data + kTESActionDataTargetEventNameOffset));
+			std::destroy_at(reinterpret_cast<RE::BSFixedString*>(data + kTESActionDataEventNameOffset));
+			g_destroyActionInput(a_actionData);
+		}
+
+		void* ConstructTESActionData(
+			void* a_actionData,
+			const RE::ActionInput::ACTIONPRIORITY a_priority,
+			RE::TESObjectREFR* a_ref,
+			RE::BGSAction* a_action,
+			RE::TESObjectREFR* a_target,
+			const RE::ActionInput::Data a_inputData)
+		{
+			if (REX::FModule::IsRuntimeOG()) {
+				static REL::Relocation<Address::TESActionDataCtor_t*> ctor{ Address::ConstructTESActionDataID };
+				return ctor(a_actionData, a_priority, a_ref, a_action, a_target, a_inputData);
+			}
+
+			return ConstructTESActionDataAE(a_actionData, a_priority, a_ref, a_action, a_target, a_inputData);
+		}
+
+		void DestroyTESActionData(void* a_actionData)
+		{
+			if (REX::FModule::IsRuntimeOG()) {
+				static REL::Relocation<Address::TESActionDataDtor_t*> dtor{ Address::DestroyTESActionDataID };
+				dtor(a_actionData);
+				return;
+			}
+
+			DestroyTESActionDataAE(a_actionData);
+		}
+
+		[[nodiscard]] bool RequestIdles(
+			const RE::BSFixedString& a_eventName,
+			const RE::BSTSmartPointer<RE::BShkbAnimationGraph>& a_graph,
+			const RE::BSFixedString& a_path,
+			const RE::BSTSmartPointer<RE::BSAnimationGraphManager>& a_manager)
+		{
+			if (REX::FModule::IsRuntimeOG()) {
+				// IDA OG 1.10.163: this member path does not read its singleton this pointer.
+				void* const fileManager = nullptr;
+				return g_requestIdles(fileManager, a_eventName, a_graph, a_path, a_manager);
+			}
+
+			// IDA AE 1.11.191: the mapped function has RequestIdleFunctor::operator()
+			// ABI with the old RequestIdles body inlined.
+			AERequestIdlesData request{ a_eventName, a_path, a_manager, false };
+			const auto requestIdleFunctor = reinterpret_cast<RequestIdleFunctorAE_t*>(g_requestIdles.address());
+			requestIdleFunctor(std::addressof(request), std::addressof(a_graph));
+			return request.result;
+		}
 
 		template <class T, class Allocator>
 		[[nodiscard]] const T* GetEngineSmallArrayStorage(const RE::BSTArray<T, Allocator>& a_source)
@@ -1882,7 +1999,7 @@ namespace TF3DHud::Animations
 
 				alignas(8) std::array<std::byte, 0x60> actionData{};
 				RE::ActionInput::Data inputData{};
-				g_constructTESActionData(
+				ConstructTESActionData(
 					actionData.data(),
 					RE::ActionInput::ACTIONPRIORITY::kTry,
 					static_cast<RE::TESObjectREFR*>(sourceActor_),
@@ -1897,7 +2014,7 @@ namespace TF3DHud::Animations
 				const auto& eventName = *reinterpret_cast<const RE::BSFixedString*>(actionData.data() + 0x28);
 				const bool processed = interpreted && !eventName.empty() && NotifyAnimationGraphImpl(eventName);
 
-				g_destroyTESActionData(actionData.data());
+				DestroyTESActionData(actionData.data());
 				return processed;
 			}
 
@@ -1909,7 +2026,7 @@ namespace TF3DHud::Animations
 
 				alignas(8) std::array<std::byte, 0x60> actionData{};
 				RE::ActionInput::Data inputData{};
-				g_constructTESActionData(
+				ConstructTESActionData(
 					actionData.data(),
 					a_priority,
 					static_cast<RE::TESObjectREFR*>(sourceActor_),
@@ -1921,7 +2038,7 @@ namespace TF3DHud::Animations
 				const auto& eventName = *reinterpret_cast<const RE::BSFixedString*>(actionData.data() + 0x28);
 				const bool processed = interpreted && !eventName.empty() && NotifyAnimationGraphImpl(eventName);
 
-				g_destroyTESActionData(actionData.data());
+				DestroyTESActionData(actionData.data());
 				return processed;
 			}
 
@@ -2513,10 +2630,7 @@ namespace TF3DHud::Animations
 
 				const RE::BSFixedString eventName("dyn_ActivationLoop");
 				const RE::BSFixedString path(resolvedPath.c_str());
-				// IDA: RequestIdles stores into anonymous loading queues and does
-				// not read its this pointer.
-				void* const fileManager = nullptr;
-				if (!g_requestIdles(fileManager, eventName, graph, path, manager_)) {
+				if (!RequestIdles(eventName, graph, path, manager_)) {
 					LogDiagnostic("idle request failed for '" + resolvedPath + "'");
 					return;
 				}
@@ -3126,7 +3240,7 @@ namespace TF3DHud::Animations
 		{
 			alignas(8) std::array<std::byte, 0x60> actionData{};
 			RE::ActionInput::Data inputData{};
-			g_constructTESActionData(
+			ConstructTESActionData(
 				actionData.data(),
 				RE::ActionInput::ACTIONPRIORITY::kTry,
 				static_cast<RE::TESObjectREFR*>(std::addressof(a_player)),
@@ -3145,7 +3259,7 @@ namespace TF3DHud::Animations
 			const bool resolved = resolve && resolve(actionData.data());
 			auto* playableIdle = resolved ? *reinterpret_cast<RE::TESIdleForm**>(actionData.data() + 0x48) : nullptr;
 
-			g_destroyTESActionData(actionData.data());
+			DestroyTESActionData(actionData.data());
 			return playableIdle ? playableIdle : std::addressof(a_idle);
 		}
 
