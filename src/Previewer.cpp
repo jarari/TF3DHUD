@@ -64,7 +64,6 @@ namespace TF3DHud
 		auto& g_bipedAnimCtor = Address::BipedAnimCtor;
 		auto& g_bipedAnimDtor = Address::BipedAnimDtor;
 		auto& g_createBoneMap = Address::CreateBoneMap;
-		auto& g_createHeadForNPC = Address::CreateHeadForNPC;
 		auto& g_calculateBodyTintColor = Address::CalculateBodyTintColor;
 		auto& g_updateBodyTintColorsOnScene = Address::UpdateBodyTintColorsOnScene;
 		auto& g_doAdjustSkinComplexion = Address::DoAdjustSkinComplexion;
@@ -74,8 +73,6 @@ namespace TF3DHud
 		auto& g_fixFaceGenHeadSkinInstances = Address::FixFaceGenHeadSkinInstances;
 		auto& g_resetFaceGenCurrentMorphs = Address::ResetFaceGenCurrentMorphs;
 		auto& g_generateFlattenedHeadPartArray = Address::GenerateFlattenedHeadPartArray;
-		auto& g_bakeChargenMorphs = Address::BakeChargenMorphs;
-		auto& g_scaleFaceBones = Address::ScaleFaceBones;
 		auto& g_tryAttachMod3DRecurse = Address::TryAttachMod3DRecurse;
 
 		using PreviewRenderTree::PrepareForInterface3DOffscreen;
@@ -922,20 +919,6 @@ namespace TF3DHud
 			return nullptr;
 		}
 
-		[[nodiscard]] const char* GetRaceChargenSkeletonModelPath(RE::TESRace& a_race, const std::uint32_t a_sex)
-		{
-			const auto sex = std::min<std::uint32_t>(a_sex, 1);
-			if (const auto* model = a_race.skeletonChargenModel[sex].GetModel(); model && model[0] != '\0') {
-				return model;
-			}
-			// IDA TESRace::GetModel(sex, chargen=true) falls back to normal
-			// male skeletonModel[0], not the other sex's chargen skeleton.
-			if (const auto* model = a_race.skeletonModel[0].GetModel(); model && model[0] != '\0') {
-				return model;
-			}
-			return nullptr;
-		}
-
 		[[nodiscard]] bool ConvertPreviewSkeletonToFlattenedTree(RE::PlayerCharacter& a_player, RE::NiAVObject& a_skeletonRoot)
 		{
 			constexpr auto kFlattenedSkeletonBodyPart = RE::BGSBodyPartDefs::LIMB_ENUM::kRoot;
@@ -1738,8 +1721,8 @@ namespace TF3DHud
 			// actor3D->IsNode(), then calls the BSFaceGenNiNode vfunc at 0x218.
 			// The vfunc iterates direct headpart geometries and runs the same
 			// internal FixSkinInstances path used by AddHeadPartOnActor.
-			// CreateHeadForNPC clears faceGenFlags 0x4/0x10; AttachHeadHelper
-			// sets them again immediately before this call.
+			// AttachHeadHelper sets these flags immediately before this call on
+			// native actor heads. Mirror that state for the cloned preview head.
 			a_faceNode.faceGenFlags |= 0x14;
 			g_fixFaceGenHeadSkinInstances(std::addressof(a_faceNode), std::addressof(a_attachRoot), true);
 			if (a_faceNode.animationData) {
@@ -2061,65 +2044,35 @@ namespace TF3DHud
 			a_actorRootNode.Update(updateData);
 		}
 
-		[[nodiscard]] RE::NiPointer<RE::BSFaceGenNiNode> CreatePreviewHeadWithChargenBake(
-			RE::TESNPC& a_npc,
-			RE::TESRace& a_previewRace,
-			const RE::SEX a_sex)
+		void DetachSharedFaceAnimationData(
+			RE::BSFaceGenNiNode& a_previewFaceNode,
+			const RE::BSFaceGenAnimationData* a_liveAnimationData)
 		{
-			RE::NiPointer<RE::BSFaceGenNiNode> finalHead;
-			if (!g_createHeadForNPC(std::addressof(a_npc), finalHead, false, true, nullptr) || !finalHead) {
+			if (a_previewFaceNode.animationData && a_previewFaceNode.animationData == a_liveAnimationData) {
+				a_previewFaceNode.animationData = nullptr;
+			}
+		}
+
+		[[nodiscard]] RE::NiPointer<RE::BSFaceGenNiNode> ClonePreviewHeadFromLiveFace(
+			RE::NiAVObject& a_sourceFaceNode,
+			RE::NiAVObject& a_previewRoot,
+			const RE::BSFaceGenAnimationData* a_liveAnimationData)
+		{
+			std::unordered_map<std::string, RE::NiAVObject*> previewNodes;
+			CollectPreviewSkinTargetNodes(a_previewRoot, previewNodes);
+
+			auto faceClone = PreviewClone::CloneObject(
+				a_sourceFaceNode,
+				std::addressof(a_previewRoot),
+				std::addressof(previewNodes));
+			if (!faceClone) {
 				return nullptr;
 			}
 
-			const auto* chargenSkeletonPath =
-				GetRaceChargenSkeletonModelPath(a_previewRace, std::to_underlying(a_sex));
-			if (!chargenSkeletonPath) {
-				REX::WARN("preview head chargen bake skipped: race chargen skeleton path is empty");
-				return finalHead;
-			}
-
-			auto chargenSkeleton = LoadPreviewModel(chargenSkeletonPath);
-			if (!chargenSkeleton) {
-				REX::WARN(
-					"preview head chargen bake skipped: failed to load race chargen skeleton '{}'",
-					chargenSkeletonPath);
-				return finalHead;
-			}
-
-			RE::NiPointer<RE::BSFaceGenNiNode> tempHead;
-			if (!g_createHeadForNPC(std::addressof(a_npc), tempHead, true, false, nullptr) || !tempHead) {
-				REX::WARN("preview head chargen bake skipped: temporary chargen head creation failed");
-				return finalHead;
-			}
-
-			RE::bhkWorld::RemoveObjects(chargenSkeleton.get(), true, true);
-			StripControllerChains(*chargenSkeleton);
-			PreparePreviewTree(*chargenSkeleton);
-			RE::bhkWorld::RemoveObjects(tempHead.get(), true, true);
-			PreparePreviewTree(*tempHead);
-
-			auto* chargenRootNode = chargenSkeleton->IsNode();
-			if (!chargenRootNode) {
-				REX::WARN(
-					"preview head chargen bake skipped: chargen skeleton root is not NiNode, path='{}'",
-					chargenSkeletonPath);
-				return finalHead;
-			}
-
-			// IDA 0x14067ADC0: temporary actor loads race->skeletonChargenModel,
-			// attaches a temporary head, scales face bones, updates, then bakes
-			// that result into the pending final head before final actor attach.
-			AttachAndRebindHeadToRoot(*tempHead, *chargenRootNode);
-			g_scaleFaceBones(std::addressof(a_npc), chargenSkeleton.get(), true);
-			RE::NiUpdateData updateData;
-			chargenSkeleton->Update(updateData);
-			g_bakeChargenMorphs(
-				std::addressof(a_npc),
-				static_cast<RE::NiNode*>(finalHead.get()),
-				static_cast<RE::NiNode*>(tempHead.get()),
-				nullptr);
-
-			return finalHead;
+			auto* faceNode = static_cast<RE::BSFaceGenNiNode*>(faceClone.get());
+			RE::NiPointer<RE::BSFaceGenNiNode> result(faceNode);
+			DetachSharedFaceAnimationData(*faceNode, a_liveAnimationData);
+			return result;
 		}
 
 		bool EnsurePreviewHead(RE::PlayerCharacter& a_player, RE::NiAVObject& a_previewRoot, const RE::BipedAnim& a_sourceBiped)
@@ -2143,9 +2096,18 @@ namespace TF3DHud
 				return false;
 			}
 
-			auto faceNode = CreatePreviewHeadWithChargenBake(*npc, *previewRace, npc->GetSex());
+			auto* sourceFaceNode = PreviewRebuilder::GetSourceFaceNode(a_player);
+			if (!sourceFaceNode) {
+				LogDiagnostic("preview head creation failed: live FaceGen node is null");
+				return false;
+			}
+
+			auto faceNode = ClonePreviewHeadFromLiveFace(
+				*sourceFaceNode,
+				a_previewRoot,
+				GetLiveFaceAnimationData(a_player));
 			if (!faceNode) {
-				LogDiagnostic("preview head creation failed: CreateHeadForNPC returned null");
+				LogDiagnostic("preview head creation failed: live FaceGen clone returned null");
 				return false;
 			}
 

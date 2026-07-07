@@ -130,8 +130,6 @@ namespace TF3DHud::Address
 	using CreateAnimationGraphManager_t = bool(RE::IAnimationGraphManagerHolder*, const char*);
 	using CreateClothFor3D_t =
 		RE::NiExtraData*(RE::NiAVObject&, const char*, const RE::NiTransform&, RE::NiAVObject*);
-	using CreateHeadForNPC_t = bool(RE::TESNPC*, RE::NiPointer<RE::BSFaceGenNiNode>&, bool, bool, void*);
-	using BakeChargenMorphs_t = void(RE::TESNPC*, RE::NiNode*, RE::NiNode*, const void*);
 	using DestroyAdjustmentArena_t = void(void*);
 	using DoAdjustSkinComplexion_t = std::uint64_t(SkinComplexionContext*, RE::NiAVObject*);
 	using GenerateFlattenedHeadPartArray_t = void(RE::TESNPC*, RE::BSScrapArray<RE::BGSHeadPart*>&);
@@ -180,12 +178,6 @@ namespace TF3DHud::Address
 		std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t);
 	using GetUserIndex_t = std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t);
 	using InitWornObject_t = bool(RE::TESNPC*, const BorrowedBipedPointer*, const RE::BGSObjectInstance*);
-	using ApplyAllCustomizationMorphs_t =
-		void(RE::TESNPC*, const RE::BSScrapArray<RE::BGSHeadPart*>&, RE::BSFaceGenNiNode*);
-	using ApplyWeightFaceMorph_t = void(RE::TESNPC*, RE::BSFaceGenNiNode*);
-	using PrepareHeadForShaders_t =
-		void(const RE::BSScrapArray<RE::BGSHeadPart*>&, RE::BSFaceGenNiNode*, RE::TESNPC*, void*);
-	using ScaleFaceBones_t = void(RE::TESNPC*, RE::NiAVObject*, bool);
 	using UpdateAllChildrenMorphData_t = void(RE::BSFaceGenNiNode*, bool);
 	using InitializeSubGraph_t = bool(
 		void*,
@@ -265,8 +257,6 @@ namespace TF3DHud::Address
 	extern REL::Relocation<ConvertNodeTree_t*> ConvertNodeTree;
 	extern REL::Relocation<CreateAnimationGraphManager_t*> CreateAnimationGraphManager;
 	extern REL::Relocation<CreateClothFor3D_t*> CreateClothFor3D;
-	extern REL::Relocation<CreateHeadForNPC_t*> CreateHeadForNPC;
-	extern REL::Relocation<BakeChargenMorphs_t*> BakeChargenMorphs;
 	extern REL::Relocation<DestroyAdjustmentArena_t*> DestroyAdjustmentArena;
 	extern REL::Relocation<DoAdjustSkinComplexion_t*> DoAdjustSkinComplexion;
 	extern REL::Relocation<GenerateFlattenedHeadPartArray_t*> GenerateFlattenedHeadPartArray;
@@ -293,10 +283,6 @@ namespace TF3DHud::Address
 	extern REL::Relocation<GetSubSegmentIndex_t*> GetSubSegmentIndex;
 	extern REL::Relocation<GetUserIndex_t*> GetUserIndex;
 	extern REL::Relocation<InitWornObject_t*> InitWornObject;
-	extern REL::Relocation<ApplyAllCustomizationMorphs_t*> ApplyAllCustomizationMorphs;
-	extern REL::Relocation<ApplyWeightFaceMorph_t*> ApplyWeightFaceMorph;
-	extern REL::Relocation<PrepareHeadForShaders_t*> PrepareHeadForShaders;
-	extern REL::Relocation<ScaleFaceBones_t*> ScaleFaceBones;
 	extern REL::Relocation<UpdateAllChildrenMorphData_t*> UpdateAllChildrenMorphData;
 	extern REL::Relocation<InitializeSubGraph_t*> InitializeSubGraph;
 	extern REL::Relocation<InterpretAction_t*> InterpretAction;
