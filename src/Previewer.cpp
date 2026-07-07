@@ -72,6 +72,7 @@ namespace TF3DHud
 		auto& g_getSkin = Address::GetSkin;
 		auto& g_fixFaceGenHeadSkinInstances = Address::FixFaceGenHeadSkinInstances;
 		auto& g_resetFaceGenCurrentMorphs = Address::ResetFaceGenCurrentMorphs;
+		auto& g_updateAllChildrenMorphData = Address::UpdateAllChildrenMorphData;
 		auto& g_generateFlattenedHeadPartArray = Address::GenerateFlattenedHeadPartArray;
 		auto& g_tryAttachMod3DRecurse = Address::TryAttachMod3DRecurse;
 
@@ -612,6 +613,11 @@ namespace TF3DHud
 
 		[[nodiscard]] RE::BSFaceGenAnimationData* GetLiveFaceAnimationData(const RE::PlayerCharacter& a_player)
 		{
+			auto* faceNode = const_cast<RE::PlayerCharacter&>(a_player).GetFaceNodeSkinned();
+			if (faceNode && faceNode->animationData) {
+				return faceNode->animationData;
+			}
+
 			auto* process = a_player.currentProcess;
 			auto* middleHigh = process ? process->middleHigh : nullptr;
 			return middleHigh ? middleHigh->faceAnimationData : nullptr;
@@ -625,18 +631,21 @@ namespace TF3DHud
 
 			auto* liveData = GetLiveFaceAnimationData(a_player);
 			auto* previewData = g_previewFaceNode->animationData;
-			if (!liveData || liveData == previewData) {
+			if (!liveData) {
 				return;
 			}
 
-			// MiddleHigh owns emotional-idle timers and handles. Mirror only the
-			// expression payload consumed by the preview head.
-			previewData->currentExpression = liveData->currentExpression;
-			previewData->modifierExpression = liveData->modifierExpression;
-			previewData->baseExpression = liveData->baseExpression;
-			previewData->morphsDirty = true;
-			previewData->forceMorphUpdate = true;
+			if (liveData != previewData) {
+				// MiddleHigh owns emotional-idle timers and handles. Mirror only the
+				// expression payload consumed by the preview head.
+				previewData->currentExpression = liveData->currentExpression;
+				previewData->modifierExpression = liveData->modifierExpression;
+				previewData->baseExpression = liveData->baseExpression;
+				previewData->morphsDirty = true;
+				previewData->forceMorphUpdate = true;
+			}
 			g_previewFaceNode->faceGenFlags &= static_cast<std::uint16_t>(~0x4u);
+			g_updateAllChildrenMorphData(g_previewFaceNode.get(), true);
 		}
 
 		void LogDiagnostic(std::string a_message)
@@ -2195,6 +2204,9 @@ namespace TF3DHud
 			}
 
 			AttachAndRebindHeadToRoot(*faceNode, *actor3DRoot);
+			if (!faceNode->animationData) {
+				faceNode->animationData = GetLiveFaceAnimationData(a_player);
+			}
 			g_previewFaceNode = faceNode;
 			RefreshPreviewBoneLookup(a_previewRoot);
 
