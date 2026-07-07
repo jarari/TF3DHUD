@@ -21,7 +21,6 @@
 #include "RE/B/BSGeometry.h"
 #include "RE/B/BGSMod.h"
 #include "RE/B/BGSObjectInstance.h"
-#include "RE/B/BGSObjectInstanceExtra.h"
 #include "RE/B/BSModelDB.h"
 #include "RE/B/BipedAnim.h"
 #include "RE/N/NiExtraData.h"
@@ -33,6 +32,7 @@
 #include "RE/T/TESNPC.h"
 #include "RE/T/TESForm.h"
 #include "RE/T/TESModel.h"
+#include "RE/T/TESObjectARMA.h"
 #include "RE/T/TESObjectARMO.h"
 #include "RE/T/TESObjectANIO.h"
 #include "RE/T/TESRace.h"
@@ -60,7 +60,7 @@ namespace TF3DHud
 	{
 		using SkinComplexionContext = Address::SkinComplexionContext;
 
-		auto& g_addArmorToBiped = Address::AddArmorToBiped;
+		auto& g_armorAddonUseModel = Address::ArmorAddonUseModel;
 		auto& g_bipedAnimCtor = Address::BipedAnimCtor;
 		auto& g_bipedAnimDtor = Address::BipedAnimDtor;
 		auto& g_createBoneMap = Address::CreateBoneMap;
@@ -853,9 +853,70 @@ namespace TF3DHud
 			return npc ? g_getSkin(npc) : nullptr;
 		}
 
+		void PopulateFallbackBipedSlot(
+			RE::BipedAnim& a_biped,
+			const RE::BGSObjectInstance& a_skinInstance,
+			RE::TESObjectARMA& a_addon,
+			RE::TESModel& a_model,
+			RE::BGSTextureSet* a_skinTexture,
+			const std::uint32_t a_slotIndex)
+		{
+			if (!Equipment::IsEditorSlotIndex(static_cast<std::int32_t>(a_slotIndex))) {
+				return;
+			}
+			if ((a_addon.GetFilledSlots() & (1u << a_slotIndex)) == 0) {
+				return;
+			}
+
+			auto& object = a_biped.object[a_slotIndex];
+			object.parent = a_skinInstance;
+			object.armorAddon = std::addressof(a_addon);
+			object.part = std::addressof(a_model);
+			if (a_skinTexture) {
+				object.skinTexture = a_skinTexture;
+			}
+		}
+
+		void PopulateFallbackBipedFromDefaultSkin(
+			RE::BipedAnim& a_biped,
+			RE::TESRace& a_race,
+			RE::TESObjectARMO& a_defaultSkin,
+			const RE::SEX a_sex)
+		{
+			const auto sexIndex = static_cast<std::uint32_t>(a_sex);
+			const auto modelIndex = sexIndex < std::to_underlying(RE::SEX::kTotal) ? sexIndex : 0;
+			const RE::BGSObjectInstance skinInstance(std::addressof(a_defaultSkin), nullptr);
+
+			for (auto& entry : a_defaultSkin.modelArray) {
+				auto* addon = entry.armorAddon;
+				if (!addon || !g_armorAddonUseModel(addon, std::addressof(a_race))) {
+					continue;
+				}
+				if (entry.index != 0 && entry.index != a_defaultSkin.armorData.index) {
+					continue;
+				}
+
+				auto& model = addon->bipedModel[modelIndex];
+				if (!model.GetModel() || model.GetModel()[0] == '\0') {
+					continue;
+				}
+
+				for (std::uint32_t slotIndex = 0; slotIndex < Equipment::kEditorSlotCount; ++slotIndex) {
+					PopulateFallbackBipedSlot(
+						a_biped,
+						skinInstance,
+						*addon,
+						model,
+						addon->skinTextures[modelIndex],
+						slotIndex);
+				}
+			}
+		}
+
 		[[nodiscard]] RE::BipedAnim* BuildDefaultSkinBiped(
 			ScopedBipedAnim& a_storage,
 			RE::PlayerCharacter& a_player,
+			const RE::BipedAnim& a_sourceBiped,
 			RE::TESRace& a_race,
 			RE::TESObjectARMO& a_defaultSkin)
 		{
@@ -864,14 +925,8 @@ namespace TF3DHud
 				return nullptr;
 			}
 
-			RE::BGSObjectInstance skinInstance(std::addressof(a_defaultSkin), nullptr);
-			Address::BorrowedBipedPointer borrowedBiped{ biped };
-			g_addArmorToBiped(
-				std::addressof(skinInstance),
-				std::addressof(a_race),
-				std::addressof(borrowedBiped),
-				a_player.GetSex(),
-				a_defaultSkin.armorData.index);
+			biped->actorRef = a_sourceBiped.GetRequester();
+			PopulateFallbackBipedFromDefaultSkin(*biped, a_race, a_defaultSkin, a_player.GetSex());
 			return biped;
 		}
 
@@ -1274,11 +1329,27 @@ namespace TF3DHud
 				const auto* entry = FindFlattenedBoneByWorldTransform(*flattened, a_skin.worldTransforms[index]);
 				auto* node = entry ? FindExistingNodeForFlattenedBone(*entry, searchRoots) : nullptr;
 				if (!node) {
+					a_skin.worldTransforms[index] = nullptr;
 					continue;
 				}
 
 				a_skin.bones[index] = node;
 				a_skin.worldTransforms[index] = std::addressof(node->world);
+			}
+		}
+
+		void RefreshSkinWorldTransformsFromBones(RE::BSSkin::Instance& a_skin)
+		{
+			if (a_skin.bones.empty() || a_skin.bones.size() > RE::BSSkin::kMaxExpectedBones) {
+				return;
+			}
+			if (a_skin.worldTransforms.empty() || a_skin.worldTransforms.size() != a_skin.bones.size()) {
+				return;
+			}
+
+			for (std::uint32_t index = 0; index < a_skin.bones.size(); ++index) {
+				auto* bone = a_skin.bones[index];
+				a_skin.worldTransforms[index] = bone ? std::addressof(bone->world) : nullptr;
 			}
 		}
 
@@ -1695,19 +1766,19 @@ namespace TF3DHud
 			for (std::uint32_t i = 0; i < a_skin.bones.size(); ++i) {
 				auto* originalBone = a_skin.bones[i];
 				if (!originalBone) {
+					if (!a_skin.worldTransforms.empty()) {
+						a_skin.worldTransforms[i] = nullptr;
+					}
 					continue;
 				}
 
 				auto* previewBone = FindNodeByName(a_previewNodes, originalBone->GetName());
-				if (!previewBone) {
-					continue;
-				}
-
-				if (a_skin.bones[i] != previewBone) {
+				if (previewBone && a_skin.bones[i] != previewBone) {
 					a_skin.bones[i] = previewBone;
 				}
 				if (!a_skin.worldTransforms.empty()) {
-					a_skin.worldTransforms[i] = std::addressof(previewBone->world);
+					auto* targetBone = previewBone ? previewBone : a_skin.bones[i];
+					a_skin.worldTransforms[i] = targetBone ? std::addressof(targetBone->world) : nullptr;
 				}
 			}
 
@@ -1753,6 +1824,9 @@ namespace TF3DHud
 
 				auto* skin = a_geometry.skinInstance.get();
 				if (!skin || sourceSkins.contains(skin)) {
+					if (skin) {
+						RefreshSkinWorldTransformsFromBones(*skin);
+					}
 					return;
 				}
 
@@ -1885,7 +1959,8 @@ namespace TF3DHud
 			if (editorSlotMask != Equipment::kAllEditorSlotsMask && fallbackSkin && playerNPC) {
 				if (auto* previewRace = ResolvePreviewRace(a_player, *playerNPC)) {
 					fallbackBipedStorage.emplace(a_player);
-					fallbackBiped = BuildDefaultSkinBiped(*fallbackBipedStorage, a_player, *previewRace, *fallbackSkin);
+					fallbackBiped =
+						BuildDefaultSkinBiped(*fallbackBipedStorage, a_player, a_sourceBiped, *previewRace, *fallbackSkin);
 				}
 			}
 			const auto externalBoneAttachmentsBefore = CountPreviewAttachmentsForSlot(RE::BIPED_OBJECT::kNone);
@@ -1971,6 +2046,7 @@ namespace TF3DHud
 						return;
 					}
 					if (sourceSkins.contains(skin)) {
+						RefreshSkinWorldTransformsFromBones(*skin);
 						return;
 					}
 					RebindSkinInstance(*skin, a_previewRoot, previewNodes);
@@ -2003,10 +2079,6 @@ namespace TF3DHud
 
 			if (fallbackBiped) {
 				for (std::int32_t i = 0; i < std::to_underlying(RE::BIPED_OBJECT::kEditorTotal); ++i) {
-					if (Equipment::IsSlotEnabled(editorSlotMask, static_cast<std::uint32_t>(i))) {
-						continue;
-					}
-
 					const auto slot = static_cast<RE::BIPED_OBJECT>(i);
 					if (!Equipment::IsBipedObjectExcludedBySlotMask(slot, a_sourceBiped.object[i], editorSlotMask, fallbackSkin)) {
 						continue;

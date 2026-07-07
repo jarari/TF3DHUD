@@ -3,12 +3,12 @@
 namespace TF3DHud::Address
 {
 	REL::Relocation<ActivateAnimationGraphManager_t*> ActivateAnimationGraphManager{ REL::ID{ 950096, 2256657 } };
-	REL::Relocation<AddArmorToBiped_t*> AddArmorToBiped{ REL::ID{ 724793, 2198529 } };
 	REL::Relocation<ActorAnimationGraphManagerCallback_t*> ActorPostLoadAnimationGraphManager{ REL::ID{ 348865, 2230547 } };
 	REL::Relocation<ActorAnimationGraphManagerCallback_t*> ActorPreLoadAnimationGraphManager{ REL::ID{ 1053762, 2230546 } };
 	REL::Relocation<ActorAnimationGraphManagerCallback_t*> ActorPreUpdateAnimationGraphManager{ REL::ID{ 442032, 2230545 } };
 	REL::Relocation<ActorBoolCallback_t*> GetFreezeGraphLocomotionChannel{ REL::ID{ 458107, 2230387 } };
 	REL::Relocation<ActorFloatCallback_t*> GetActorDirection{ REL::ID{ 279535, 2230411 } };
+	REL::Relocation<ArmorAddonUseModel_t*> ArmorAddonUseModel{ REL::ID{ 976291, 2198456 } };
 	REL::Relocation<BipedAnimCtor_t*> BipedAnimCtor{ REL::ID{ 724121, 2194336 } };
 	REL::Relocation<BipedAnimDtor_t*> BipedAnimDtor{ REL::ID{ 1494601, 2194337 } };
 	REL::Relocation<BShkbAnimationGraphCtor_t*> ConstructBShkbAnimationGraph{ REL::ID{ 1074981, 2256827 } };

@@ -55,6 +55,7 @@ namespace RE
 	class ShadowSceneNode;
 	class TESRace;
 	class BSGeometrySegmentData;
+	class TESObjectARMA;
 }
 
 namespace TF3DHud::Address
@@ -106,13 +107,12 @@ namespace TF3DHud::Address
 		kSecondRight = 3,
 	};
 
-	using AddArmorToBiped_t =
-		void(const RE::BGSObjectInstance*, RE::TESRace*, const BorrowedBipedPointer*, RE::SEX, std::uint16_t);
 	using ActivateAnimationGraphManager_t = bool(RE::BSAnimationGraphManager*);
 	using ActorAnimationGraphManagerCallback_t =
 		void(RE::IAnimationGraphManagerHolder*, const RE::BSTSmartPointer<RE::BSAnimationGraphManager>&);
 	using ActorBoolCallback_t = bool(const RE::Actor*);
 	using ActorFloatCallback_t = float(const RE::Actor*);
+	using ArmorAddonUseModel_t = bool(RE::TESObjectARMA*, RE::TESRace*);
 	using BipedAnimCtor_t = RE::BipedAnim*(RE::BipedAnim*, RE::TESObjectREFR*, bool);
 	using BipedAnimDtor_t = void(RE::BipedAnim*);
 	using BShkbAnimationGraphCtor_t =
@@ -251,12 +251,12 @@ namespace TF3DHud::Address
 	using FixFaceGenHeadSkinInstances_t = void(RE::BSFaceGenNiNode*, RE::NiAVObject*, bool);
 
 	extern REL::Relocation<ActivateAnimationGraphManager_t*> ActivateAnimationGraphManager;
-	extern REL::Relocation<AddArmorToBiped_t*> AddArmorToBiped;
 	extern REL::Relocation<ActorAnimationGraphManagerCallback_t*> ActorPostLoadAnimationGraphManager;
 	extern REL::Relocation<ActorAnimationGraphManagerCallback_t*> ActorPreLoadAnimationGraphManager;
 	extern REL::Relocation<ActorAnimationGraphManagerCallback_t*> ActorPreUpdateAnimationGraphManager;
 	extern REL::Relocation<ActorBoolCallback_t*> GetFreezeGraphLocomotionChannel;
 	extern REL::Relocation<ActorFloatCallback_t*> GetActorDirection;
+	extern REL::Relocation<ArmorAddonUseModel_t*> ArmorAddonUseModel;
 	extern REL::Relocation<BipedAnimCtor_t*> BipedAnimCtor;
 	extern REL::Relocation<BipedAnimDtor_t*> BipedAnimDtor;
 	extern REL::Relocation<BShkbAnimationGraphCtor_t*> ConstructBShkbAnimationGraph;

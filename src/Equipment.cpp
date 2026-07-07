@@ -134,7 +134,16 @@ namespace TF3DHud::Equipment
 		if (form && form == a_fallbackForm) {
 			return false;
 		}
-		return form && IsArmorExcludedBySlotMask(*form, a_editorSlotMask);
+		if (!form) {
+			return false;
+		}
+
+		const auto filledSlots = form->GetFilledSlots();
+		if (filledSlots == static_cast<std::uint32_t>(-1)) {
+			return false;
+		}
+
+		return (filledSlots & ~a_editorSlotMask) != 0;
 	}
 
 	std::uint32_t EffectiveEditorSlotMask(const RE::TESObjectREFR& a_reference)
