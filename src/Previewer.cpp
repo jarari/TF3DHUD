@@ -2356,7 +2356,14 @@ namespace TF3DHud
 				a_equipmentSignature,
 				a_morphGeometrySignature != 0 ? a_morphGeometrySignature : PreviewRebuilder::BuildMorphGeometrySignature(a_player));
 			g_rebuilder.RequestSkeletonAdjustment();
-			g_rebuilder.RequestBehaviorGraphRefresh();
+			if (GetConfig().animation.useLiveAnimation) {
+				// Equipment nodes were replaced under the existing preview root. Keep
+				// the live behavior state, but rebuild the native graph-to-scene bone
+				// mapping after the requested subgraphs finish their native setup.
+				Animations::RequestGraphTargetRefresh();
+			} else {
+				g_rebuilder.RequestBehaviorGraphRefresh();
+			}
 			g_pendingRendererAttach = true;
 			g_pendingFramingUpdate = false;
 			MarkRenderStateDirty();

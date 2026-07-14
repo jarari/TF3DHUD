@@ -40,6 +40,7 @@ namespace TF3DHud::Address
 	// BGSAnimationSystemUtils::RunActionOnActorGetFile for dynamic idle paths.
 	REL::Relocation<GetDynamicIdleFullFilePath_t*> GetDynamicIdleFullFilePath{ REL::ID{ 1060877, 2236430 } };
 	REL::Relocation<GetKeywordForType_t*> GetKeywordForType{ REL::ID{ 50302, 2227184 } };
+	REL::Relocation<GetAnimationSex_t*> GetAnimationSex{ REL::ID{ 511244, 2229675 } };
 	REL::Relocation<GetNPCHeadPart_t*> GetNPCHeadPart{ REL::ID{ 946253, 2207432 } };
 	REL::Relocation<GetNumSegments_t*> GetNumSegments{ REL::ID{ 331465, 2194432 } };
 	REL::Relocation<GetSubSegmentCount_t*> GetSubSegmentCount{ REL::ID{ 374480, 2270023 } };
@@ -50,8 +51,17 @@ namespace TF3DHud::Address
 	REL::Relocation<GetUserIndex_t*> GetUserIndex{ REL::ID{ 985810, 2270024 } };
 	REL::Relocation<InitWornObject_t*> InitWornObject{ REL::ID{ 1374346, 2207455 } };
 	REL::Relocation<UpdateAllChildrenMorphData_t*> UpdateAllChildrenMorphData{ REL::ID{ 213436, 2209481 } };
+	// IDA OG 1.10.163: InteractionUtils::GatherPreloadAnimations at 0x1401995E0.
+	// IDA AE 1.11.191: same native call shape at 0x140340950.
+	REL::Relocation<GatherPreloadAnimations_t*> GatherPreloadAnimations{ REL::ID{ 1492580, 2193921 } };
 	// IDA AE 1.11.191: BSBehaviorGraphSwapSingleton::InitializeSubGraph at 0x14138D8E0.
 	REL::Relocation<InitializeSubGraph_t*> InitializeSubGraph{ REL::ID{ 649876, 2257933 } };
+	// IDA OG 1.10.163: BSBehaviorGraphSwapSingleton::IsSubGraphLoaded at 0x1416F3A80.
+	// IDA AE 1.11.191: same function at 0x14138DBA0. A ready response is 2;
+	// the call first runs RetrieveAndSetupSharedData when the per-graph data is absent.
+	REL::Relocation<IsSubGraphLoaded_t*> IsSubGraphLoaded{ REL::ID{ 10120, 2257934 } };
+	// IDA OG 1.10.163: 0x1416F3BC0. IDA AE 1.11.191: 0x14138DD20.
+	REL::Relocation<ReleaseSubGraph_t*> ReleaseSubGraph{ REL::ID{ 874306, 2257935 } };
 	REL::Relocation<InterpretAction_t*> InterpretAction{ REL::ID{ 10433, 2229530 } };
 	REL::Relocation<NotifyAnimationGraphImpl_t*> NotifyAnimationGraphImpl{ REL::ID{ 1379025, 2214561 } };
 	REL::Relocation<QUpdateEditorDeadActorModel_t*> QUpdateEditorDeadActorModel{ REL::ID{ 16281, 2231571 } };

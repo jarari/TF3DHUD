@@ -631,6 +631,16 @@ namespace TF3DHud::Imgui
 				a_snapshot.defaultSubgraphIdShown,
 				a_snapshot.defaultSubgraphIds);
 			DrawIdList(
+				"Loading default handles",
+				a_snapshot.loadingDefaultSubgraphHandleCount,
+				a_snapshot.loadingDefaultSubgraphHandleShown,
+				a_snapshot.loadingDefaultSubgraphHandles);
+			DrawIdList(
+				"Loading default IDs",
+				a_snapshot.loadingDefaultSubgraphIdCount,
+				a_snapshot.loadingDefaultSubgraphIdShown,
+				a_snapshot.loadingDefaultSubgraphIds);
+			DrawIdList(
 				L("debug.weapon_handles"),
 				a_snapshot.weaponSubgraphHandleCount,
 				a_snapshot.weaponSubgraphHandleShown,
@@ -640,6 +650,16 @@ namespace TF3DHud::Imgui
 				a_snapshot.weaponSubgraphIdCount,
 				a_snapshot.weaponSubgraphIdShown,
 				a_snapshot.weaponSubgraphIds);
+			DrawIdList(
+				"Loading weapon handles",
+				a_snapshot.loadingWeaponSubgraphHandleCount,
+				a_snapshot.loadingWeaponSubgraphHandleShown,
+				a_snapshot.loadingWeaponSubgraphHandles);
+			DrawIdList(
+				"Loading weapon IDs",
+				a_snapshot.loadingWeaponSubgraphIdCount,
+				a_snapshot.loadingWeaponSubgraphIdShown,
+				a_snapshot.loadingWeaponSubgraphIds);
 
 			constexpr ImGuiTableFlags tableFlags =
 				ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |

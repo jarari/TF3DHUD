@@ -550,7 +550,6 @@ namespace TF3DHud::PreviewRebuilder
 	{
 		committedEquipmentSignature_ = a_equipmentSignature;
 		committedMorphGeometrySignature_ = a_morphGeometrySignature;
-		RequestBehaviorGraphRefresh();
 	}
 
 	void Controller::CommitFaceCustomization(const std::uint64_t a_faceCustomizationSignature)

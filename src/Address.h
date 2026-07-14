@@ -168,6 +168,7 @@ namespace TF3DHud::Address
 		RE::BGSKeyword*,
 		bool);
 	using GetKeywordForType_t = const RE::BGSKeyword*(const RE::Actor&, RE::KeywordType);
+	using GetAnimationSex_t = RE::SEX(const RE::Actor*);
 	using GetNPCHeadPart_t = RE::BGSHeadPart*(RE::TESNPC*, RE::BGSHeadPart::HeadPartType);
 	using GetNumSegments_t = std::uint32_t(const RE::BSGeometrySegmentData*);
 	using GetSubSegmentCount_t = std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t);
@@ -179,6 +180,13 @@ namespace TF3DHud::Address
 	using GetUserIndex_t = std::uint32_t(const RE::BSGeometrySegmentData*, std::uint32_t, std::uint32_t);
 	using InitWornObject_t = bool(RE::TESNPC*, const BorrowedBipedPointer*, const RE::BGSObjectInstance*);
 	using UpdateAllChildrenMorphData_t = void(RE::BSFaceGenNiNode*, bool);
+	using GatherPreloadAnimations_t = bool(
+		const RE::TESRace&,
+		const RE::TESObjectREFR&,
+		const RE::SubgraphIdentifier&,
+		RE::SEX,
+		bool,
+		RE::BSTObjectArena<RE::BSFixedString, RE::BSTObjectArenaScrapAlloc, 32>&);
 	using InitializeSubGraph_t = bool(
 		void*,
 		RE::BShkbAnimationGraph*,
@@ -187,6 +195,17 @@ namespace TF3DHud::Address
 		RE::BSTObjectArena<RE::BSFixedString, RE::BSTObjectArenaScrapAlloc, 32>*,
 		const std::int32_t*,
 		RE::SubgraphHandle*);
+	using IsSubGraphLoaded_t = std::uint32_t(
+		void*,
+		RE::BShkbAnimationGraph*,
+		const RE::SubgraphHandle*,
+		const std::int32_t*);
+	using ReleaseSubGraph_t = bool(
+		void*,
+		RE::BShkbAnimationGraph*,
+		const RE::SubgraphHandle*,
+		RE::SubgraphIdentifier*,
+		bool);
 	using InterpretAction_t = bool(void*);
 	using NotifyAnimationGraphImpl_t = bool(RE::IAnimationGraphManagerHolder*, const RE::BSFixedString&);
 	using ProcessGraphEvent_t = std::uint32_t(RE::BSAnimationGraphManager*, const RE::BSFixedString&);
@@ -282,6 +301,7 @@ namespace TF3DHud::Address
 	extern REL::Relocation<GetGraphVariableInt_t*> GetBShkbGraphVariableInt;
 	extern REL::Relocation<GetDynamicIdleFullFilePath_t*> GetDynamicIdleFullFilePath;
 	extern REL::Relocation<GetKeywordForType_t*> GetKeywordForType;
+	extern REL::Relocation<GetAnimationSex_t*> GetAnimationSex;
 	extern REL::Relocation<GetNPCHeadPart_t*> GetNPCHeadPart;
 	extern REL::Relocation<GetNumSegments_t*> GetNumSegments;
 	extern REL::Relocation<GetSubSegmentCount_t*> GetSubSegmentCount;
@@ -292,7 +312,10 @@ namespace TF3DHud::Address
 	extern REL::Relocation<GetUserIndex_t*> GetUserIndex;
 	extern REL::Relocation<InitWornObject_t*> InitWornObject;
 	extern REL::Relocation<UpdateAllChildrenMorphData_t*> UpdateAllChildrenMorphData;
+	extern REL::Relocation<GatherPreloadAnimations_t*> GatherPreloadAnimations;
 	extern REL::Relocation<InitializeSubGraph_t*> InitializeSubGraph;
+	extern REL::Relocation<IsSubGraphLoaded_t*> IsSubGraphLoaded;
+	extern REL::Relocation<ReleaseSubGraph_t*> ReleaseSubGraph;
 	extern REL::Relocation<InterpretAction_t*> InterpretAction;
 	extern REL::Relocation<NotifyAnimationGraphImpl_t*> NotifyAnimationGraphImpl;
 	extern REL::Relocation<QUpdateEditorDeadActorModel_t*> QUpdateEditorDeadActorModel;

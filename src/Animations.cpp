@@ -53,6 +53,7 @@
 #include <cctype>
 #include <cstdio>
 #include <limits>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -81,6 +82,8 @@ namespace TF3DHud::Animations
 			"moveStop",
 			"sprintStart",
 			"sprintStop",
+			"swimStart",
+			"swimStop",
 			"walkStart",
 			"runStart",
 			"walkRunBlendStart",
@@ -331,6 +334,26 @@ namespace TF3DHud::Animations
 			});
 		}
 
+		[[nodiscard]] bool IsWeaponSubgraphDependentEvent(const RE::BSFixedString& a_eventName)
+		{
+			return ContainsEngineFixedString(a_eventName, kLiveMirrorAlwaysEvents) ||
+			       ContainsEngineFixedString(a_eventName, kLiveMirrorWeaponFireEvents) ||
+			       ContainsEngineFixedString(a_eventName, kLiveMirrorWeaponReloadEvents) ||
+			       ContainsEngineFixedString(a_eventName, kLiveMirrorMeleeEvents) ||
+			       ContainsEngineFixedString(a_eventName, kLiveMirrorThrowEvents);
+		}
+
+		[[nodiscard]] bool IsWeaponForceEquipEvent(const RE::BSFixedString& a_eventName)
+		{
+			return a_eventName == std::string_view{ "weapForceEquip" } ||
+			       a_eventName == std::string_view{ "g_weapForceEquipInstant" };
+		}
+
+		[[nodiscard]] bool IsWeaponEquipEvent(const RE::BSFixedString& a_eventName)
+		{
+			return a_eventName == std::string_view{ "weapEquip" };
+		}
+
 		[[nodiscard]] bool IsLiveMirrorEventWhitelisted(const char* a_event)
 		{
 			if (!a_event || a_event[0] == '\0') {
@@ -379,6 +402,13 @@ namespace TF3DHud::Animations
 			std::uint32_t result{ 0 };
 		};
 
+		enum class PreviewWeaponBehaviorGraph
+		{
+			kUnknown,
+			kMelee,
+			kWeapon,
+		};
+
 		std::string g_idlePlaybackKey;
 		float g_idlePlaybackTime{ 0.0F };
 		float g_idleClipDuration{ 0.0F };
@@ -396,6 +426,7 @@ namespace TF3DHud::Animations
 		auto& g_getBShkbGraphVariableInt = Address::GetBShkbGraphVariableInt;
 		auto& g_getDynamicIdleFullFilePath = Address::GetDynamicIdleFullFilePath;
 		auto& g_getKeywordForType = Address::GetKeywordForType;
+		auto& g_getAnimationSex = Address::GetAnimationSex;
 		auto& g_actorPreUpdateAnimationGraphManager = Address::ActorPreUpdateAnimationGraphManager;
 		auto& g_actorPreLoadAnimationGraphManager = Address::ActorPreLoadAnimationGraphManager;
 		auto& g_actorPostLoadAnimationGraphManager = Address::ActorPostLoadAnimationGraphManager;
@@ -414,6 +445,9 @@ namespace TF3DHud::Animations
 		auto& g_requestIdles = Address::RequestIdles;
 		auto& g_retrieveSubGraphData = Address::RetrieveSubGraphData;
 		auto& g_initializeSubGraph = Address::InitializeSubGraph;
+		auto& g_isSubGraphLoaded = Address::IsSubGraphLoaded;
+		auto& g_releaseSubGraph = Address::ReleaseSubGraph;
+		auto& g_gatherPreloadAnimations = Address::GatherPreloadAnimations;
 		auto& g_behaviorGraphSwapSingleton = Address::BehaviorGraphSwapSingleton;
 		auto& g_animationSubGraphDataSingleton = Address::AnimationSubGraphDataSingleton;
 		auto& g_activateAnimationGraphManager = Address::ActivateAnimationGraphManager;
@@ -1833,6 +1867,16 @@ namespace TF3DHud::Animations
 				}
 
 				SubgraphPreloadArena lowPriorityPreloadFiles;
+				// IDA: native default/weapon SubBehaviorLoadingFunctor gathers
+				// actor-specific dynamic animation files into the second preload arena.
+				// These include the transition clips used when swapping weapon graphs.
+				(void)g_gatherPreloadAnimations(
+					*race,
+					*sourceActor_,
+					a_identifier,
+					g_getAnimationSex(sourceActor_),
+					false,
+					lowPriorityPreloadFiles);
 				RE::SubgraphHandle handle;
 				if (!g_initializeSubGraph(
 						swapSingleton,
@@ -1851,39 +1895,155 @@ namespace TF3DHud::Animations
 				return true;
 			}
 
-			[[nodiscard]] bool LoadThirdPersonSubgraphRoots(
-				const RE::MiddleHighProcessData& a_middleHigh,
-				const std::int32_t& a_priority,
-				bool& a_attempted)
+			[[nodiscard]] static bool ContainsSubgraphId(
+				const RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_ids,
+				const RE::SubgraphIdentifier& a_id)
 			{
-				bool loaded = false;
-				for (const auto& root : a_middleHigh.subGraphIdleManagerRoots) {
-					if (root.forFirstPerson || root.subGraphID.identifier == 0) {
-						continue;
-					}
-
-					a_attempted = true;
-					// IDA: the live actor requests the default subgraph before the
-					// weapon subgraph, and AIProcess stores resulting idle roots in
-					// request order. We mirror that resolved third-person order only.
-					if (defaultSubgraphIds_.empty()) {
-						loaded |= LoadMirroredSubgraph(
-							root.subGraphID,
-							a_priority,
-							defaultSubgraphHandles_,
-							defaultSubgraphIds_);
-					} else {
-						loaded |= LoadMirroredSubgraph(
-							root.subGraphID,
-							a_priority,
-							weaponSubgraphHandles_,
-							weaponSubgraphIds_);
-					}
-				}
-				return loaded;
+				return std::any_of(a_ids.begin(), a_ids.end(), [&](const auto& candidate) {
+					return candidate.identifier == a_id.identifier;
+				});
 			}
 
-			bool RequestInitialSubgraphs()
+			[[nodiscard]] static bool ContainsSubgraphId(
+				const std::vector<RE::SubgraphIdentifier>& a_ids,
+				const RE::SubgraphIdentifier& a_id)
+			{
+				return std::any_of(a_ids.begin(), a_ids.end(), [&](const auto& candidate) {
+					return candidate.identifier == a_id.identifier;
+				});
+			}
+
+			[[nodiscard]] static bool SubgraphIdsEqual(
+				const RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_loaded,
+				const std::vector<RE::SubgraphIdentifier>& a_requested)
+			{
+				if (a_loaded.size() != a_requested.size()) {
+					return false;
+				}
+
+				return std::all_of(a_loaded.begin(), a_loaded.end(), [&](const auto& loaded) {
+					return ContainsSubgraphId(a_requested, loaded);
+				});
+			}
+
+			[[nodiscard]] static bool LoadedSubgraphsAreRequested(
+				const RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_loaded,
+				const std::vector<RE::SubgraphIdentifier>& a_requested)
+			{
+				return std::all_of(a_loaded.begin(), a_loaded.end(), [&](const auto& loaded) {
+					return ContainsSubgraphId(a_requested, loaded);
+				});
+			}
+
+			[[nodiscard]] bool AreSubgraphsReady(
+				const RE::BSTSmallArray<RE::SubgraphHandle, 2>& a_handles,
+				const std::int32_t& a_priority) const
+			{
+				if (a_handles.empty()) {
+					return true;
+				}
+
+				auto graph = GetActivePreviewGraph();
+				auto* const swapSingleton = *g_behaviorGraphSwapSingleton;
+				const auto* const handles = GetEngineSmallArrayStorage(a_handles);
+				if (!graph || !swapSingleton || !handles) {
+					return false;
+				}
+
+				for (std::uint32_t index = 0; index < a_handles.size(); ++index) {
+					// IDA: IsSubGraphLoaded returns 0 when the handle is absent, 1 while
+					// loading, and 2 only after RetrieveAndSetupSharedData has installed
+					// the per-graph event, variable, and character-property symbol maps.
+					if (g_isSubGraphLoaded(
+							swapSingleton,
+							graph.get(),
+							std::addressof(handles[index]),
+							std::addressof(a_priority)) != 2) {
+						return false;
+					}
+				}
+
+				return true;
+			}
+
+			bool ReleaseMirroredSubgraphs(
+				RE::BSTSmallArray<RE::SubgraphHandle, 2>& a_handles,
+				RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_identifiers)
+			{
+				if (a_handles.empty() && a_identifiers.empty()) {
+					return true;
+				}
+
+				auto graph = GetActivePreviewGraph();
+				auto* const swapSingleton = *g_behaviorGraphSwapSingleton;
+				const auto* const handles = GetEngineSmallArrayStorage(a_handles);
+				const auto* const identifiers = GetEngineSmallArrayStorage(a_identifiers);
+				if (!graph || !swapSingleton || !handles || !identifiers || a_handles.size() != a_identifiers.size()) {
+					return false;
+				}
+
+				RE::BSTSmallArray<RE::SubgraphHandle, 2> retainedHandles;
+				RE::BSTSmallArray<RE::SubgraphIdentifier, 2> retainedIdentifiers;
+				for (std::uint32_t index = 0; index < a_handles.size(); ++index) {
+					auto identifier = identifiers[index];
+					if (!g_releaseSubGraph(
+							swapSingleton,
+							graph.get(),
+							std::addressof(handles[index]),
+							std::addressof(identifier),
+							true)) {
+						retainedHandles.push_back(handles[index]);
+						retainedIdentifiers.push_back(identifiers[index]);
+					}
+				}
+
+				a_handles = std::move(retainedHandles);
+				a_identifiers = std::move(retainedIdentifiers);
+				return a_handles.empty();
+			}
+
+			bool ReconcileSubgraphSet(
+				const std::vector<RE::SubgraphIdentifier>& a_requested,
+				const std::int32_t& a_priority,
+				RE::BSTSmallArray<RE::SubgraphHandle, 2>& a_currentHandles,
+				RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_currentIdentifiers,
+				RE::BSTSmallArray<RE::SubgraphHandle, 2>& a_loadingHandles,
+				RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_loadingIdentifiers)
+			{
+				if (SubgraphIdsEqual(a_currentIdentifiers, a_requested)) {
+					// A rapid request can return to the current role while a different
+					// replacement is still loading. Vanilla discards only that loading set.
+					return ReleaseMirroredSubgraphs(a_loadingHandles, a_loadingIdentifiers);
+				}
+
+				// IDA: RequestLoadAnimationsForWeaponChange leaves current handles
+				// active and replaces only the separate loading-handle container.
+				if (!LoadedSubgraphsAreRequested(a_loadingIdentifiers, a_requested) &&
+					!ReleaseMirroredSubgraphs(a_loadingHandles, a_loadingIdentifiers)) {
+					return false;
+				}
+
+				for (const auto& identifier : a_requested) {
+					if (!ContainsSubgraphId(a_loadingIdentifiers, identifier) &&
+						!LoadMirroredSubgraph(
+							identifier, a_priority, a_loadingHandles, a_loadingIdentifiers)) {
+						return false;
+					}
+				}
+
+				if (!a_requested.empty() && !AreSubgraphsReady(a_loadingHandles, a_priority)) {
+					return false;
+				}
+
+				// IDA: ClearUnusedSubgraph swaps loading/current containers only after
+				// IsAnimationSubGraphLoaded succeeds, then releases the old current set.
+				// Release keeps an active old state pending until its blend exits.
+				std::swap(a_currentHandles, a_loadingHandles);
+				std::swap(a_currentIdentifiers, a_loadingIdentifiers);
+				return ReleaseMirroredSubgraphs(a_loadingHandles, a_loadingIdentifiers);
+			}
+
+			bool ReconcileRequestedSubgraphs()
 			{
 				if (!sourceActor_ || !sourceActor_->currentProcess || !manager_) {
 					return false;
@@ -1904,8 +2064,62 @@ namespace TF3DHud::Animations
 					return false;
 				}
 
-				bool thirdPersonAttempted = false;
-				return LoadThirdPersonSubgraphRoots(*middleHigh, priority, thirdPersonAttempted) && thirdPersonAttempted;
+				std::vector<RE::SubgraphIdentifier> requestedDefault;
+				std::vector<RE::SubgraphIdentifier> requestedWeapon;
+				// IDA: requested IDs describe an in-flight replacement. Once the
+				// request commits, AIProcess retains the role in current IDs and can
+				// clear the requested array. Use requested only while it is populated.
+				const auto& defaultIntent = middleHigh->requestedDefaultSubGraphID.empty() ?
+					middleHigh->currentDefaultSubGraphID : middleHigh->requestedDefaultSubGraphID;
+				const auto& weaponIntent = middleHigh->requestedWeaponSubGraphID.empty() ?
+					middleHigh->currentWeaponSubGraphID : middleHigh->requestedWeaponSubGraphID;
+				for (const auto& root : middleHigh->subGraphIdleManagerRoots) {
+					if (root.forFirstPerson || root.subGraphID.identifier == 0) {
+						continue;
+					}
+
+					if (ContainsSubgraphId(defaultIntent, root.subGraphID) &&
+						!ContainsSubgraphId(requestedDefault, root.subGraphID)) {
+						requestedDefault.push_back(root.subGraphID);
+					} else if (ContainsSubgraphId(weaponIntent, root.subGraphID) &&
+						!ContainsSubgraphId(requestedWeapon, root.subGraphID)) {
+						requestedWeapon.push_back(root.subGraphID);
+					}
+				}
+
+				// A non-empty request without a resolved third-person idle root is still
+				// loading. Keep the previous role until the new root becomes observable.
+				const bool defaultReady = defaultIntent.empty() || !requestedDefault.empty();
+				const bool weaponReady = weaponIntent.empty() || !requestedWeapon.empty();
+				const bool weaponRoleChanging = weaponReady &&
+					!SubgraphIdsEqual(weaponSubgraphIds_, requestedWeapon);
+				bool reconciled = true;
+				if (defaultReady) {
+					reconciled &= ReconcileSubgraphSet(
+						requestedDefault,
+						priority,
+						defaultSubgraphHandles_,
+						defaultSubgraphIds_,
+						loadingDefaultSubgraphHandles_,
+						loadingDefaultSubgraphIds_);
+				}
+				bool weaponReconciled = false;
+				if (weaponReady) {
+					weaponReconciled = ReconcileSubgraphSet(
+						requestedWeapon,
+						priority,
+						weaponSubgraphHandles_,
+						weaponSubgraphIds_,
+						loadingWeaponSubgraphHandles_,
+						loadingWeaponSubgraphIds_);
+						reconciled &= weaponReconciled;
+				}
+				if (weaponRoleChanging && !weaponSubgraphIds_.empty() &&
+					SubgraphIdsEqual(weaponSubgraphIds_, requestedWeapon) && IsWeaponSubgraphLinked()) {
+					ScheduleWeaponEquipAfterCommit();
+				}
+				weaponSubgraphRequestPending_ = !weaponReady || !weaponReconciled;
+				return reconciled && defaultReady && weaponReady;
 			}
 
 			bool ActivatePreviewGraphManager()
@@ -1932,8 +2146,7 @@ namespace TF3DHud::Animations
 
 			bool IsSubgraphLinked(
 				const RE::BSTSmallArray<RE::SubgraphHandle, 2>& a_handles,
-				const RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_identifiers,
-				const std::uint32_t a_fallbackSlot) const
+				const RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_identifiers) const
 			{
 				auto graph = GetActivePreviewGraph();
 				if (!graph || a_handles.empty()) {
@@ -1947,34 +2160,39 @@ namespace TF3DHud::Animations
 				}
 
 				const auto* const handles = GetSubgraphHandleStorage(a_handles);
-				if (handles && handles[0].handle != 0) {
-					const auto handle = handles[0].handle;
-					for (std::uint32_t index = 0; index < swapData->size; ++index) {
-						const auto& entry = swapData->entries[index];
-						if (entry.handle.handle == handle && entry.sharedData) {
-							return true;
-						}
-					}
+				if (!handles || a_handles.size() != a_identifiers.size()) {
+					return false;
 				}
 
-				// IDA: BSBehaviorGraphSwapSingleton::UpdateForManager/
-				// OnActivateImpl relinks swap entries as state index+1.
-				// RequestInitialSubgraphs requests default first, then weapon,
-				// so the fallback slot matches the request order.
-				return swapData->size > a_fallbackSlot &&
-				       swapData->entries[a_fallbackSlot].sharedData &&
-				       swapData->entries[a_fallbackSlot].useCount != 0 &&
-				       a_identifiers.size() > 0;
+				for (std::uint32_t handleIndex = 0; handleIndex < a_handles.size(); ++handleIndex) {
+					if (handles[handleIndex].handle == 0) {
+						return false;
+					}
+
+					bool linked = false;
+					for (std::uint32_t index = 0; index < swapData->size; ++index) {
+						const auto& entry = swapData->entries[index];
+						if (entry.handle.handle == handles[handleIndex].handle &&
+							entry.sharedData && entry.useCount != 0 && entry.pendingRemove == 0) {
+							linked = true;
+							break;
+						}
+					}
+					if (!linked) {
+						return false;
+					}
+				}
+				return true;
 			}
 
 			bool IsDefaultSubgraphLinked() const
 			{
-				return IsSubgraphLinked(defaultSubgraphHandles_, defaultSubgraphIds_, 0);
+				return IsSubgraphLinked(defaultSubgraphHandles_, defaultSubgraphIds_);
 			}
 
 			bool IsWeaponSubgraphLinked() const
 			{
-				return IsSubgraphLinked(weaponSubgraphHandles_, weaponSubgraphIds_, 1);
+				return IsSubgraphLinked(weaponSubgraphHandles_, weaponSubgraphIds_);
 			}
 
 			bool AreRequestedSubgraphsLinked() const
@@ -2149,6 +2367,16 @@ namespace TF3DHud::Animations
 					a_snapshot.defaultSubgraphIdShown,
 					a_snapshot.defaultSubgraphIds);
 				CaptureSubgraphHandles(
+					loadingDefaultSubgraphHandles_,
+					a_snapshot.loadingDefaultSubgraphHandleCount,
+					a_snapshot.loadingDefaultSubgraphHandleShown,
+					a_snapshot.loadingDefaultSubgraphHandles);
+				CaptureSubgraphIds(
+					loadingDefaultSubgraphIds_,
+					a_snapshot.loadingDefaultSubgraphIdCount,
+					a_snapshot.loadingDefaultSubgraphIdShown,
+					a_snapshot.loadingDefaultSubgraphIds);
+				CaptureSubgraphHandles(
 					weaponSubgraphHandles_,
 					a_snapshot.weaponSubgraphHandleCount,
 					a_snapshot.weaponSubgraphHandleShown,
@@ -2158,6 +2386,16 @@ namespace TF3DHud::Animations
 					a_snapshot.weaponSubgraphIdCount,
 					a_snapshot.weaponSubgraphIdShown,
 					a_snapshot.weaponSubgraphIds);
+				CaptureSubgraphHandles(
+					loadingWeaponSubgraphHandles_,
+					a_snapshot.loadingWeaponSubgraphHandleCount,
+					a_snapshot.loadingWeaponSubgraphHandleShown,
+					a_snapshot.loadingWeaponSubgraphHandles);
+				CaptureSubgraphIds(
+					loadingWeaponSubgraphIds_,
+					a_snapshot.loadingWeaponSubgraphIdCount,
+					a_snapshot.loadingWeaponSubgraphIdShown,
+					a_snapshot.loadingWeaponSubgraphIds);
 
 				auto graph = GetActivePreviewGraph();
 				if (!graph) {
@@ -2234,12 +2472,23 @@ namespace TF3DHud::Animations
 					return;
 				}
 
+				const RE::BSFixedString eventName(a_eventName);
+				if (!a_idleAnimationMode && IsWeaponForceEquipEvent(eventName)) {
+					// The preview schedules its own third-person force-ready event when its
+					// replacement weapon subgraph commits. Mirroring the live graph's IDLE
+					// event races initialization and can address the wrong behavior graph.
+					return;
+				}
+				if (!a_idleAnimationMode && weaponEquipAfterUpdate_ && IsWeaponEquipEvent(eventName)) {
+					return;
+				}
+
 				// IDA: BSAnimationGraphManager::ProcessGraphEvent returns whether
 				// the active graph accepted the request. The live actor can be on
 				// a first-person graph while the preview is third-person, so this
 				// result is not a reliable preview eligibility test.
 				(void)a_result;
-				QueueMirroredEvent(GetPreviewMirroredEvent(RE::BSFixedString(a_eventName)));
+				QueueMirroredEvent(GetPreviewMirroredEvent(eventName));
 			}
 
 			void ReconcileJumpLandingFromLive()
@@ -2296,6 +2545,70 @@ namespace TF3DHud::Animations
 				return RE::BSFixedString("moveStartAnimated");
 			}
 
+			[[nodiscard]] PreviewWeaponBehaviorGraph GetTargetWeaponBehaviorGraph() const
+			{
+				const auto* process = sourceActor_ ? sourceActor_->currentProcess : nullptr;
+				const auto* middleHigh = process ? process->middleHigh : nullptr;
+				if (!middleHigh || weaponSubgraphIds_.empty()) {
+					return PreviewWeaponBehaviorGraph::kUnknown;
+				}
+
+				PreviewWeaponBehaviorGraph result = PreviewWeaponBehaviorGraph::kUnknown;
+				for (const auto& root : middleHigh->subGraphIdleManagerRoots) {
+					if (root.forFirstPerson || root.idleRootName.empty() ||
+						!ContainsSubgraphId(weaponSubgraphIds_, root.subGraphID)) {
+						continue;
+					}
+
+					const auto behaviorLeaf = ToLowerNormalized(GetClipLeaf(root.idleRootName.c_str()));
+					PreviewWeaponBehaviorGraph candidate = PreviewWeaponBehaviorGraph::kUnknown;
+					if (behaviorLeaf == "meleebehavior" ||
+						behaviorLeaf.ends_with("meleewrappingbehavior") ||
+						behaviorLeaf.ends_with("powerfistwrappingbehavior")) {
+						candidate = PreviewWeaponBehaviorGraph::kMelee;
+					} else if (behaviorLeaf == "weaponbehavior" ||
+						behaviorLeaf.ends_with("weaponwrappingbehavior") ||
+						behaviorLeaf.ends_with("wrappingweaponbehavior")) {
+						candidate = PreviewWeaponBehaviorGraph::kWeapon;
+					}
+
+					if (candidate == PreviewWeaponBehaviorGraph::kUnknown) {
+						continue;
+					}
+					if (result != PreviewWeaponBehaviorGraph::kUnknown && result != candidate) {
+						return PreviewWeaponBehaviorGraph::kUnknown;
+					}
+					result = candidate;
+				}
+
+				return result;
+			}
+
+			[[nodiscard]] bool IsLiveWeaponDrawingOrDrawn() const
+			{
+				return sourceActor_ &&
+				       (sourceActor_->weaponState == RE::WEAPON_STATE::kDrawing ||
+						sourceActor_->weaponState == RE::WEAPON_STATE::kDrawn);
+			}
+
+			void ScheduleWeaponEquipAfterCommit()
+			{
+				if (!GetConfig().animation.useLiveAnimation || !initialStateApplied_ ||
+					!IsLiveWeaponDrawingOrDrawn() ||
+					GetTargetWeaponBehaviorGraph() == PreviewWeaponBehaviorGraph::kUnknown) {
+					return;
+				}
+
+				// Reconcile runs before the preview manager update. ProcessMirroredEvents
+				// consumes this afterward, so the linked subgraph receives one initialization
+				// update before the target graph's equip transition is requested.
+				weaponEquipAfterUpdate_ = true;
+				std::scoped_lock lock(pendingMirroredEventsLock_);
+				std::erase_if(pendingMirroredEvents_, [](const auto& eventName) {
+					return IsWeaponEquipEvent(eventName);
+				});
+			}
+
 			[[nodiscard]] bool IsLiveWeaponHolstered() const
 			{
 				const auto* process = sourceActor_ ? sourceActor_->currentProcess : nullptr;
@@ -2308,15 +2621,44 @@ namespace TF3DHud::Animations
 				std::vector<RE::BSFixedString> events;
 				{
 					std::scoped_lock lock(pendingMirroredEventsLock_);
-					if (pendingMirroredEvents_.empty()) {
+					if (pendingMirroredEvents_.empty() && !weaponEquipAfterUpdate_) {
 						return;
 					}
 					events.swap(pendingMirroredEvents_);
 				}
 
-				for (const auto& eventName : events) {
+				if (weaponEquipAfterUpdate_) {
+					weaponEquipAfterUpdate_ = false;
+					(void)NotifyAnimationGraphImpl(RE::BSFixedString("weapEquip"));
+				}
+
+				std::size_t processed = 0;
+				for (; processed < events.size(); ++processed) {
+					const auto& eventName = events[processed];
+					// IDA: Actor::PollItemEquip holds the equip action until the new
+					// weapon subgraph finishes loading. Preserve that ordering in the
+					// preview instead of dispatching equip/fire events into the old graph.
+					if (GetConfig().animation.useLiveAnimation &&
+						(weaponSubgraphRequestPending_ ||
+							(!weaponSubgraphHandles_.empty() && !IsWeaponSubgraphLinked())) &&
+						IsWeaponSubgraphDependentEvent(eventName)) {
+						break;
+					}
+
 					ApplyPreviewWeaponVisibilityEvent(eventName);
 					(void)NotifyAnimationGraphImpl(eventName);
+				}
+
+				if (processed < events.size()) {
+					std::scoped_lock lock(pendingMirroredEventsLock_);
+					std::vector<RE::BSFixedString> deferred;
+					deferred.reserve(events.size() - processed + pendingMirroredEvents_.size());
+					deferred.insert(deferred.end(), events.begin() + processed, events.end());
+					deferred.insert(
+						deferred.end(),
+						std::make_move_iterator(pendingMirroredEvents_.begin()),
+						std::make_move_iterator(pendingMirroredEvents_.end()));
+					pendingMirroredEvents_ = std::move(deferred);
 				}
 			}
 
@@ -2858,8 +3200,14 @@ namespace TF3DHud::Animations
 			std::vector<RE::BSFixedString> pendingMirroredEvents_;
 			RE::BSTSmallArray<RE::SubgraphHandle, 2> defaultSubgraphHandles_;
 			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> defaultSubgraphIds_;
+			RE::BSTSmallArray<RE::SubgraphHandle, 2> loadingDefaultSubgraphHandles_;
+			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> loadingDefaultSubgraphIds_;
 			RE::BSTSmallArray<RE::SubgraphHandle, 2> weaponSubgraphHandles_;
 			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> weaponSubgraphIds_;
+			RE::BSTSmallArray<RE::SubgraphHandle, 2> loadingWeaponSubgraphHandles_;
+			RE::BSTSmallArray<RE::SubgraphIdentifier, 2> loadingWeaponSubgraphIds_;
+			bool weaponSubgraphRequestPending_{ false };
+			bool weaponEquipAfterUpdate_{ false };
 			SpeedChannelDebugInfo speedDebug_;
 			std::int32_t lastLiveSyncJumpState_{ 0 };
 			bool initialStateApplied_{ false };
@@ -3053,7 +3401,10 @@ namespace TF3DHud::Animations
 		std::unique_ptr<PreviewAnimationGraphHolder> g_holder;
 		std::string g_project;
 		std::string g_lastDiagnostic;
-		std::uint64_t g_liveSubgraphSignature{ 0 };
+		RE::TESRace* g_graphRace{ nullptr };
+		std::uint32_t g_graphSex{ 0 };
+		bool g_liveAnimationMode{ false };
+		bool g_graphTargetRefreshRequested{ false };
 		std::recursive_mutex g_stateLock;
 		DynamicActivationIdleMap g_dynamicActivationIdles;
 		std::mutex g_pendingLiveGraphRequestsLock;
@@ -3087,51 +3438,14 @@ namespace TF3DHud::Animations
 				static_cast<bool>(manager);
 		}
 
-		void MixHash(std::uint64_t& a_hash, const std::uint64_t a_value)
-		{
-			a_hash ^= a_value + 0x9E3779B97F4A7C15ull + (a_hash << 6) + (a_hash >> 2);
-		}
-
-		void HashSubgraphIds(std::uint64_t& a_hash, const RE::BSTSmallArray<RE::SubgraphIdentifier, 2>& a_ids)
-		{
-			MixHash(a_hash, a_ids.size());
-			for (const auto& id : a_ids) {
-				MixHash(a_hash, static_cast<std::uint64_t>(id.identifier));
-			}
-		}
-
-		[[nodiscard]] bool TryGetLiveSubgraphRequestSignature(
-			RE::PlayerCharacter& a_player,
-			std::uint64_t& a_signature,
-			std::string& a_reason)
-		{
-			a_signature = 0;
-			auto* process = a_player.currentProcess;
-			if (!process) {
-				a_reason = "live player process is null";
-				return false;
-			}
-
-			auto* middleHigh = process->middleHigh;
-			if (!middleHigh) {
-				a_reason = "live player MiddleHighProcessData is null";
-				return false;
-			}
-
-			std::uint64_t hash = 0xCBF29CE484222325ull;
-			// Use the live requested IDs as preview intent. Current IDs and idle roots
-			// are engine load results and can churn while requests are being serviced.
-			HashSubgraphIds(hash, middleHigh->requestedDefaultSubGraphID);
-			HashSubgraphIds(hash, middleHigh->requestedWeaponSubGraphID);
-			a_signature = hash;
-			return true;
-		}
-
 		void Clear(const bool a_preserveIdlePlayback = false)
 		{
 			g_holder.reset();
 			g_project.clear();
-			g_liveSubgraphSignature = 0;
+			g_graphRace = nullptr;
+			g_graphSex = 0;
+			g_liveAnimationMode = false;
+			g_graphTargetRefreshRequested = false;
 			if (!a_preserveIdlePlayback) {
 				g_idlePlaybackKey.clear();
 				g_idlePlaybackTime = 0.0F;
@@ -3306,25 +3620,26 @@ namespace TF3DHud::Animations
 				return false;
 			}
 
-			std::uint64_t liveSubgraphSignature = 0;
-			std::string liveSubgraphReason;
-			if (!TryGetLiveSubgraphRequestSignature(a_player, liveSubgraphSignature, liveSubgraphReason)) {
-				Clear();
-				LogDiagnostic("skipped: " + liveSubgraphReason);
-				return false;
-			}
-
 			if (!HasLiveAnimationGraphManager(a_player)) {
 				Clear();
 				LogDiagnostic("skipped: live player animation graph manager is unavailable");
 				return false;
 			}
 
+			auto* race = a_player.GetVisualsRace();
+			if (!race) {
+				race = a_player.race;
+			}
+			const auto sex = static_cast<std::uint32_t>(g_getAnimationSex(std::addressof(a_player)));
+			const bool liveAnimationMode = GetConfig().animation.useLiveAnimation;
+
 			if (g_holder &&
 				g_holder->SourceActor() == std::addressof(a_player) &&
 				g_holder->TargetRoot() == std::addressof(a_previewRoot) &&
 				g_project == project &&
-				g_liveSubgraphSignature == liveSubgraphSignature &&
+				g_graphRace == race &&
+				g_graphSex == sex &&
+				g_liveAnimationMode == liveAnimationMode &&
 				g_holder->IsCurrentSourceManager() &&
 				g_holder->HasManager()) {
 				return true;
@@ -3347,14 +3662,16 @@ namespace TF3DHud::Animations
 				return false;
 			}
 			holder->PrepareGraphManagerForSubgraphs();
-			(void)holder->RequestInitialSubgraphs();
+			(void)holder->ReconcileRequestedSubgraphs();
 			holder->PrepareGraphManagerForSubgraphs();
 			if (!holder->ActivatePreviewGraphManager()) {
 				LogDiagnostic("manager discarded: Activate failed for project '" + project + "'");
 				return false;
 			}
 			g_project = project;
-			g_liveSubgraphSignature = liveSubgraphSignature;
+			g_graphRace = race;
+			g_graphSex = sex;
+			g_liveAnimationMode = liveAnimationMode;
 			g_holder = std::move(holder);
 			return true;
 		}
@@ -3385,6 +3702,12 @@ namespace TF3DHud::Animations
 		if (g_holder) {
 			g_holder->ResetInitialState();
 		}
+	}
+
+	void RequestGraphTargetRefresh()
+	{
+		std::scoped_lock lock(g_stateLock);
+		g_graphTargetRefreshRequested = true;
 	}
 
 	void ObserveLoadedIdle(RE::TESIdleForm* a_idle)
@@ -3431,7 +3754,20 @@ namespace TF3DHud::Animations
 			return;
 		}
 
+		const bool subgraphsReconciled = g_holder->ReconcileRequestedSubgraphs();
 		g_holder->RefreshPendingSubgraphLoads();
+		if (g_graphTargetRefreshRequested && subgraphsReconciled) {
+			// IDA OG: BSAnimationGraphManager::SetTargets accepts the existing target.
+			// BShkbAnimationGraph::SetTargetImpl still clears and recreates its bone
+			// mapping when the final argument is true, without replacing the manager
+			// or reactivating the behavior graph. Do this only after the requested
+			// subgraphs have installed their shared data and animation skeletons.
+			if (g_holder->TargetAnimationGraph()) {
+				g_graphTargetRefreshRequested = false;
+			} else {
+				LogDiagnostic("graph target refresh failed; retrying after equipment sync");
+			}
+		}
 		g_holder->TryApplyInitialAnimationState();
 
 		const auto previewRootLocal = a_previewRoot.GetLocalTransform();
