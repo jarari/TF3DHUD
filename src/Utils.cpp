@@ -50,6 +50,32 @@ namespace TF3DHud
 		REL::WriteSafeData(a_source, assembly);
 	}
 
+	bool ReadExistingBranchTarget(
+		const std::uintptr_t a_targetAddress,
+		const std::byte* a_targetBytes,
+		std::uintptr_t& a_branchTarget)
+	{
+		if (a_targetBytes[0] == std::byte{ 0xE9 }) {
+			std::int32_t oldDisplacement = 0;
+			std::memcpy(std::addressof(oldDisplacement), a_targetBytes + 1, sizeof(oldDisplacement));
+			a_branchTarget = a_targetAddress + sizeof(REL::ASM::JMP5) + oldDisplacement;
+			return a_branchTarget != 0;
+		}
+
+		if (a_targetBytes[0] == std::byte{ 0xFF } && a_targetBytes[1] == std::byte{ 0x25 }) {
+			std::int32_t oldDisplacement = 0;
+			std::memcpy(std::addressof(oldDisplacement), a_targetBytes + 2, sizeof(oldDisplacement));
+			const auto indirectAddress = a_targetAddress + sizeof(REL::ASM::JMP6) + oldDisplacement;
+			std::memcpy(
+				std::addressof(a_branchTarget),
+				reinterpret_cast<const void*>(indirectAddress),
+				sizeof(a_branchTarget));
+			return a_branchTarget != 0;
+		}
+
+		return false;
+	}
+
 	bool NamesEqual(const std::string_view a_lhs, const std::string_view a_rhs)
 	{
 		return !a_lhs.empty() && a_lhs == a_rhs;

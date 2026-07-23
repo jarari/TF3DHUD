@@ -11,6 +11,7 @@
 #include <cstring>
 #include <functional>
 #include <array>
+#include <initializer_list>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -27,30 +28,40 @@ namespace TF3DHud
 	std::int32_t MakeRel32Displacement(std::uintptr_t a_sourceNext, std::uintptr_t a_destination);
 	void WriteBranch5(std::uintptr_t a_source, std::uintptr_t a_destination);
 
+	struct RipRel32Patch
+	{
+		std::size_t instructionOffset;
+		std::size_t displacementOffset;
+		std::size_t instructionSize;
+	};
+
+	bool ReadExistingBranchTarget(
+		std::uintptr_t a_targetAddress,
+		const std::byte* a_targetBytes,
+		std::uintptr_t& a_branchTarget);
+
 	template <class T>
 	T CreateBranchGateway5(
 		const char* a_name,
 		REL::Relocation<std::uintptr_t>& a_target,
 		const std::size_t a_prologueSize,
-		void* a_hook)
+		void* a_hook,
+		std::initializer_list<RipRel32Patch> a_ripPatches = {})
 	{
 		const auto targetAddress = a_target.address();
-		auto& trampoline = REL::GetTrampoline();
 		const auto* targetBytes = reinterpret_cast<const std::byte*>(targetAddress);
+		auto& trampoline = REL::GetTrampoline();
 
-		if (a_prologueSize >= sizeof(REL::ASM::JMP5) && targetBytes[0] == std::byte{ 0xE9 }) {
-			std::int32_t displacement = 0;
-			std::memcpy(std::addressof(displacement), targetBytes + 1, sizeof(displacement));
-			const auto previousTarget =
-				static_cast<std::uintptr_t>(static_cast<std::int64_t>(targetAddress + sizeof(REL::ASM::JMP5)) + displacement);
-
+		std::uintptr_t existingBranchTarget = 0;
+		if (ReadExistingBranchTarget(targetAddress, targetBytes, existingBranchTarget)) {
+			auto* gateway = trampoline.allocate<REL::ASM::JMP14>(existingBranchTarget);
 			WriteBranch5(targetAddress, reinterpret_cast<std::uintptr_t>(a_hook));
 			REX::INFO(
-				"{} branch gateway chained at {:X}; previous target={:X}",
+				"{} found existing branch at {:X}; chaining through {:X}",
 				a_name,
 				targetAddress,
-				previousTarget);
-			return reinterpret_cast<T>(previousTarget);
+				existingBranchTarget);
+			return reinterpret_cast<T>(gateway);
 		}
 
 		if (a_prologueSize >= sizeof(REL::ASM::CALL5) && targetBytes[0] == std::byte{ 0xE8 }) {
@@ -60,6 +71,23 @@ namespace TF3DHud
 
 		auto* gateway = static_cast<std::byte*>(trampoline.allocate(a_prologueSize + sizeof(REL::ASM::JMP14)));
 		std::memcpy(gateway, targetBytes, a_prologueSize);
+
+		for (const auto& patch : a_ripPatches) {
+			std::int32_t oldDisplacement = 0;
+			std::memcpy(
+				std::addressof(oldDisplacement),
+				targetBytes + patch.displacementOffset,
+				sizeof(oldDisplacement));
+			const auto originalTarget =
+				targetAddress + patch.instructionOffset + patch.instructionSize + oldDisplacement;
+			const auto gatewayNext =
+				reinterpret_cast<std::uintptr_t>(gateway) + patch.instructionOffset + patch.instructionSize;
+			const auto newDisplacement = MakeRel32Displacement(gatewayNext, originalTarget);
+			std::memcpy(
+				gateway + patch.displacementOffset,
+				std::addressof(newDisplacement),
+				sizeof(newDisplacement));
+		}
 
 		const REL::ASM::JMP14 jumpBack{ targetAddress + a_prologueSize };
 		std::memcpy(gateway + a_prologueSize, std::addressof(jumpBack), sizeof(jumpBack));
