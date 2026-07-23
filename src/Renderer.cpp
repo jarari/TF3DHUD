@@ -544,7 +544,9 @@ namespace TF3DHud::Renderer
 			g_renderer->MainScreen_SetBackgroundMode(RE::Interface3D::BackgroundMode::kLive);
 			g_renderer->useFullPremultAlpha = true;
 			ApplyRendererFOV(config.fov);
-			g_renderer->postAA = true;
+			// Interface3D's postAA flag selects when the renderer runs: true skips
+			// anti-aliasing by rendering in the post-AA pass.
+			g_renderer->MainScreen_SetPostAA(!config.antiAliasing);
 			g_renderer->Offscreen_Enable3D(true);
 			g_renderer->Offscreen_SetUseLongRangeCamera(true);
 			g_renderer->Offscreen_SetRenderTargetSize(RE::Interface3D::OffscreenMenuSize::kFullFrame);
@@ -696,6 +698,7 @@ namespace TF3DHud::Renderer
 		}
 
 		ApplyRendererFOV(GetConfig().fov);
+		g_renderer->MainScreen_SetPostAA(!GetConfig().antiAliasing);
 		ApplyDisplayPlacement();
 	}
 

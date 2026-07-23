@@ -191,6 +191,7 @@ namespace TF3DHud
 		void WriteDefaults(CSimpleIniA& a_ini)
 		{
 			a_ini.SetBoolValue("General", "Enabled", g_config.enabled);
+			a_ini.SetBoolValue("General", "AntiAliasing", g_config.antiAliasing);
 			a_ini.SetDoubleValue("View", "FOV", g_config.fov);
 			a_ini.SetDoubleValue("View", "PlacementX", g_config.placementX);
 			a_ini.SetDoubleValue("View", "PlacementY", g_config.placementY);
@@ -234,6 +235,7 @@ namespace TF3DHud
 		void WriteConfig(CSimpleIniA& a_ini, const Config& a_config)
 		{
 			a_ini.SetBoolValue("General", "Enabled", a_config.enabled);
+			a_ini.SetBoolValue("General", "AntiAliasing", a_config.antiAliasing);
 			a_ini.SetDoubleValue("View", "FOV", a_config.fov);
 			a_ini.SetDoubleValue("View", "PlacementX", a_config.placementX);
 			a_ini.SetDoubleValue("View", "PlacementY", a_config.placementY);
@@ -469,6 +471,7 @@ namespace TF3DHud
 		}
 
 		g_config.enabled = ini.GetBoolValue("General", "Enabled", g_config.enabled);
+		g_config.antiAliasing = ini.GetBoolValue("General", "AntiAliasing", g_config.antiAliasing);
 		g_config.fov = static_cast<float>(ini.GetDoubleValue("View", "FOV", g_config.fov));
 		g_config.placementX = static_cast<float>(ini.GetDoubleValue("View", "PlacementX", g_config.placementX));
 		g_config.placementY = static_cast<float>(ini.GetDoubleValue("View", "PlacementY", g_config.placementY));
@@ -518,8 +521,9 @@ namespace TF3DHud
 		ClampConfig(g_config);
 
 		REX::INFO(
-			"Loaded config: enabled={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, cameraTarget={}, cameraFollow={} axes=({}, {}, {}), clipRect=({}, {}, {}, {}), hideInPowerArmor={}, uiMenuKey=0x{:02X}, language={}, lights={}",
+			"Loaded config: enabled={}, antiAliasing={}, fov={}, placement=({}, {}), cameraDistance={}, modelScale={}, yawDegrees={}, anchor={}, cameraTarget={}, cameraFollow={} axes=({}, {}, {}), clipRect=({}, {}, {}, {}), hideInPowerArmor={}, uiMenuKey=0x{:02X}, language={}, lights={}",
 			g_config.enabled,
+			g_config.antiAliasing,
 			g_config.fov,
 			g_config.placementX,
 			g_config.placementY,

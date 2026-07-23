@@ -1199,6 +1199,9 @@ namespace TF3DHud::Imgui
 			if (ImGui::Checkbox(Label("field.hide_in_power_armor", "HideInPowerArmor").c_str(), &config.hideInPowerArmor)) {
 				ApplyLayoutEdit();
 			}
+			if (ImGui::Checkbox(Label("field.anti_aliasing", "AntiAliasing").c_str(), &config.antiAliasing)) {
+				ApplyLayoutEdit();
+			}
 		}
 
 		[[nodiscard]] std::string DynamicActivationIdleLabel(const RE::TESIdleForm& a_idle)

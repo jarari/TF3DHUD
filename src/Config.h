@@ -74,6 +74,7 @@ namespace TF3DHud
 		EquipmentSettings equipment;
 		ClipRectSettings clipRect;
 		bool hideInPowerArmor{ true };
+		bool antiAliasing{ false };
 		std::uint32_t uiMenuKey{ 0xDE };
 		std::string language{ "en" };
 		std::vector<LightSettings> lights;
